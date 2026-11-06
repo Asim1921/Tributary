@@ -1,0 +1,647 @@
+//! Runs whole downloads against the fault-injecting test server.
+//!
+//! The main check throughout: the finished file's SHA-256 must match the source.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+use engine::{Config, Download, DownloadId, Engine, Error, Event, NewDownload, RetryPolicy, State};
+use sha2::{Digest, Sha256};
+use tempfile::TempDir;
+use testserver::{Record, TestServer, content};
+
+const MIB: u64 = 1 << 20;
+
+struct Fixture {
+    server: TestServer,
+    engine: Engine,
+    folder: TempDir,
+}
+
+fn fast_config() -> Config {
+    Config {
+        min_split: 64 << 10,
+        retry: RetryPolicy {
+            attempts: 5,
+            base_delay: Duration::from_millis(10),
+            max_delay: Duration::from_millis(100),
+        },
+        checkpoint_interval: Duration::from_millis(100),
+        progress_interval: Duration::from_millis(25),
+        ..Config::default()
+    }
+}
+
+async fn fixture_with(config: Config) -> Fixture {
+    let folder = tempfile::tempdir().unwrap();
+    let database = folder.path().join("downloads.db");
+    Fixture {
+        server: TestServer::start(testserver::Config::default())
+            .await
+            .unwrap(),
+        engine: Engine::open(&database, config).unwrap(),
+        folder,
+    }
+}
+
+async fn fixture() -> Fixture {
+    fixture_with(fast_config()).await
+}
+
+impl Fixture {
+    fn downloads_dir(&self) -> PathBuf {
+        self.folder.path().join("out")
+    }
+
+    fn new_download(&self, target: &str) -> NewDownload {
+        NewDownload {
+            url: self.server.url(target),
+            dest_dir: self.downloads_dir(),
+            ..NewDownload::default()
+        }
+    }
+
+    fn start(&self, target: &str) -> DownloadId {
+        self.engine.add(self.new_download(target)).unwrap()
+    }
+
+    async fn download(&self, target: &str) -> Download {
+        let id = self.start(target);
+        self.engine.wait(id).await.unwrap()
+    }
+
+    /// Waits until at least `bytes` are confirmed on disk.
+    async fn wait_for_progress(&self, id: DownloadId, bytes: u64) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while self.engine.get(id).unwrap().downloaded < bytes {
+            assert!(Instant::now() < deadline, "timed out waiting for progress");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    fn files(&self) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(self.downloads_dir())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+}
+
+fn sha256_of(path: &Path) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(fs::read(path).unwrap());
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+#[track_caller]
+fn assert_completed(download: &Download, seed: u64, size: u64) {
+    assert_eq!(
+        download.state,
+        State::Completed,
+        "error: {:?}",
+        download.error
+    );
+    let path = download.final_path.as_ref().unwrap();
+    assert_eq!(fs::metadata(path).unwrap().len(), size);
+    assert_eq!(
+        sha256_of(path),
+        content::sha256(seed, size),
+        "wrong content"
+    );
+    assert_eq!(download.downloaded, size);
+}
+
+fn range_of(record: &Record) -> Option<&str> {
+    record
+        .headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("range"))
+        .map(|(_, value)| value.as_str())
+}
+
+/// The first byte a record asked for, ignoring the one-byte probes.
+fn range_start(record: &Record) -> Option<u64> {
+    let range = range_of(record)?;
+    if range == "bytes=0-0" {
+        return None;
+    }
+    range
+        .strip_prefix("bytes=")?
+        .split('-')
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// Requests made after the `count`th probe.
+fn records_after_probe(records: &[Record], count: usize) -> Vec<Record> {
+    let mut sorted = records.to_vec();
+    sorted.sort_by_key(|record| record.sequence);
+    let boundary = sorted
+        .iter()
+        .filter(|record| range_of(record) == Some("bytes=0-0"))
+        .nth(count - 1)
+        .expect("the probe should have been recorded")
+        .sequence;
+    sorted.retain(|record| record.sequence > boundary);
+    sorted
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn downloads_a_file_over_several_connections() {
+    let fixture = fixture().await;
+    let download = fixture.download("/file/8M.bin").await;
+
+    assert_completed(&download, 1, 8 * MIB);
+    assert_eq!(download.file_name.as_deref(), Some("8M.bin"));
+    assert!(download.ranged);
+
+    let records = fixture.server.records();
+    let connections: std::collections::HashSet<_> = records
+        .iter()
+        .filter(|record| record.status == 206)
+        .map(|record| record.connection)
+        .collect();
+    assert!(
+        connections.len() >= 8,
+        "used {} connections",
+        connections.len()
+    );
+    assert_eq!(fixture.files(), ["8M.bin"], "no .part file should remain");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tiny_file_works() {
+    let fixture = fixture().await;
+    assert_completed(&fixture.download("/file/10.bin").await, 1, 10);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_empty_file_works() {
+    let fixture = fixture().await;
+    assert_completed(&fixture.download("/file/0.bin").await, 1, 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn falls_back_to_one_connection_without_range_support() {
+    let fixture = fixture().await;
+    let download = fixture.download("/file/3M.bin?ranges=0").await;
+
+    assert_completed(&download, 1, 3 * MIB);
+    assert!(!download.ranged);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn handles_a_server_that_never_states_the_size() {
+    let fixture = fixture().await;
+    let download = fixture.download("/file/3M.bin?length=0").await;
+
+    assert_completed(&download, 1, 3 * MIB);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn survives_many_dropped_connections() {
+    let fixture = fixture().await;
+    let target = "/file/8M.bin?drop_after=100K&drop_times=20";
+
+    assert_completed(&fixture.download(target).await, 1, 8 * MIB);
+
+    let dropped = fixture
+        .server
+        .records()
+        .iter()
+        .filter(|record| record.outcome == testserver::Outcome::Dropped)
+        .count();
+    assert_eq!(dropped, 20);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn restarts_a_failed_single_connection_download() {
+    let fixture = fixture().await;
+    let target = "/file/3M.bin?ranges=0&drop_after=1M&drop_times=2";
+
+    assert_completed(&fixture.download(target).await, 1, 3 * MIB);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn gives_up_on_a_single_connection_server_that_keeps_cutting_off() {
+    let fixture = fixture().await;
+    let target = "/file/3M.bin?ranges=0&drop_after=1M&drop_times=100";
+
+    let download = fixture.download(target).await;
+
+    // Nothing survives a failed attempt here, so bytes fetched during one aren't
+    // progress. Probe, first try and 5 retries.
+    let requests = fixture.server.records().len();
+    let final_size = download
+        .final_path
+        .as_ref()
+        .map(|path| fs::metadata(path).unwrap().len());
+    assert_eq!(
+        (download.state, requests),
+        (State::Failed, 7),
+        "final file size: {final_size:?}"
+    );
+    assert_eq!(fixture.files(), ["3M.bin.1.part"], "no final file");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn retries_temporary_server_errors() {
+    let fixture = fixture().await;
+    let target = "/file/2M.bin?fail=503&fail_times=3";
+
+    assert_completed(&fixture.download(target).await, 1, 2 * MIB);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn waits_as_long_as_retry_after_says() {
+    let fixture = fixture().await;
+    let began = Instant::now();
+
+    let download = fixture
+        .download("/file/1M.bin?fail=503&fail_times=1&retry_after=1")
+        .await;
+
+    assert_completed(&download, 1, MIB);
+    assert!(began.elapsed() >= Duration::from_secs(1));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn gives_up_after_too_many_temporary_failures() {
+    let fixture = fixture().await;
+    let download = fixture
+        .download("/file/1M.bin?fail=503&fail_times=1000")
+        .await;
+
+    assert_eq!(download.state, State::Failed);
+    assert!(download.error.unwrap().contains("503"));
+    assert_eq!(
+        fixture.server.records().len(),
+        6,
+        "first try plus 5 retries"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn does_not_retry_a_missing_file() {
+    let fixture = fixture().await;
+    let download = fixture.download("/missing").await;
+
+    assert_eq!(download.state, State::Failed);
+    assert!(download.error.unwrap().contains("404"));
+    assert_eq!(fixture.server.records().len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn follows_redirects() {
+    let fixture = fixture().await;
+    let download = fixture.download("/file/2M.bin?redirects=3").await;
+
+    assert_completed(&download, 1, 2 * MIB);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn adapts_to_a_server_that_limits_connections() {
+    let fixture = fixture().await;
+    let download = fixture.download("/file/8M.bin?limit=2&rate=8M").await;
+
+    assert_completed(&download, 1, 8 * MIB);
+
+    let refused = fixture
+        .server
+        .records()
+        .iter()
+        .filter(|record| record.status == 503)
+        .count();
+    assert!(refused > 0, "the limit should have been hit");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn restarts_cleanly_when_the_file_changes_mid_download() {
+    let fixture = fixture().await;
+    let download = fixture.download("/file/4M.bin?change_after=3").await;
+
+    // Seed 2 is the replaced file. A mix of the two would fail this check.
+    assert_completed(&download, 2, 4 * MIB);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_finished_connection_takes_over_part_of_a_slow_one() {
+    let fixture = fixture_with(Config {
+        connections: 2,
+        ..fast_config()
+    })
+    .await;
+
+    let download = fixture.download("/file/8M.bin?rate=4M&slow_from=4M").await;
+    assert_completed(&download, 1, 8 * MIB);
+
+    let extra_starts = fixture
+        .server
+        .records()
+        .iter()
+        .filter_map(range_start)
+        .filter(|&start| start > 4 * MIB)
+        .count();
+    assert!(extra_starts > 0, "nothing was split off the slow half");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pause_keeps_progress_and_resume_fetches_only_the_rest() {
+    let fixture = fixture().await;
+    let size = 32 * MIB;
+    let id = fixture.start("/file/32M.bin?rate=2M");
+
+    fixture.wait_for_progress(id, 8 * MIB).await;
+    fixture.engine.pause(id).await.unwrap();
+
+    let paused = fixture.engine.get(id).unwrap();
+    assert_eq!(paused.state, State::Paused);
+    assert!(paused.downloaded >= 8 * MIB);
+    assert_eq!(fixture.files(), ["32M.bin.1.part"]);
+
+    fixture.engine.resume(id, &[]).unwrap();
+    let finished = fixture.engine.wait(id).await.unwrap();
+    assert_completed(&finished, 1, size);
+
+    let resumed = records_after_probe(&fixture.server.records(), 2);
+    let sent: u64 = resumed.iter().map(|record| record.body_bytes_sent).sum();
+    let limit = size - paused.downloaded / 2;
+    assert!(sent < limit, "fetched {sent} bytes again, limit {limit}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pausing_something_that_is_not_running_is_harmless() {
+    let fixture = fixture().await;
+    let download = fixture.download("/file/1K.bin").await;
+
+    fixture.engine.pause(download.id).await.unwrap();
+
+    assert_completed(&fixture.engine.get(download.id).unwrap(), 1, 1024);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_completed_download_cannot_be_resumed() {
+    let fixture = fixture().await;
+    let download = fixture.download("/file/1K.bin").await;
+
+    assert!(matches!(
+        fixture.engine.resume(download.id, &[]),
+        Err(Error::AlreadyCompleted(_))
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_running_download_cannot_be_started_twice() {
+    let fixture = fixture().await;
+    let id = fixture.start("/file/32M.bin?rate=1M");
+
+    assert!(matches!(
+        fixture.engine.resume(id, &[]),
+        Err(Error::AlreadyRunning(_))
+    ));
+    fixture.engine.pause(id).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_download_can_be_resumed() {
+    let fixture = fixture().await;
+    // Enough failures to exhaust the first run's retries but not a second run's.
+    let download = fixture.download("/file/1M.bin?fail=503&fail_times=7").await;
+    assert_eq!(download.state, State::Failed);
+
+    fixture.engine.resume(download.id, &[]).unwrap();
+
+    let finished = fixture.engine.wait(download.id).await.unwrap();
+    assert_completed(&finished, 1, MIB);
+    assert_eq!(finished.error, None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn resuming_after_the_file_changed_starts_again() {
+    let fixture = fixture().await;
+    // The probe is visit 1, so the file changes shortly after this starts.
+    let id = fixture.start("/file/32M.bin?rate=2M&change_after=9");
+
+    fixture.wait_for_progress(id, MIB).await;
+    fixture.engine.pause(id).await.unwrap();
+    fixture.engine.resume(id, &[]).unwrap();
+
+    let finished = fixture.engine.wait(id).await.unwrap();
+    assert_completed(&finished, 2, 32 * MIB);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn removing_a_download_deletes_its_part_file_only() {
+    let fixture = fixture().await;
+    let id = fixture.start("/file/32M.bin?rate=1M");
+    fixture.wait_for_progress(id, MIB).await;
+
+    fixture.engine.remove(id).await.unwrap();
+
+    assert!(fixture.files().is_empty());
+    assert!(matches!(fixture.engine.get(id), Err(Error::NotFound(_))));
+
+    let kept = fixture.download("/file/1K.bin").await;
+    fixture.engine.remove(kept.id).await.unwrap();
+    assert_eq!(fixture.files(), ["1K.bin"], "completed files stay");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn never_overwrites_an_existing_file() {
+    let fixture = fixture().await;
+    fs::create_dir_all(fixture.downloads_dir()).unwrap();
+    let existing = fixture.downloads_dir().join("1K.bin");
+    fs::write(&existing, b"precious").unwrap();
+
+    let download = fixture.download("/file/1K.bin").await;
+
+    assert_completed(&download, 1, 1024);
+    assert_eq!(
+        download.final_path.unwrap().file_name().unwrap(),
+        "1K (1).bin"
+    );
+    assert_eq!(fs::read(existing).unwrap(), b"precious");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn uses_the_name_the_server_gives() {
+    let fixture = fixture().await;
+    let download = fixture.download("/file/1K?filename=my%20report.zip").await;
+
+    assert_completed(&download, 1, 1024);
+    assert_eq!(fixture.files(), ["my report.zip"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hostile_server_name_cannot_leave_the_download_folder() {
+    let fixture = fixture().await;
+    let download = fixture
+        .download("/file/1K?filename=..%2F..%2F..%2Fevil.exe")
+        .await;
+
+    assert_completed(&download, 1, 1024);
+    assert_eq!(fixture.files(), ["evil.exe"]);
+    assert!(!fixture.folder.path().join("evil.exe").exists());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sends_cookies_but_never_saves_them() {
+    let fixture = fixture().await;
+    // The value is escaped here so that the saved URL doesn't contain it either.
+    let target = "/file/1M.bin?require_cookie=session%3D%73ecret-value-123";
+
+    let id = fixture
+        .engine
+        .add(NewDownload {
+            headers: vec![
+                ("Cookie".to_owned(), "session=secret-value-123".to_owned()),
+                ("Referer".to_owned(), "http://site.test/page".to_owned()),
+            ],
+            ..fixture.new_download(target)
+        })
+        .unwrap();
+    let download = fixture.engine.wait(id).await.unwrap();
+
+    assert_completed(&download, 1, MIB);
+    assert_eq!(
+        download.headers,
+        [("Referer".to_owned(), "http://site.test/page".to_owned())]
+    );
+
+    let mut saved = Vec::new();
+    for entry in fs::read_dir(fixture.folder.path()).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_file() {
+            saved.extend(fs::read(path).unwrap());
+        }
+    }
+    let needle = b"secret-value-123";
+    assert!(!saved.is_empty());
+    assert!(
+        !saved.windows(needle.len()).any(|window| window == needle),
+        "the cookie reached the database"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_download_needing_cookies_gets_them_again_on_resume() {
+    let fixture = fixture().await;
+    let cookie = ("Cookie".to_owned(), "session=abc".to_owned());
+    let target = "/file/32M.bin?rate=2M&require_cookie=session%3Dabc";
+
+    let id = fixture
+        .engine
+        .add(NewDownload {
+            headers: vec![cookie.clone()],
+            ..fixture.new_download(target)
+        })
+        .unwrap();
+    fixture.wait_for_progress(id, MIB).await;
+    fixture.engine.pause(id).await.unwrap();
+
+    fixture.engine.resume(id, &[]).unwrap();
+    let refused = fixture.engine.wait(id).await.unwrap();
+    assert_eq!(refused.state, State::Failed);
+    assert!(refused.error.unwrap().contains("403"));
+
+    fixture.engine.resume(id, &[cookie]).unwrap();
+    assert_completed(&fixture.engine.wait(id).await.unwrap(), 1, 32 * MIB);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reports_progress_and_state_changes() {
+    let fixture = fixture().await;
+    let mut events = fixture.engine.subscribe();
+
+    let download = fixture.download("/file/8M.bin?rate=8M").await;
+    assert_completed(&download, 1, 8 * MIB);
+
+    let mut seen_progress = false;
+    let mut states = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        match event {
+            Event::Progress { total, .. } => {
+                assert_eq!(total, Some(8 * MIB));
+                seen_progress = true;
+            }
+            Event::State { state, .. } => states.push(state),
+        }
+    }
+    assert!(seen_progress);
+    assert_eq!(states, [State::Running, State::Completed]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rejects_urls_it_cannot_download() {
+    let fixture = fixture().await;
+    for url in ["not a url", "ftp://x.test/a", "file:///C:/Windows/win.ini"] {
+        let result = fixture.engine.add(NewDownload {
+            url: url.to_owned(),
+            ..NewDownload::default()
+        });
+        assert!(matches!(result, Err(Error::InvalidUrl(_))), "{url}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rejects_invalid_headers() {
+    let fixture = fixture().await;
+    let result = fixture.engine.add(NewDownload {
+        headers: vec![("Referer".to_owned(), "a\r\nInjected: yes".to_owned())],
+        ..fixture.new_download("/file/1K.bin")
+    });
+    assert!(matches!(result, Err(Error::InvalidHeader(_))));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn survives_the_process_being_killed_mid_download() {
+    let server = TestServer::start(testserver::Config::default())
+        .await
+        .unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let database = folder.path().join("downloads.db");
+    let out = folder.path().join("out");
+    let size = 48 * MIB;
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_tributary-fetch"))
+        .arg("get")
+        .arg(server.url("/file/48M.bin?rate=2M"))
+        .arg(&out)
+        .arg(&database)
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+
+    // Long enough for at least one checkpoint, too short to finish.
+    tokio::time::sleep(Duration::from_millis(1800)).await;
+    child.kill().unwrap();
+    child.wait().unwrap();
+
+    let engine = Engine::open(&database, fast_config()).unwrap();
+    let id = DownloadId(1);
+
+    let interrupted = engine.get(id).unwrap();
+    assert_eq!(interrupted.state, State::Paused, "should recover as paused");
+    assert!(interrupted.downloaded > 0, "no checkpoint was saved");
+    assert!(interrupted.downloaded < size, "it finished before the kill");
+
+    engine.resume(id, &[]).unwrap();
+    let finished = engine.wait(id).await.unwrap();
+    assert_completed(&finished, 1, size);
+
+    let resumed = records_after_probe(&server.records(), 2);
+    let sent: u64 = resumed.iter().map(|record| record.body_bytes_sent).sum();
+    assert!(
+        sent < size - interrupted.downloaded / 2,
+        "fetched {sent} bytes after the kill"
+    );
+}

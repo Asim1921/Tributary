@@ -1,0 +1,12 @@
+[package]
+name = "testserver"
+description = "Local HTTP server that logs exact client behaviour and injects download faults."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true

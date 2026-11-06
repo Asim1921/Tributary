@@ -1,0 +1,89 @@
+//! Runs the test server until Ctrl+C, or prints the checksum a test file should have.
+
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+use testserver::scenario::Scenario;
+use testserver::{Config, TestServer, content};
+
+const USAGE: &str =
+    "usage: testserver [--port N] [--log PATH]\n       testserver sha256 NAME [SEED]";
+const DEFAULT_PORT: u16 = 8787;
+
+/// Returns the SHA-256 of a test file, such as `100M.bin` with seed 1.
+fn checksum(mut args: impl Iterator<Item = String>) -> Result<String, String> {
+    let name = args
+        .next()
+        .ok_or("sha256 needs a file name, such as 100M.bin")?;
+    let query = args
+        .next()
+        .map(|seed| format!("seed={seed}"))
+        .unwrap_or_default();
+    let scenario = Scenario::parse(&name, &query)?;
+    Ok(content::sha256(scenario.seed, scenario.size))
+}
+
+fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Config, String> {
+    let mut config = Config {
+        port: DEFAULT_PORT,
+        log_path: None,
+    };
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--port" => {
+                let value = args.next().ok_or("--port needs a value")?;
+                config.port = value
+                    .parse()
+                    .map_err(|_| format!("invalid port `{value}`"))?;
+            }
+            "--log" => {
+                config.log_path = Some(PathBuf::from(args.next().ok_or("--log needs a path")?));
+            }
+            other => return Err(format!("unknown argument `{other}`")),
+        }
+    }
+    Ok(config)
+}
+
+#[tokio::main]
+async fn main() -> ExitCode {
+    let mut args = std::env::args().skip(1).peekable();
+    if args.peek().is_some_and(|arg| arg == "sha256") {
+        return match checksum(args.skip(1)) {
+            Ok(digest) => {
+                println!("{digest}");
+                ExitCode::SUCCESS
+            }
+            Err(message) => {
+                eprintln!("{message}\n{USAGE}");
+                ExitCode::from(2)
+            }
+        };
+    }
+
+    let config = match parse_args(args) {
+        Ok(config) => config,
+        Err(message) => {
+            eprintln!("{message}\n{USAGE}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let server = match TestServer::start(config).await {
+        Ok(server) => server,
+        Err(error) => {
+            eprintln!("could not start: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    println!("listening on {}", server.url("/"));
+    match tokio::signal::ctrl_c().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("could not wait for Ctrl+C: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}

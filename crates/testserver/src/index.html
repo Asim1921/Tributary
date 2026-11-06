@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Download test page</title>
+<style>
+  body { font: 16px/1.6 system-ui, sans-serif; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; }
+  h2 { margin-top: 2rem; }
+</style>
+</head>
+<body>
+<h1>Download test page</h1>
+<p>Every request to this server is logged. Files are generated, so they contain random bytes.</p>
+
+<h2>File types</h2>
+<ul>
+  <li><a href="/file/5M.zip">5M.zip</a></li>
+  <li><a href="/file/5M.exe">5M.exe</a></li>
+  <li><a href="/file/5M.pdf">5M.pdf</a></li>
+  <li><a href="/file/5M.mp4">5M.mp4</a></li>
+  <li><a href="/file/5M.mp3">5M.mp3</a></li>
+  <li><a href="/file/5M.txt">5M.txt</a></li>
+  <li><a href="/file/5M.bin">5M.bin</a></li>
+</ul>
+
+<h2>Name set by the server</h2>
+<ul>
+  <li><a href="/file/5M?filename=report%20final.zip">No extension in the URL, named by Content-Disposition</a></li>
+</ul>
+
+<h2>Needs a cookie</h2>
+<ol>
+  <li><a href="/login">Set the test cookie</a></li>
+  <li><a href="/file/5M.zip?require_cookie=tributary_test%3D1">Download a file that requires it</a></li>
+</ol>
+</body>
+</html>
