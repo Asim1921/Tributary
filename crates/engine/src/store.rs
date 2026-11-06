@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use media::Part;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use crate::error::Error;
@@ -22,7 +23,7 @@ const SETTINGS: &str = "
 
 /// Each entry upgrades the database by one version, tracked in `PRAGMA user_version`.
 /// Add new entries to the end. Never change an entry that has been released.
-const MIGRATIONS: [&str; 3] = [
+const MIGRATIONS: [&str; 4] = [
     "
     CREATE TABLE IF NOT EXISTS downloads (
         id            INTEGER PRIMARY KEY,
@@ -73,6 +74,11 @@ const MIGRATIONS: [&str; 3] = [
     ALTER TABLE downloads ADD COLUMN category TEXT;
     ALTER TABLE downloads ADD COLUMN replace_on_finish INTEGER NOT NULL DEFAULT 0;
     ",
+    "
+    ALTER TABLE downloads ADD COLUMN stream_parts TEXT;
+    ALTER TABLE downloads ADD COLUMN parts_done INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE downloads ADD COLUMN companion INTEGER REFERENCES downloads(id) ON DELETE SET NULL;
+    ",
 ];
 
 const SELECT_DOWNLOAD: &str = "
@@ -80,7 +86,8 @@ const SELECT_DOWNLOAD: &str = "
            d.ranged, d.state, d.error, d.final_path,
            COALESCE((SELECT SUM(s.written) FROM segments s WHERE s.download_id = d.id), 0),
            d.description, d.added_at, d.completed_at, d.part_dir,
-           d.queue_id, d.category, d.replace_on_finish
+           d.queue_id, d.category, d.replace_on_finish,
+           d.stream_parts IS NOT NULL, d.parts_done, d.companion
     FROM downloads d
 ";
 
@@ -156,6 +163,12 @@ pub struct Download {
     pub category: Option<String>,
     /// The next finish replaces `final_path`, because a sync queue found a new version.
     pub replace_on_finish: bool,
+    /// Made of parts joined together, rather than being one file on a server.
+    pub is_stream: bool,
+    /// How many of a stream's parts are safely on disk.
+    pub parts_done: usize,
+    /// The other half of a video whose picture and sound are saved separately.
+    pub companion: Option<DownloadId>,
 }
 
 impl Download {
@@ -189,6 +202,9 @@ impl Download {
             queue: row.get::<_, Option<i64>>(17)?.map(QueueId),
             category: row.get(18)?,
             replace_on_finish: row.get(19)?,
+            is_stream: row.get(20)?,
+            parts_done: row.get::<_, i64>(21)? as usize,
+            companion: row.get::<_, Option<i64>>(22)?.map(DownloadId),
         })
     }
 }
@@ -497,6 +513,71 @@ impl Store {
         let transaction = connection.transaction()?;
         replace_segments(&transaction, id, segments)?;
         transaction.commit()
+    }
+
+    /// Saves the parts of a stream. These stay out of `Download`, because a long video
+    /// has thousands of them and the list of downloads is read constantly.
+    pub fn set_stream_parts(&self, id: DownloadId, parts: &[Part]) -> rusqlite::Result<()> {
+        let parts = serde_json::to_string(parts).unwrap_or_else(|_| "[]".to_owned());
+        self.lock().execute(
+            "UPDATE downloads SET stream_parts = ?2 WHERE id = ?1",
+            params![id.0, parts],
+        )?;
+        Ok(())
+    }
+
+    pub fn stream_parts(&self, id: DownloadId) -> rusqlite::Result<Vec<Part>> {
+        let parts: Option<String> = self.lock().query_row(
+            "SELECT stream_parts FROM downloads WHERE id = ?1",
+            params![id.0],
+            |row| row.get(0),
+        )?;
+        Ok(parts
+            .and_then(|parts| serde_json::from_str(&parts).ok())
+            .unwrap_or_default())
+    }
+
+    /// Records how much of a stream is safely on disk. The bytes go in as a single
+    /// segment, so a stream reports its progress the same way a file does.
+    pub fn save_stream_progress(
+        &self,
+        id: DownloadId,
+        parts: usize,
+        bytes: u64,
+    ) -> rusqlite::Result<()> {
+        let mut connection = self.lock();
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "UPDATE downloads SET parts_done = ?2 WHERE id = ?1",
+            params![id.0, parts as i64],
+        )?;
+        let written = Segment {
+            start: 0,
+            end: bytes,
+            written: bytes,
+        };
+        replace_segments(&transaction, id, &[written])?;
+        transaction.commit()
+    }
+
+    pub fn link_companions(&self, first: DownloadId, second: DownloadId) -> rusqlite::Result<()> {
+        let mut connection = self.lock();
+        let transaction = connection.transaction()?;
+        for (id, companion) in [(first, second), (second, first)] {
+            transaction.execute(
+                "UPDATE downloads SET companion = ?2 WHERE id = ?1",
+                params![id.0, companion.0],
+            )?;
+        }
+        transaction.commit()
+    }
+
+    pub fn set_size(&self, id: DownloadId, size: u64) -> rusqlite::Result<()> {
+        self.lock().execute(
+            "UPDATE downloads SET size = ?2 WHERE id = ?1",
+            params![id.0, size as i64],
+        )?;
+        Ok(())
     }
 
     pub fn set_completed(&self, id: DownloadId, path: &Path, size: u64) -> rusqlite::Result<()> {

@@ -16,6 +16,7 @@
   import Sidebar from './components/Sidebar.svelte';
   import StartDialog from './components/StartDialog.svelte';
   import Toolbar from './components/Toolbar.svelte';
+  import VideoDialog from './components/VideoDialog.svelte';
   import * as api from './lib/api';
   import { resolveColumns, sortRows, type SortOrder } from './lib/columns';
   import { downloads } from './lib/downloads.svelte';
@@ -28,7 +29,7 @@
     statusEntries,
     type Filter,
   } from './lib/filters';
-  import { droppedLink, formatSpeed } from './lib/format';
+  import { droppedLink, formatSpeed, isStreamAddress } from './lib/format';
   import {
     clickRow,
     dragIds,
@@ -39,6 +40,7 @@
   import { resolveToolbar, type ToolbarAction } from './lib/toolbar';
   import type {
     AddRequest,
+    AddVideoRequest,
     CaptureEvent,
     CaptureItem,
     DownloadRow,
@@ -50,6 +52,7 @@
     | { kind: 'add' }
     | { kind: 'start'; url: string; token?: number; fileName?: string | null }
     | { kind: 'batch'; token: number; items: CaptureItem[] }
+    | { kind: 'video'; url: string; token?: number; fileName?: string | null }
     | { kind: 'progress'; id: number }
     | { kind: 'properties'; id: number }
     | { kind: 'complete'; id: number }
@@ -109,6 +112,7 @@
     void api.onScanFinished(({ file, problem }) => {
       if (problem) dialog = { kind: 'scan', file, problem };
     });
+    void api.onVideoProblem(showError);
     // Listening comes first. The app may have been started just to receive a file.
     api
       .onCapture((event) => captures.push(event))
@@ -125,9 +129,12 @@
     const first = event?.items[0];
     if (!event || !first) return;
 
-    dialog = event.batch
-      ? { kind: 'batch', token: event.token, items: event.items }
-      : { kind: 'start', url: first.url, token: event.token, fileName: first.fileName };
+    if (event.batch) {
+      dialog = { kind: 'batch', token: event.token, items: event.items };
+    } else {
+      const kind = first.video ? 'video' : 'start';
+      dialog = { kind, url: first.url, token: event.token, fileName: first.fileName };
+    }
   });
 
   // Asks for a login when a download needs one.
@@ -228,10 +235,22 @@
   }
 
   function submitUrl(url: string) {
-    if (settings?.showStartDialog) {
+    if (isStreamAddress(url)) {
+      dialog = { kind: 'video', url };
+    } else if (settings?.showStartDialog) {
       dialog = { kind: 'start', url };
     } else {
       void addDownload({ url });
+    }
+  }
+
+  async function addVideo(request: AddVideoRequest) {
+    closeDialog();
+    try {
+      await api.addVideo(request);
+      await downloads.refresh();
+    } catch (error) {
+      showError(error);
     }
   }
 
@@ -544,8 +563,24 @@
     categories={settings?.categories ?? []}
     queues={downloads.queues}
     onsubmit={addDownload}
+    onstream={() => {
+      if (dialog?.kind === 'start') dialog = { ...dialog, kind: 'video' };
+    }}
     onclose={() => {
       const token = dialog?.kind === 'start' ? dialog.token : undefined;
+      closeDialog();
+      if (token !== undefined) void api.discardCapture(token);
+    }}
+  />
+{:else if dialog?.kind === 'video'}
+  <VideoDialog
+    url={dialog.url}
+    captureToken={dialog.token}
+    suggestedName={dialog.fileName}
+    {defaultFolder}
+    onsubmit={addVideo}
+    onclose={() => {
+      const token = dialog?.kind === 'video' ? dialog.token : undefined;
       closeDialog();
       if (token !== undefined) void api.discardCapture(token);
     }}

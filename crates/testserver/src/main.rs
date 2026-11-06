@@ -4,10 +4,10 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use testserver::scenario::Scenario;
-use testserver::{Config, FtpConfig, FtpServer, TestServer, content};
+use testserver::{Config, FtpConfig, FtpServer, TestServer, content, streams};
 
-const USAGE: &str =
-    "usage: testserver [--port N] [--log PATH]\n       testserver sha256 NAME [SEED]";
+const USAGE: &str = "usage: testserver [--port N] [--log PATH] [--files FOLDER]\n       \
+                     testserver sha256 NAME [SEED]\n       testserver sha256-track NAME";
 
 /// Printed so a test can find the FTP server, which uses a free port.
 const FTP_LINE: &str = "ftp on";
@@ -24,6 +24,13 @@ fn checksum(mut args: impl Iterator<Item = String>) -> Result<String, String> {
         .unwrap_or_default();
     let scenario = Scenario::parse(&name, &query)?;
     Ok(content::sha256(scenario.seed, scenario.size))
+}
+
+/// Returns the SHA-256 of a stream's parts joined together, such as `low`.
+fn track_checksum(mut args: impl Iterator<Item = String>) -> Result<String, String> {
+    let name = args.next().ok_or("sha256-track needs a track name")?;
+    let track = streams::track(&name).ok_or(format!("unknown track `{name}`"))?;
+    Ok(streams::sha256(&track))
 }
 
 fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Config, String> {
@@ -43,6 +50,10 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Config, String> 
             "--log" => {
                 config.log_path = Some(PathBuf::from(args.next().ok_or("--log needs a path")?));
             }
+            "--files" => {
+                let folder = args.next().ok_or("--files needs a folder")?;
+                config.static_dir = Some(PathBuf::from(folder));
+            }
             other => return Err(format!("unknown argument `{other}`")),
         }
     }
@@ -52,8 +63,14 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Config, String> 
 #[tokio::main]
 async fn main() -> ExitCode {
     let mut args = std::env::args().skip(1).peekable();
-    if args.peek().is_some_and(|arg| arg == "sha256") {
-        return match checksum(args.skip(1)) {
+    let asked = args.peek().cloned().unwrap_or_default();
+    if asked == "sha256" || asked == "sha256-track" {
+        let answer = if asked == "sha256" {
+            checksum(args.skip(1))
+        } else {
+            track_checksum(args.skip(1))
+        };
+        return match answer {
             Ok(digest) => {
                 println!("{digest}");
                 ExitCode::SUCCESS

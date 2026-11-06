@@ -121,6 +121,10 @@ pub struct Settings {
     pub skip_key: String,
     pub watch_clipboard: bool,
     pub show_drop_target: bool,
+    /// Where ffmpeg is. Empty means looking for it on the `PATH`.
+    pub ffmpeg_path: String,
+    /// Whether the extension shows its panel over video players.
+    pub video_panel: bool,
 }
 
 fn default_capture_types() -> Vec<String> {
@@ -176,6 +180,8 @@ impl Default for Settings {
             skip_key: "alt".to_owned(),
             watch_clipboard: false,
             show_drop_target: false,
+            ffmpeg_path: String::new(),
+            video_panel: true,
         }
     }
 }

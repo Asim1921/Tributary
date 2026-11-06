@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Video test page</title>
+<style>
+  body { font: 16px/1.6 system-ui, sans-serif; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; }
+  video { display: block; width: 100%; aspect-ratio: 16 / 9; background: #222; }
+</style>
+</head>
+<body>
+<h1>Video test page</h1>
+<p>A direct file in a player, plus a stream that a script asks for, as streaming players do.</p>
+<video id="player" src="/file/2M.mp4?seed=900" controls></video>
+<script>
+  fetch('/media/master.m3u8' + location.search).catch(() => {});
+</script>
+</body>
+</html>

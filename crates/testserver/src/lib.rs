@@ -13,6 +13,7 @@ pub mod http;
 pub mod scenario;
 pub mod server;
 pub mod socks;
+pub mod streams;
 
 pub use ftp::{FtpConfig, FtpServer};
 pub use server::{Config, Outcome, Record, TestServer};

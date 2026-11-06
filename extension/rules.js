@@ -3,6 +3,11 @@
 /** How long after a click its keys still count. */
 export const CLICK_WINDOW_MS = 3000;
 
+/** Direct media smaller than this is a sound effect or a preview, not worth offering. */
+export const MIN_MEDIA_BYTES = 256 * 1024;
+
+const MAX_MEDIA_ITEMS = 20;
+
 const SCHEMES = ['http:', 'https:', 'ftp:'];
 
 /** The last part of a path, which may use either kind of slash. */
@@ -82,6 +87,93 @@ export function shouldCapture(item, settings, click, now) {
   const name = baseName(item.filename) || new URL(url).pathname;
   return (settings.fileTypes ?? []).includes(extensionOf(name));
 }
+
+/** The value of a response header, whatever its case. */
+export function headerValue(headers, name) {
+  return (headers ?? []).find((header) => header.name.toLowerCase() === name)?.value ?? null;
+}
+
+/** The whole size of a response, which a range response gives separately. */
+export function responseLength(headers) {
+  const total = /\/(\d+)\s*$/.exec(headerValue(headers, 'content-range') ?? '');
+  if (total) return Number(total[1]);
+
+  const length = headerValue(headers, 'content-length');
+  return length === null ? null : Number(length);
+}
+
+/**
+ * What a web request holds, as far as saving it goes: `stream`, `file` or null.
+ *
+ * Only a media element's own request counts as a file. Sites that protect their video
+ * feed the player in pieces by script, and those requests are deliberately left alone.
+ */
+export function mediaKind({ url, type, contentType, length }) {
+  if (!hasCapturableScheme(url)) return null;
+
+  const kind = (contentType ?? '').toLowerCase();
+  const path = new URL(url).pathname.toLowerCase();
+  if (
+    kind.includes('mpegurl') ||
+    kind.includes('dash+xml') ||
+    path.endsWith('.m3u8') ||
+    path.endsWith('.mpd')
+  ) {
+    return 'stream';
+  }
+
+  const media = /^(video|audio)\//.test(kind);
+  const bigEnough = length === null || length === undefined || length >= MIN_MEDIA_BYTES;
+  return type === 'media' && media && bigEnough ? 'file' : null;
+}
+
+const folderOf = (url) => url.split(/[?#]/, 1)[0].replace(/[^/]*$/, '');
+
+/**
+ * Adds a find to a page's list, with streams first. A player fetches a playlist for each
+ * quality after the main one, and those sit beside it, so they aren't more videos.
+ * Returns the same list if nothing changed.
+ */
+export function addMedia(items, found) {
+  const known = items.some(
+    (item) =>
+      item.documentId === found.documentId &&
+      (item.url === found.url ||
+        (item.kind === 'stream' &&
+          found.kind === 'stream' &&
+          folderOf(item.url) === folderOf(found.url))),
+  );
+  if (known || items.length >= MAX_MEDIA_ITEMS) return items;
+
+  const all = [...items, found];
+  return [...all.filter((item) => item.kind === 'stream'), ...all.filter((item) => item.kind !== 'stream')];
+}
+
+/**
+ * What's left of a tab's list once a new page has opened. The old page lives on until the
+ * new one takes over, so its requests can still report in after loading has begun. Going
+ * by which document each find came from is the only sure way to tell them apart.
+ * Returns the same list if nothing changed.
+ */
+export function keepDocument(items, documentId) {
+  const kept = items.filter((item) => item.documentId === documentId);
+  return kept.length === items.length ? items : kept;
+}
+
+/** What to call a find in a list. */
+export function mediaLabel(item) {
+  if (item.kind === 'stream') return 'Video stream';
+
+  const name = baseName(new URL(item.url).pathname);
+  try {
+    return decodeURIComponent(name) || 'Video';
+  } catch {
+    return name;
+  }
+}
+
+/** Where a tab's list of finds is kept. */
+export const mediaKey = (tabId) => `media-${tabId}`;
 
 /** Turns the browser's cookie list into a `Cookie` header. */
 export function cookieHeader(cookies) {

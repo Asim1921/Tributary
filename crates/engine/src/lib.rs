@@ -11,6 +11,7 @@ mod error;
 mod ftp;
 mod limits;
 pub mod name;
+mod parts;
 mod remote;
 mod scheduler;
 pub mod segments;

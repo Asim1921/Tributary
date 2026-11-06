@@ -2,6 +2,24 @@ import type { Download, DownloadRow, DownloadState } from './types';
 
 const UNITS = ['B', 'KB', 'MB', 'GB', 'TB'];
 
+/** Summarises a quality: its likely size and its length. */
+export function describeVideoChoice(choice: {
+  estimatedBytes: number | null;
+  seconds: number;
+}): string {
+  const whole = Math.round(choice.seconds);
+  const length = `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
+  return choice.estimatedBytes === null
+    ? length
+    : `about ${formatBytes(choice.estimatedBytes)}, ${length}`;
+}
+
+/** Whether an address is a stream, so it needs the video dialog. */
+export function isStreamAddress(url: string): boolean {
+  const path = url.split(/[?#]/, 1)[0]?.toLowerCase() ?? '';
+  return path.endsWith('.m3u8') || path.endsWith('.mpd');
+}
+
 export function formatBytes(bytes: number | null): string {
   if (bytes === null) return 'Unknown';
 

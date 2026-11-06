@@ -9,6 +9,7 @@ mod scanner;
 mod secrets;
 mod settings;
 mod system;
+mod video;
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
@@ -109,10 +110,11 @@ fn handle_arguments(app: &AppHandle, arguments: &[String]) {
         return;
     };
     let app = app.clone();
-    tauri::async_runtime::spawn(async move { carry_out(&app, invocation) });
+    tauri::async_runtime::spawn(async move { carry_out(app, invocation).await });
 }
 
-fn carry_out(app: &AppHandle, invocation: Invocation) {
+async fn carry_out(handle: AppHandle, invocation: Invocation) {
+    let app = &handle;
     let state = app.state::<AppState>();
 
     if let Some(add) = invocation.add {
@@ -122,7 +124,9 @@ fn carry_out(app: &AppHandle, invocation: Invocation) {
             folder: add.folder,
             ..Captured::default()
         };
-        if add.later {
+        if file.is_stream() && (add.later || add.silent) {
+            video::add_best(handle.clone(), file, add.later, add.quit_when_done).await;
+        } else if add.later {
             let _ = add_download_now(&state, AddRequest::from_captured(file).later(), Vec::new());
         } else if add.silent {
             let added = add_download_now(&state, AddRequest::from_captured(file), Vec::new());
@@ -200,7 +204,7 @@ fn quit_if_asked(app: &AppHandle, id: DownloadId) {
         .engine
         .list()
         .is_ok_and(|downloads| downloads.iter().any(|item| item.state == State::Running));
-    if !busy && !state.settings_snapshot().scan_enabled {
+    if !busy && !state.is_joining() && !state.settings_snapshot().scan_enabled {
         quit(app);
     }
 }
@@ -368,6 +372,7 @@ fn forward_events(app: AppHandle, engine: &Engine) {
                         State::Completed => {
                             play_event_sound(&app, |sounds| &sounds.complete);
                             scan_finished_file(&app, id);
+                            video::join_if_ready(&app, id);
                             quit_if_asked(&app, id);
                         }
                         State::Failed => play_event_sound(&app, |sounds| &sounds.failed),
@@ -416,6 +421,8 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
         wake_timer: WakeTimer::new(),
         pending: Mutex::default(),
         quit_after: Mutex::default(),
+        video_choices: Mutex::default(),
+        joining: Mutex::default(),
     });
     app.state::<AppState>().attach_site_logins();
     build_tray(app)?;
@@ -510,6 +517,8 @@ pub fn run() {
             commands::show_in_folder,
             commands::drag_files,
             commands::window_ready,
+            video::inspect_video,
+            video::add_video,
             commands::get_settings,
             commands::save_settings,
             commands::suggest_category,

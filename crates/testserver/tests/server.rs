@@ -2,8 +2,9 @@
 
 use std::time::Instant;
 
+use sha2::{Digest, Sha256};
 use testserver::content;
-use testserver::{Config, Outcome, TestServer};
+use testserver::{Config, Outcome, TestServer, streams};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -414,4 +415,145 @@ async fn writes_one_json_object_per_request_to_the_log_file() {
     assert_eq!(lines.len(), 2);
     assert_eq!(lines[0]["target"], "/file/1K.bin");
     assert_eq!(lines[1]["status"], 404);
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Turns `../file/x` from a playlist into an address on the server.
+fn from_media(link: &str) -> String {
+    format!("/{}", link.trim_start_matches("../"))
+}
+
+#[tokio::test]
+async fn a_playlist_is_served_as_one() {
+    let server = start().await;
+    let reply = send(&server, "GET", "/media/master.m3u8", &[]).await;
+
+    assert_eq!(reply.status, 200);
+    assert_eq!(
+        reply.header("content-type"),
+        Some("application/vnd.apple.mpegurl")
+    );
+    assert!(String::from_utf8(reply.body).unwrap().contains("low.m3u8"));
+}
+
+#[tokio::test]
+async fn a_manifest_is_served_as_one() {
+    let server = start().await;
+    let reply = send(&server, "GET", "/media/dash.mpd", &[]).await;
+
+    assert_eq!(reply.status, 200);
+    assert_eq!(reply.header("content-type"), Some("application/dash+xml"));
+}
+
+#[tokio::test]
+async fn an_unknown_stream_is_not_found() {
+    let server = start().await;
+    assert_eq!(
+        send(&server, "GET", "/media/nothing.m3u8", &[])
+            .await
+            .status,
+        404
+    );
+}
+
+#[tokio::test]
+async fn the_files_in_a_playlist_join_up_to_the_published_checksum() {
+    let server = start().await;
+    let playlist = send(&server, "GET", "/media/low.m3u8", &[]).await.body;
+    let text = String::from_utf8(playlist).unwrap();
+
+    let mut hasher = Sha256::new();
+    for link in text.lines().filter(|line| !line.starts_with('#')) {
+        hasher.update(send(&server, "GET", &from_media(link), &[]).await.body);
+    }
+
+    assert_eq!(
+        hex(&hasher.finalize()),
+        streams::sha256(&streams::track("low").unwrap())
+    );
+}
+
+#[tokio::test]
+async fn the_parts_of_a_dash_track_join_up_to_the_published_checksum() {
+    let server = start().await;
+    let track = streams::track("v360").unwrap();
+
+    let mut hasher = Sha256::new();
+    hasher.update(send(&server, "GET", "/dash/v360/init.mp4", &[]).await.body);
+    for number in 1..track.len() {
+        let target = format!("/dash/v360/seg-{number:03}.m4s");
+        hasher.update(send(&server, "GET", &target, &[]).await.body);
+    }
+
+    assert_eq!(hex(&hasher.finalize()), streams::sha256(&track));
+}
+
+#[tokio::test]
+async fn faults_given_to_a_stream_apply_to_its_parts() {
+    let server = start().await;
+    let playlist = send(&server, "GET", "/media/low.m3u8?fail=503&run=m", &[])
+        .await
+        .body;
+    let text = String::from_utf8(playlist).unwrap();
+    let link = from_media(text.lines().find(|line| !line.starts_with('#')).unwrap());
+
+    assert_eq!(send(&server, "GET", &link, &[]).await.status, 503);
+    assert_eq!(send(&server, "GET", &link, &[]).await.status, 200);
+}
+
+#[tokio::test]
+async fn the_video_page_has_a_player() {
+    let server = start().await;
+    let reply = send(&server, "GET", "/video", &[]).await;
+
+    assert_eq!(reply.status, 200);
+    assert!(String::from_utf8(reply.body).unwrap().contains("<video"));
+}
+
+#[tokio::test]
+async fn real_files_are_served_from_the_chosen_folder_only() {
+    let folder = std::env::temp_dir().join(format!("testserver-{}", std::process::id()));
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("real.m3u8"), b"#EXTM3U\n").unwrap();
+
+    let server = TestServer::start(Config {
+        static_dir: Some(folder.clone()),
+        ..Config::default()
+    })
+    .await
+    .unwrap();
+
+    let found = send(&server, "GET", "/static/real.m3u8", &[]).await;
+    assert_eq!(found.status, 200);
+    assert_eq!(found.body, b"#EXTM3U\n");
+    assert_eq!(
+        found.header("content-type"),
+        Some("application/vnd.apple.mpegurl")
+    );
+
+    assert_eq!(
+        send(&server, "GET", "/static/missing.ts", &[]).await.status,
+        404
+    );
+    assert_eq!(
+        send(&server, "GET", "/static/../Cargo.toml", &[])
+            .await
+            .status,
+        404
+    );
+    assert_eq!(
+        send(&server, "GET", "/static/a/b.ts", &[]).await.status,
+        404
+    );
+
+    std::fs::remove_dir_all(folder).unwrap();
+}
+
+#[tokio::test]
+async fn without_a_folder_nothing_is_served_as_a_real_file() {
+    let server = start().await;
+    assert_eq!(send(&server, "GET", "/static/x.ts", &[]).await.status, 404);
 }

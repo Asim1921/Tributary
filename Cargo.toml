@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/engine", "crates/host", "crates/testserver", "src-tauri"]
+members = ["crates/engine", "crates/host", "crates/media", "crates/testserver", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,7 +11,7 @@ publish = false
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 
 [profile.release]
 lto = "thin"

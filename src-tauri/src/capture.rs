@@ -42,6 +42,9 @@ pub struct Captured {
     pub user_agent: Option<String>,
     pub cookies: Option<String>,
     pub file_name: Option<String>,
+    /// The extension spotted this as a stream, which an address doesn't always show.
+    #[serde(default)]
+    pub video: bool,
     /// Only set from the command line.
     #[serde(skip)]
     pub folder: Option<PathBuf>,
@@ -50,6 +53,10 @@ pub struct Captured {
 impl Captured {
     pub fn is_valid(&self) -> bool {
         Url::parse(&self.url).is_ok_and(|url| matches!(url.scheme(), "http" | "https" | "ftp"))
+    }
+
+    pub fn is_stream(&self) -> bool {
+        self.video || media::is_stream(&self.url, None)
     }
 
     /// The request headers a server may expect, because the browser would have sent them.
@@ -136,6 +143,7 @@ impl Pending {
 pub struct CaptureItem {
     url: String,
     file_name: Option<String>,
+    video: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -154,8 +162,12 @@ pub fn receive(app: &AppHandle, files: Vec<Captured>, batch: bool) -> Result<(),
         return Err("there's nothing here that can be downloaded".to_owned());
     }
 
+    // A stream always gets its dialog, because there's a quality to choose and it may
+    // have to be refused. Added directly, only its playlist's text would be saved.
+    let needs_asking = batch || files.iter().any(Captured::is_stream);
+
     let state = app.state::<AppState>();
-    if !batch && !state.settings_snapshot().show_start_dialog {
+    if !needs_asking && !state.settings_snapshot().show_start_dialog {
         for file in files {
             let headers = file.headers();
             let request = AddRequest::from_captured(file);
@@ -169,6 +181,7 @@ pub fn receive(app: &AppHandle, files: Vec<Captured>, batch: bool) -> Result<(),
         .map(|file| CaptureItem {
             url: file.url.clone(),
             file_name: file.file_name.clone(),
+            video: file.is_stream(),
         })
         .collect();
 
@@ -203,6 +216,7 @@ fn settings_reply(state: &AppState) -> Value {
         "exclusions": settings.capture_exclusions,
         "forceKey": settings.force_key,
         "skipKey": settings.skip_key,
+        "videoPanel": settings.video_panel,
     })
 }
 
@@ -369,6 +383,19 @@ mod tests {
             .collect();
 
         assert_eq!(names, ["Referer", "User-Agent", "Cookie"]);
+    }
+
+    #[test]
+    fn streams_are_recognised_by_address_or_by_what_the_extension_saw() {
+        assert!(file("https://x.test/a.m3u8").is_stream());
+        assert!(file("https://x.test/a.mpd?t=1").is_stream());
+        assert!(!file("https://x.test/a.mp4").is_stream());
+
+        let spotted = Captured {
+            video: true,
+            ..file("https://x.test/play")
+        };
+        assert!(spotted.is_stream());
     }
 
     #[test]

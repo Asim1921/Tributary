@@ -9,6 +9,7 @@ use engine::{
     Download, DownloadEdit, DownloadId, Engine, Login, ManualProxy, Moment, NetworkOptions,
     NewDownload, ProxyMode, Queue, QueueId, QueueInfo, QueueKind, Quota, ServerLimit, State,
 };
+use media::{Part, Quality};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State as Managed, Window};
 use tauri_plugin_autostart::ManagerExt as _;
@@ -37,9 +38,36 @@ pub struct AppState {
     pub pending: Mutex<Pending>,
     /// Downloads a command line asked the app to close after.
     pub quit_after: Mutex<HashSet<i64>>,
+    /// What the video dialog is offering.
+    pub video_choices: Mutex<Vec<Quality>>,
+    /// Videos having their picture and sound joined.
+    pub joining: Mutex<HashSet<i64>>,
 }
 
 impl AppState {
+    pub fn video_choices(&self) -> MutexGuard<'_, Vec<Quality>> {
+        self.video_choices
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn joining(&self) -> MutexGuard<'_, HashSet<i64>> {
+        self.joining.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Notes that a video's joining has begun. False if it already had.
+    pub fn start_joining(&self, id: i64) -> bool {
+        self.joining().insert(id)
+    }
+
+    pub fn finish_joining(&self, id: i64) {
+        self.joining().remove(&id);
+    }
+
+    pub fn is_joining(&self) -> bool {
+        !self.joining().is_empty()
+    }
+
     pub fn quit_after(&self, id: i64) {
         self.quit_after
             .lock()
@@ -69,7 +97,7 @@ impl AppState {
     }
 
     /// The saved login for a URL, if a site rule covers it.
-    fn site_login_for(&self, url: &str) -> Option<Login> {
+    pub fn site_login_for(&self, url: &str) -> Option<Login> {
         let settings = self.settings();
         let site = settings
             .site_logins
@@ -218,7 +246,7 @@ impl From<Download> for DownloadView {
             state: state_name(download.state),
             error: download.error,
             description: download.description,
-            resumable: download.ranged,
+            resumable: download.ranged || download.is_stream,
             added_at: download.added_at,
             completed_at: download.completed_at,
             queue_id: download.queue.map(|queue| queue.0),
@@ -234,6 +262,7 @@ pub struct FileInfoView {
     size: Option<u64>,
     resumable: bool,
     is_web_page: bool,
+    is_stream: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -253,6 +282,9 @@ pub struct AddRequest {
     remember_login: bool,
     /// Stands for a file captured from the browser, with its cookies.
     capture_token: Option<u64>,
+    /// The parts of a stream. Only the app sets these, never the window.
+    #[serde(skip)]
+    parts: Option<Vec<Part>>,
 }
 
 impl AddRequest {
@@ -270,6 +302,26 @@ impl AddRequest {
             password: None,
             remember_login: false,
             capture_token: None,
+            parts: None,
+        }
+    }
+
+    /// One track of a video.
+    pub fn for_track(
+        url: String,
+        folder: Option<PathBuf>,
+        file_name: String,
+        parts: Option<Vec<Part>>,
+    ) -> Self {
+        let file = Captured {
+            url,
+            file_name: Some(file_name),
+            folder,
+            ..Captured::default()
+        };
+        Self {
+            parts,
+            ..Self::from_captured(file)
         }
     }
 
@@ -394,6 +446,7 @@ pub async fn inspect_url(
         size: info.size,
         resumable: info.resumable,
         is_web_page: info.is_web_page,
+        is_stream: media::is_stream(url, info.content_type.as_deref()),
     })
 }
 
@@ -545,6 +598,7 @@ pub fn add_download_now(
             queue: request.queue_id.map(QueueId),
             category,
             login,
+            parts: request.parts,
         })
         .map_err(text)?;
 

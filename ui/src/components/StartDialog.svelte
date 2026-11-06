@@ -14,11 +14,22 @@
     categories: Category[];
     queues: Queue[];
     onsubmit: (request: AddRequest) => void;
+    /** The address turned out to be a stream, which has a dialog of its own. */
+    onstream: () => void;
     onclose: () => void;
   }
 
-  let { url, captureToken, suggestedName, defaultFolder, categories, queues, onsubmit, onclose }: Props =
-    $props();
+  let {
+    url,
+    captureToken,
+    suggestedName,
+    defaultFolder,
+    categories,
+    queues,
+    onsubmit,
+    onstream,
+    onclose,
+  }: Props = $props();
 
   let info = $state<FileInfo | null>(null);
   let problem = $state<string | null>(null);
@@ -48,6 +59,11 @@
         password || undefined,
         captureToken,
       );
+      if (found.isStream) {
+        onstream();
+        return;
+      }
+
       info = found;
       if (!nameEdited) fileName = suggestedName || found.fileName;
 

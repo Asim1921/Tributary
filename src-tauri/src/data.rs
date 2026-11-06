@@ -38,6 +38,9 @@ pub fn export_to(path: &Path, engine: &Engine, settings: &Settings) -> Result<us
         .list()
         .map_err(|error| error.to_string())?
         .into_iter()
+        // An unfinished stream can't come back from just its address: imported, that
+        // would save the text of its playlist as if it were the video.
+        .filter(|download| !download.is_stream || download.state == State::Completed)
         .map(|download| ExportedDownload {
             finished: download.state == State::Completed,
             url: download.url,
@@ -117,6 +120,32 @@ mod tests {
             paused: true,
             ..NewDownload::default()
         }
+    }
+
+    #[tokio::test]
+    async fn an_unfinished_stream_is_left_out_of_an_export() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = folder.path().join("export.json");
+        let source = engine(folder.path(), "a.db");
+
+        source
+            .add(paused("https://x.test/a.zip", folder.path()))
+            .unwrap();
+        source
+            .add(NewDownload {
+                file_name: Some("film.ts".to_owned()),
+                parts: Some(vec![media::Part {
+                    url: "https://x.test/1.ts".to_owned(),
+                    range: None,
+                }]),
+                ..paused("https://x.test/film.m3u8", folder.path())
+            })
+            .unwrap();
+
+        let count = export_to(&file, &source, &Settings::default()).unwrap();
+
+        assert_eq!(count, 1);
+        assert!(!fs::read_to_string(&file).unwrap().contains("film.m3u8"));
     }
 
     #[tokio::test]

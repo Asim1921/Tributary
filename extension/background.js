@@ -1,6 +1,19 @@
 // Watches for downloads, and hands the right ones to the app.
 
-import { cookieHeader, baseName, downloadUrl, shouldCapture, usableLinks } from './rules.js';
+import {
+  addMedia,
+  baseName,
+  cookieHeader,
+  downloadUrl,
+  headerValue,
+  keepDocument,
+  mediaKey,
+  mediaKind,
+  mediaLabel,
+  responseLength,
+  shouldCapture,
+  usableLinks,
+} from './rules.js';
 
 const HOST = 'app.tributary.capture';
 const SETTINGS_MAX_AGE_MS = 15_000;
@@ -105,11 +118,92 @@ chrome.downloads.onChanged.addListener((delta) => {
   });
 });
 
-chrome.runtime.onMessage.addListener((message) => {
+chrome.runtime.onMessage.addListener((message, sender) => {
   if (message?.type === 'click') {
     lastClick = { ctrl: message.ctrl, alt: message.alt, shift: message.shift, at: Date.now() };
+  } else if (message?.type === 'save-media') {
+    void saveMedia(message.tabId ?? sender.tab?.id, message.index);
+  } else if (message?.type === 'page-start' && sender.tab) {
+    void updateMedia(sender.tab.id, (items) => keepDocument(items, sender.documentId)).catch(
+      () => {},
+    );
   }
 });
+
+// Writes wait their turn, because several finds can arrive at once and each one reads
+// the list before changing it.
+let mediaWrites = Promise.resolve();
+
+function updateMedia(tabId, change) {
+  const written = mediaWrites.then(async () => {
+    const key = mediaKey(tabId);
+    const { [key]: items = [] } = await chrome.storage.session.get(key);
+    const next = change(items);
+    if (next === items) return null;
+
+    await chrome.storage.session.set({ [key]: next });
+    await chrome.action
+      .setBadgeText({ tabId, text: next.length > 0 ? String(next.length) : '' })
+      .catch(() => {});
+    return next;
+  });
+
+  mediaWrites = written.catch(() => {});
+  return written;
+}
+
+async function showPanel(tabId, frameId, items) {
+  const { settings } = await chrome.storage.local.get('settings');
+  if (settings?.videoPanel === false) return;
+
+  const message = { type: 'media', labels: items.map(mediaLabel) };
+  await chrome.tabs.sendMessage(tabId, message, { frameId }).catch(() => {});
+}
+
+function findMedia(details) {
+  if (details.tabId < 0 || (details.statusCode !== 200 && details.statusCode !== 206)) return;
+
+  const kind = mediaKind({
+    url: details.url,
+    type: details.type,
+    contentType: headerValue(details.responseHeaders, 'content-type'),
+    length: responseLength(details.responseHeaders),
+  });
+  if (!kind) return;
+
+  const found = { url: details.url, kind, documentId: details.documentId };
+  void updateMedia(details.tabId, (items) => addMedia(items, found))
+    .then((items) => (items ? showPanel(details.tabId, details.frameId, items) : undefined))
+    .catch(() => {});
+}
+
+// This only watches. Nothing here can block or change a request.
+chrome.webRequest.onHeadersReceived.addListener(
+  findMedia,
+  { urls: ['<all_urls>'], types: ['media', 'xmlhttprequest', 'other'] },
+  ['responseHeaders'],
+);
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  void chrome.storage.session.remove(mediaKey(tabId));
+});
+
+/** Offers a find to the app, which asks the user what to do with it. */
+async function saveMedia(tabId, index) {
+  const key = mediaKey(tabId);
+  const { [key]: items = [] } = await chrome.storage.session.get(key);
+  const item = items[index];
+  if (!item) return;
+
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  const stream = item.kind === 'stream';
+  const file = await describe(item.url, {
+    referrer: tab?.url,
+    fileName: stream ? tab?.title : undefined,
+    video: stream,
+  });
+  await ask({ type: 'download', ...file }).catch(() => {});
+}
 
 const MENU = {
   link: 'tributary-link',

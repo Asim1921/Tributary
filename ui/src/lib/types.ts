@@ -49,6 +49,7 @@ export interface FileInfo {
   size: number | null;
   resumable: boolean;
   isWebPage: boolean;
+  isStream: boolean;
 }
 
 export interface AddRequest {
@@ -114,6 +115,8 @@ export interface Settings {
   scannerArguments: string;
   sounds: Sounds;
   captureEnabled: boolean;
+  ffmpegPath: string;
+  videoPanel: boolean;
   captureTypes: string[];
   captureExclusions: string[];
   forceKey: string;
@@ -125,6 +128,32 @@ export interface Settings {
 export interface CaptureItem {
   url: string;
   fileName: string | null;
+  video: boolean;
+}
+
+export interface VideoChoice {
+  label: string;
+  width: number | null;
+  height: number | null;
+  estimatedBytes: number | null;
+  seconds: number;
+  extension: string;
+  separateAudio: boolean;
+}
+
+export interface VideoDetails {
+  choices: VideoChoice[];
+  canJoin: boolean;
+  suggestedName: string;
+}
+
+export interface AddVideoRequest {
+  url: string;
+  choice: number;
+  destDir: string;
+  name: string;
+  later: boolean;
+  captureToken?: number;
 }
 
 export interface CaptureEvent {

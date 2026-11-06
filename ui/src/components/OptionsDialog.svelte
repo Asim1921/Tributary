@@ -28,6 +28,7 @@
     | 'general'
     | 'downloads'
     | 'browser'
+    | 'video'
     | 'connection'
     | 'proxy'
     | 'logins'
@@ -40,6 +41,7 @@
     { id: 'general', label: 'General' },
     { id: 'downloads', label: 'Downloads' },
     { id: 'browser', label: 'Browser' },
+    { id: 'video', label: 'Video' },
     { id: 'connection', label: 'Connection' },
     { id: 'proxy', label: 'Proxy' },
     { id: 'logins', label: 'Logins' },
@@ -128,6 +130,11 @@
   async function browseScanner() {
     const chosen = await pickFile('Program', ['exe']);
     if (chosen) draft.scannerPath = chosen;
+  }
+
+  async function browseFfmpeg() {
+    const chosen = await pickFile('Program', ['exe']);
+    if (chosen) draft.ffmpegPath = chosen;
   }
 
   async function browseDownloads() {
@@ -312,6 +319,27 @@
         <li>Choose <strong>Load unpacked</strong> and select this folder:</li>
       </ol>
       <p class="selectable path">{extensionPath}</p>
+    {:else if tab === 'video'}
+      <label class="check">
+        <input type="checkbox" bind:checked={draft.videoPanel} />
+        Show a download panel over video players
+      </label>
+      <div class="block">
+        <label class="field" for="options-ffmpeg">ffmpeg program</label>
+        <div class="folder-row">
+          <input
+            id="options-ffmpeg"
+            type="text"
+            bind:value={draft.ffmpegPath}
+            placeholder="Found automatically if it's installed"
+          />
+          <button type="button" onclick={browseFfmpeg}>Browse…</button>
+        </div>
+      </div>
+      <p class="note">
+        Some videos keep their picture and sound apart. With ffmpeg they're joined into one file.
+        Without it, they stay as two files. Protected and live videos can't be saved.
+      </p>
     {:else if tab === 'connection'}
       <label class="check">
         <input type="checkbox" bind:checked={draft.speedLimitEnabled} />

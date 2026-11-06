@@ -4,6 +4,7 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 
 import type {
   AddRequest,
+  AddVideoRequest,
   CaptureEvent,
   CategoryChoice,
   Download,
@@ -14,6 +15,7 @@ import type {
   ScanResult,
   Settings,
   StateEvent,
+  VideoDetails,
 } from './types';
 
 /** What the app says when a server wants a login it doesn't have. */
@@ -38,6 +40,9 @@ export const openFile = (id: number) => invoke<void>('open_file', { id });
 export const showInFolder = (id: number) => invoke<void>('show_in_folder', { id });
 export const dragFiles = (ids: number[]) => invoke<void>('drag_files', { ids });
 export const windowReady = () => invoke<CaptureEvent[]>('window_ready');
+export const inspectVideo = (url: string, fileName?: string, captureToken?: number) =>
+  invoke<VideoDetails>('inspect_video', { url, fileName, captureToken });
+export const addVideo = (request: AddVideoRequest) => invoke<void>('add_video', { request });
 export const getSettings = () => invoke<Settings>('get_settings');
 export const saveSettings = (settings: Settings) => invoke<void>('save_settings', { settings });
 export const suggestCategory = (fileName: string, url: string) =>
@@ -85,6 +90,9 @@ export const onState = (handler: (event: StateEvent) => void): Promise<UnlistenF
 
 export const onQueuesChanged = (handler: () => void): Promise<UnlistenFn> =>
   listen('queues-changed', () => handler());
+
+export const onVideoProblem = (handler: (problem: string) => void): Promise<UnlistenFn> =>
+  listen<string>('video-problem', (event) => handler(event.payload));
 
 export const onCapture = (handler: (event: CaptureEvent) => void): Promise<UnlistenFn> =>
   listen<CaptureEvent>('capture', (event) => handler(event.payload));

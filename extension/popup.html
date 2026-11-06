@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tributary</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { width: 280px; margin: 0; padding: 10px; font: 13px/1.4 system-ui, sans-serif; }
+  h1 { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+  ul { margin: 0; padding: 0; list-style: none; }
+  li + li { margin-top: 4px; }
+  button {
+    width: 100%; padding: 6px 8px; overflow: hidden; font: inherit; text-align: left;
+    text-overflow: ellipsis; white-space: nowrap; cursor: pointer;
+    background: transparent; border: 1px solid #8884; border-radius: 5px; color: inherit;
+  }
+  button:hover { border-color: #26b5a4; }
+  p { margin: 0; opacity: 0.7; }
+</style>
+</head>
+<body>
+<h1>Video on this page</h1>
+<ul id="items"></ul>
+<p id="nothing" hidden>No video found yet. Start playing it, then look here again.</p>
+<script type="module" src="popup.js"></script>
+</body>
+</html>

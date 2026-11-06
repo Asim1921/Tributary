@@ -154,6 +154,30 @@ class DevTools {
     throw new Error(`${url} never finished loading`);
   }
 
+  /** Waits until a script's value is true. */
+  async waitFor(expression, timeoutMs = 8000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (await this.evaluate(expression).catch(() => false)) return;
+      await sleep(50);
+    }
+    throw new Error(`never true: ${expression}`);
+  }
+
+  /** A real mouse click at a place on the page. */
+  async clickAt(x, y) {
+    const event = { x, y, modifiers: 0, button: 'left', clickCount: 1 };
+    await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, modifiers: 0 });
+    await this.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...event });
+    await this.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...event });
+  }
+
+  /** Closes the tab this is connected to. */
+  async closeTarget() {
+    await this.send('Page.close').catch(() => {});
+    this.close();
+  }
+
   /** A real mouse click, so the page sees any held keys. Modifiers: Alt 1, Ctrl 2, Shift 8. */
   async click(linkText, modifiers = 0) {
     const locate = `(() => {
@@ -194,6 +218,37 @@ class DevTools {
   close() {
     this.#socket.close();
   }
+}
+
+/** Where the panel is, once the extension has shown it. */
+async function waitForPanel(tools) {
+  const find = `(() => {
+    const panel = document.querySelector('[data-tributary-panel]');
+    if (!panel) return null;
+    const box = panel.getBoundingClientRect();
+    return { x: box.left, y: box.top, width: box.width, height: box.height };
+  })()`;
+
+  for (let attempt = 0; attempt < 160; attempt += 1) {
+    const box = await tools.evaluate(find).catch(() => null);
+    if (box) return box;
+    await sleep(50);
+  }
+  throw new Error('the panel never appeared');
+}
+
+/** Opens one of the extension's own pages in a new tab. */
+async function openExtensionPage(page) {
+  const address = `chrome-extension://${EXTENSION_ID}/${page}`;
+  const reply = await fetch(`http://127.0.0.1:${EDGE_DEBUG_PORT}/json/new?${address}`, {
+    method: 'PUT',
+  });
+  const target = await reply.json();
+  const tools = await DevTools.open(target.webSocketDebuggerUrl);
+  await tools.send('Page.enable');
+  await tools.send('Runtime.enable');
+  await tools.waitFor(`document.readyState === 'complete'`);
+  return tools;
 }
 
 async function devToolsTargets(port) {
@@ -406,6 +461,106 @@ try {
       await cancel();
     } finally {
       worker.close();
+    }
+  });
+
+  await step('video on a page gets a panel, and the panel offers it to the app', async () => {
+    await edgeTools.open(`${BASE}/video`);
+
+    const box = await waitForPanel(edgeTools);
+    assert.ok(box.width > 0 && box.height > 0, 'the panel has no size');
+
+    // A real click near the top of the panel lands on its first entry, the stream.
+    await edgeTools.clickAt(box.x + 30, box.y + 14);
+    await appPage.getByRole('heading', { name: 'Save video' }).waitFor();
+    await appPage.getByRole('radio', { name: '720p' }).waitFor();
+    assert.equal(await appPage.getByLabel('Save as').inputValue(), 'Video test page');
+
+    await appPage.getByRole('button', { name: 'Cancel' }).click();
+    await appPage.getByRole('dialog').waitFor({ state: 'hidden' });
+  });
+
+  await step('a script on the page cannot press the panel', async () => {
+    await edgeTools.evaluate(`document.querySelector('[data-tributary-panel]').click()`);
+    await sleep(600);
+    assert.equal(await appPage.getByRole('dialog').count(), 0);
+
+    const reachable = await edgeTools.evaluate(
+      `document.querySelector('[data-tributary-panel]').shadowRoot === null`,
+    );
+    assert.equal(reachable, true, 'the panel should be closed to the page');
+  });
+
+  await step('the media list shows what the page has and offers it to the app', async () => {
+    const popup = await openExtensionPage('popup.html');
+    try {
+      const tabId = await popup.evaluate(`(async () => {
+        const [tab] = await chrome.tabs.query({ url: '${BASE}/video' });
+        return tab.id;
+      })()`);
+      await popup.open(`chrome-extension://${EXTENSION_ID}/popup.html?tab=${tabId}`);
+
+      assert.equal(await popup.evaluate(`chrome.action.getBadgeText({ tabId: ${tabId} })`), '2');
+      await popup.waitFor(`document.querySelectorAll('#items button').length === 2`);
+      assert.deepEqual(
+        await popup.evaluate(`[...document.querySelectorAll('#items button')].map((item) => item.textContent)`),
+        ['Video stream', '2M.mp4'],
+      );
+
+      await popup.evaluate(`document.querySelectorAll('#items button')[1].click()`);
+      await appPage.getByRole('heading', { name: 'Download file' }).waitFor();
+      await appPage.getByRole('dialog').getByText('2.0 MB').waitFor();
+      await appPage.getByRole('button', { name: 'Cancel' }).click();
+      await appPage.getByRole('dialog').waitFor({ state: 'hidden' });
+    } finally {
+      await popup.closeTarget();
+    }
+  });
+
+  await step('the panel can be hidden, and turned off altogether', async () => {
+    await edgeTools.open(`${BASE}/video`);
+    const box = await waitForPanel(edgeTools);
+
+    // The last row of the panel is its Hide button.
+    await edgeTools.clickAt(box.x + box.width - 14, box.y + box.height - 12);
+    await edgeTools.waitFor(`document.querySelector('[data-tributary-panel]') === null`);
+
+    const popup = await openExtensionPage('popup.html');
+    const setPanel = (shown) =>
+      popup.evaluate(`(async () => {
+        const { settings } = await chrome.storage.local.get('settings');
+        await chrome.storage.local.set({ settings: { ...settings, videoPanel: ${shown} } });
+      })()`);
+
+    try {
+      await setPanel(false);
+      await edgeTools.open(`${BASE}/video`);
+      await sleep(1200);
+      assert.equal(
+        await edgeTools.evaluate(`document.querySelector('[data-tributary-panel]') === null`),
+        true,
+        'the panel was turned off',
+      );
+    } finally {
+      await setPanel(true);
+      await popup.closeTarget();
+    }
+  });
+
+  await step('a new page starts with an empty media list', async () => {
+    await edgeTools.open(`${BASE}/`);
+    assert.equal(await edgeTools.evaluate(`document.querySelector('[data-tributary-panel]')`), null);
+
+    const popup = await openExtensionPage('popup.html');
+    try {
+      const stored = await popup.evaluate(`(async () => {
+        const [tab] = await chrome.tabs.query({ url: '${BASE}/' });
+        const key = 'media-' + tab.id;
+        return (await chrome.storage.session.get(key))[key] ?? [];
+      })()`);
+      assert.deepEqual(stored, []);
+    } finally {
+      await popup.closeTarget();
     }
   });
 

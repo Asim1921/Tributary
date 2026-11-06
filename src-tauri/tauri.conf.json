@@ -42,6 +42,8 @@
       "../extension/manifest.json": "extension/manifest.json",
       "../extension/background.js": "extension/background.js",
       "../extension/content.js": "extension/content.js",
+      "../extension/popup.html": "extension/popup.html",
+      "../extension/popup.js": "extension/popup.js",
       "../extension/rules.js": "extension/rules.js",
       "../extension/icons/32.png": "extension/icons/32.png",
       "../extension/icons/128.png": "extension/icons/128.png"

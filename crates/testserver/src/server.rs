@@ -20,6 +20,7 @@ use tokio::task::{JoinHandle, JoinSet};
 use crate::content;
 use crate::http::{RangeRequest, RequestHead, parse_range, reason};
 use crate::scenario::{Scenario, with_redirects};
+use crate::streams;
 
 const MAX_HEAD_BYTES: usize = 64 << 10;
 const MAX_CHUNK_BYTES: u64 = 64 << 10;
@@ -33,6 +34,7 @@ const LAST_MODIFIED: [&str; 2] = [
 ];
 
 const INDEX_PAGE: &str = include_str!("index.html");
+const VIDEO_PAGE: &str = include_str!("video.html");
 
 const DIGEST_REALM: &str = "test";
 const DIGEST_NONCE: &str = "test-nonce";
@@ -46,6 +48,8 @@ pub struct Config {
     pub log_path: Option<PathBuf>,
     /// A `user:password` a client must give when using this server as a proxy.
     pub proxy_login: Option<String>,
+    /// Real files served under `/static/`, for tests that need real video.
+    pub static_dir: Option<PathBuf>,
 }
 
 /// How a response ended.
@@ -121,6 +125,7 @@ struct State {
     records: Mutex<Vec<Record>>,
     log: Option<Mutex<File>>,
     proxy_login: Option<String>,
+    static_dir: Option<PathBuf>,
 }
 
 impl State {
@@ -248,6 +253,7 @@ impl TestServer {
             records: Mutex::default(),
             log,
             proxy_login: config.proxy_login,
+            static_dir: config.static_dir,
         });
 
         let accept_loop = tokio::spawn(accept_connections(listener, Arc::clone(&state)));
@@ -417,10 +423,64 @@ async fn respond(state: &State, stream: &mut TcpStream, head: &RequestHead) -> S
             ];
             send_small(stream, head, 302, &headers, b"").await
         }
-        _ => match path.strip_prefix("/file/") {
-            Some(name) => serve_file(state, stream, head, name, query).await,
-            None => send_small(stream, head, 404, &[], b"not found\n").await,
-        },
+        "/video" => {
+            let headers = [("Content-Type", "text/html; charset=utf-8".to_owned())];
+            send_small(stream, head, 200, &headers, VIDEO_PAGE.as_bytes()).await
+        }
+        _ => {
+            if let Some(name) = path.strip_prefix("/file/") {
+                return serve_file(state, stream, head, name, query).await;
+            }
+            if let Some((name, piece_query)) = streams::dash_piece(path, query) {
+                return serve_file(state, stream, head, &name, &piece_query).await;
+            }
+            if let Some(name) = path.strip_prefix("/static/") {
+                return serve_static(state, stream, head, name).await;
+            }
+            let rendered = path
+                .strip_prefix("/media/")
+                .and_then(|name| streams::render(name, query));
+            match rendered {
+                Some((content_type, text)) => {
+                    let headers = [("Content-Type", content_type.to_owned())];
+                    send_small(stream, head, 200, &headers, text.as_bytes()).await
+                }
+                None => send_small(stream, head, 404, &[], b"not found\n").await,
+            }
+        }
+    }
+}
+
+/// The content type of a real file, going by its extension.
+fn static_type(name: &str) -> &'static str {
+    match name.rsplit('.').next().unwrap_or_default() {
+        "m3u8" => "application/vnd.apple.mpegurl",
+        "mpd" => "application/dash+xml",
+        "ts" => "video/mp2t",
+        "mp4" | "m4s" => "video/mp4",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Serves a file from `static_dir`. Only plain names are accepted.
+async fn serve_static(
+    state: &State,
+    stream: &mut TcpStream,
+    head: &RequestHead,
+    name: &str,
+) -> Served {
+    let plain = !name.is_empty() && !name.contains(['/', '\\']) && !name.contains("..");
+    let data = match &state.static_dir {
+        Some(folder) if plain => tokio::fs::read(folder.join(name)).await.ok(),
+        _ => None,
+    };
+
+    match data {
+        Some(data) => {
+            let headers = [("Content-Type", static_type(name).to_owned())];
+            send_small(stream, head, 200, &headers, &data).await
+        }
+        None => send_small(stream, head, 404, &[], b"not found\n").await,
     }
 }
 

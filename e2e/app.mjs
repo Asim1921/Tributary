@@ -32,10 +32,12 @@ const PIPE = `\\\\.\\pipe\\tributary-e2e-${process.pid}`;
 const SERVER_PORT = 8791;
 const DEBUG_PORT = 9333;
 const BASE = `http://127.0.0.1:${SERVER_PORT}`;
+const VIDEO_SECONDS = 6;
 const SCREENSHOTS = process.env.E2E_SCREENSHOTS;
 
 const dataDir = mkdtempSync(join(tmpdir(), 'tributary-e2e-data-'));
 const downloadDir = mkdtempSync(join(tmpdir(), 'tributary-e2e-files-'));
+const videoDir = mkdtempSync(join(tmpdir(), 'tributary-e2e-video-'));
 
 const results = [];
 const pageErrors = [];
@@ -72,6 +74,57 @@ async function sha256(path) {
   const hash = createHash('sha256');
   for await (const chunk of createReadStream(path)) hash.update(chunk);
   return hash.digest('hex');
+}
+
+const trackSha256 = (name) =>
+  execFileSync(SERVER, ['sha256-track', name], { encoding: 'utf8' }).trim();
+
+/** Makes a real video, so that what's saved can be played back and checked. */
+function makeVideo(...output) {
+  execFileSync(
+    'ffmpeg',
+    [
+      '-y',
+      '-loglevel',
+      'error',
+      '-f',
+      'lavfi',
+      '-i',
+      `testsrc=duration=${VIDEO_SECONDS}:size=320x240:rate=15`,
+      '-f',
+      'lavfi',
+      '-i',
+      `sine=frequency=440:duration=${VIDEO_SECONDS}`,
+      '-c:v',
+      'libx264',
+      '-preset',
+      'ultrafast',
+      '-c:a',
+      'aac',
+      ...output,
+    ],
+    { cwd: videoDir, stdio: ['ignore', 'ignore', 'inherit'] },
+  );
+}
+
+/** Asks ffprobe what a file really contains. */
+function probe(path) {
+  const output = execFileSync(
+    'ffprobe',
+    ['-v', 'error', '-show_entries', 'stream=codec_type:format=duration', '-of', 'json', path],
+    { encoding: 'utf8' },
+  );
+  const { streams, format } = JSON.parse(output);
+  return {
+    kinds: streams.map((stream) => stream.codec_type).sort(),
+    seconds: Number(format.duration),
+  };
+}
+
+function assertRealVideo(path) {
+  const { kinds, seconds } = probe(path);
+  assert.deepEqual(kinds, ['audio', 'video']);
+  assert.ok(Math.abs(seconds - VIDEO_SECONDS) < 1, `lasts ${seconds} seconds`);
 }
 
 function expectedSha256(name) {
@@ -159,7 +212,9 @@ try {
   // Set before the app starts, so a test can never write to the real Downloads folder.
   writeFileSync(join(dataDir, 'settings.json'), JSON.stringify({ downloadDir }));
 
-  server = spawn(SERVER, ['--port', String(SERVER_PORT)], { stdio: ['ignore', 'pipe', 'ignore'] });
+  server = spawn(SERVER, ['--port', String(SERVER_PORT), '--files', videoDir], {
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
   const ftpBase = await new Promise((resolve, reject) => {
     server.stdout.on('data', (data) => {
       const found = /ftp on (\S+)/.exec(String(data));
@@ -678,6 +733,7 @@ try {
     assert.ok(reply.fileTypes.includes('zip'));
     assert.equal(reply.forceKey, 'ctrl');
     assert.equal(reply.skipKey, 'alt');
+    assert.equal(reply.videoPanel, true);
   });
 
   await step('a captured download keeps its cookies, without the window ever seeing them', async () => {
@@ -826,6 +882,207 @@ try {
     }
   });
 
+  /** Opens the video dialog for an address, through Add URL. */
+  async function openVideo(url) {
+    await page.getByRole('button', { name: 'Add URL' }).first().click();
+    await page.getByLabel('Address').fill(url);
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await page.getByRole('heading', { name: 'Save video' }).waitFor();
+  }
+
+  async function saveVideo(name) {
+    await page.getByLabel('Save as').fill(name);
+    await page.getByLabel('Folder').fill(downloadDir);
+    await page.getByRole('button', { name: 'Start download' }).click();
+    await page.getByRole('dialog').waitFor({ state: 'hidden' });
+  }
+
+  await step('a stream offers its qualities and saves the one chosen', async () => {
+    await inOptions('Downloads', () =>
+      page.getByLabel('Show a message when a download finishes').uncheck(),
+    );
+    await openVideo(`${BASE}/media/master.m3u8`);
+
+    await page.getByRole('radio', { name: '720p' }).waitFor();
+    assert.equal(await page.getByRole('radio', { name: '720p' }).isChecked(), true, 'best first');
+    await page.getByText('0:24').first().waitFor();
+    await shot(page, '12-video-dialog');
+
+    await page.getByRole('radio', { name: '360p' }).check();
+    await saveVideo('chosen');
+
+    await rowFor(page, 'chosen.ts').getByText('Complete').waitFor();
+    assert.equal(await sha256(join(downloadDir, 'chosen.ts')), trackSha256('low'));
+  });
+
+  await step('a stream is recognised even when its address does not show it', async () => {
+    await page.getByRole('button', { name: 'Add URL' }).first().click();
+    await page.getByLabel('Address').fill(`${BASE}/media/play`);
+    await page.getByRole('button', { name: 'Continue' }).click();
+
+    await page.getByRole('heading', { name: 'Save video' }).waitFor();
+    await page.getByRole('radio', { name: '720p' }).waitFor();
+    await page.getByRole('button', { name: 'Cancel' }).click();
+  });
+
+  await step('protected and live videos are refused, and nothing is saved', async () => {
+    const before = await page.locator('tbody tr').count();
+
+    for (const [name, words] of [
+      ['encrypted.m3u8', 'protected'],
+      ['sample-aes.m3u8', 'protected'],
+      ['session-key.m3u8', 'protected'],
+      ['mixed-master.m3u8', 'protected'],
+      ['dash-protected.mpd', 'protected'],
+      ['live.m3u8', 'live stream'],
+      ['dash-live.mpd', 'live stream'],
+    ]) {
+      await openVideo(`${BASE}/media/${name}`);
+      await page.getByRole('alert').getByText(words).waitFor();
+      assert.equal(
+        await page.getByRole('button', { name: 'Start download' }).count(),
+        0,
+        `${name} can be started`,
+      );
+      await page.getByRole('button', { name: 'Close' }).click();
+      await page.getByRole('dialog').waitFor({ state: 'hidden' });
+    }
+
+    assert.equal(await page.locator('tbody tr').count(), before);
+  });
+
+  await step('a real video saved from a stream plays with picture and sound', async () => {
+    makeVideo(
+      '-f',
+      'hls',
+      '-hls_time',
+      '2',
+      '-hls_playlist_type',
+      'vod',
+      '-hls_segment_filename',
+      'real%03d.ts',
+      'real.m3u8',
+    );
+
+    await openVideo(`${BASE}/static/real.m3u8`);
+    await saveVideo('real');
+    await rowFor(page, 'real.ts').getByText('Complete').waitFor();
+
+    assertRealVideo(join(downloadDir, 'real.ts'));
+  });
+
+  await step('separate picture and sound become one real video with ffmpeg', async () => {
+    makeVideo(
+      '-map',
+      '0:v',
+      '-map',
+      '1:a',
+      '-f',
+      'hls',
+      '-hls_time',
+      '2',
+      '-hls_playlist_type',
+      'vod',
+      '-var_stream_map',
+      'v:0,agroup:sound a:0,agroup:sound,default:yes',
+      '-master_pl_name',
+      'split.m3u8',
+      '-hls_segment_filename',
+      'split%v_%03d.ts',
+      'split%v.m3u8',
+    );
+
+    await openVideo(`${BASE}/static/split.m3u8`);
+    await page.getByText('joined into one file', { exact: false }).first().waitFor();
+    await saveVideo('joined');
+
+    const deadline = Date.now() + 20_000;
+    const joined = join(downloadDir, 'joined.ts');
+    while (Date.now() < deadline && existsSync(join(downloadDir, 'joined.audio.ts'))) {
+      await sleep(100);
+    }
+    assert.ok(!existsSync(join(downloadDir, 'joined.audio.ts')), 'the sound file should be gone');
+    await rowFor(page, 'joined.ts').getByText('Complete').waitFor();
+    await page.waitForFunction(
+      () => ![...document.querySelectorAll('tbody tr')].some((row) => row.textContent.includes('joined.audio')),
+    );
+
+    assertRealVideo(joined);
+  });
+
+  await step('without ffmpeg, picture and sound are saved whole as two files', async () => {
+    await inOptions('Video', () => page.getByLabel('ffmpeg program').fill('C:\\no\\such\\ffmpeg.exe'));
+
+    await openVideo(`${BASE}/media/dash.mpd`);
+    await page.getByText('stay as two files', { exact: false }).first().waitFor();
+    await saveVideo('apart');
+
+    await rowFor(page, 'apart.mp4').getByText('Complete').waitFor();
+    await rowFor(page, 'apart.audio.m4a').getByText('Complete').waitFor();
+
+    assert.equal(await sha256(join(downloadDir, 'apart.mp4')), trackSha256('v720'));
+    assert.equal(await sha256(join(downloadDir, 'apart.audio.m4a')), trackSha256('a128'));
+
+    await inOptions('Video', () => page.getByLabel('ffmpeg program').fill(''));
+  });
+
+  await step('if ffmpeg cannot join them, both files stay and the reason is shown', async () => {
+    // Random bytes aren't video, so the real ffmpeg gives up on them.
+    await openVideo(`${BASE}/media/dash.mpd`);
+    await saveVideo('unjoinable');
+
+    await page.getByRole('heading', { name: 'Something went wrong' }).waitFor();
+    await page.getByText('stay as two files', { exact: false }).waitFor();
+    await page.getByRole('button', { name: 'Close' }).click();
+
+    assert.ok(existsSync(join(downloadDir, 'unjoinable.mp4')));
+    assert.ok(existsSync(join(downloadDir, 'unjoinable.audio.m4a')));
+  });
+
+  await step('a video sent by the browser uses its cookie for every part', async () => {
+    const url = `${BASE}/media/low.m3u8?require_cookie=visitor%3Dyes`;
+    const reply = await askHost({
+      type: 'download',
+      url,
+      video: true,
+      cookies: 'visitor=yes',
+      fileName: 'A film: part 2?',
+    });
+    assert.equal(reply.ok, true);
+
+    await page.getByRole('heading', { name: 'Save video' }).waitFor();
+    await page.getByRole('radio', { name: 'Video' }).waitFor();
+    assert.equal(await page.getByLabel('Save as').inputValue(), 'A film: part 2?');
+    await page.getByLabel('Folder').fill(downloadDir);
+    await page.getByRole('button', { name: 'Start download' }).click();
+
+    const row = page.locator('tbody tr', { hasText: 'A film' });
+    await row.getByText('Complete').waitFor();
+
+    const rows = await page.evaluate(() => window.__TAURI_INTERNALS__.invoke('list_downloads'));
+    const saved = rows.find((item) => item.fileName?.startsWith('A film'));
+    assert.equal(await sha256(saved.finalPath), trackSha256('low'));
+  });
+
+  await step('a stopped stream resumes to a correct file', async () => {
+    await openVideo(`${BASE}/media/high.m3u8?rate=100K`);
+    await saveVideo('interrupted');
+
+    const row = rowFor(page, 'interrupted.ts');
+    await row.getByText('Downloading').waitFor();
+    await sleep(900);
+    const id = await page.evaluate(async () => {
+      const rows = await window.__TAURI_INTERNALS__.invoke('list_downloads');
+      return rows.find((item) => item.fileName === 'interrupted.ts').id;
+    });
+    await page.evaluate((target) => window.__TAURI_INTERNALS__.invoke('pause_download', { id: target }), id);
+    await row.getByText('Stopped').waitFor();
+
+    await page.evaluate((target) => window.__TAURI_INTERNALS__.invoke('resume_download', { id: target }), id);
+    await row.getByText('Complete').waitFor({ timeout: 30_000 });
+    assert.equal(await sha256(join(downloadDir, 'interrupted.ts')), trackSha256('high'));
+  });
+
   await step('a second launch hands its command line to the running app', async () => {
     await inOptions('Downloads', () =>
       page.getByLabel('Show a message when a download finishes').uncheck(),
@@ -852,6 +1109,11 @@ try {
 
     launch('--start-queue');
     await queued.getByText('Complete').waitFor();
+
+    // With no dialog to choose in, a stream saves its best quality.
+    launch('--add', `${BASE}/media/master.m3u8`, '--folder', folder, '--name', 'best', '--silent');
+    await rowFor(page, 'best.ts').getByText('Complete').waitFor();
+    assert.equal(await sha256(join(folder, 'best.ts')), trackSha256('high'));
 
     // A bad command line is ignored rather than breaking the running app.
     launch('--nonsense');
@@ -1038,6 +1300,7 @@ try {
   await sleep(1000);
   rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
   rmSync(downloadDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
+  rmSync(videoDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
 
   const passed = results.filter((result) => result.passed).length;
   console.log(`\n${passed} of ${results.length} steps passed`);

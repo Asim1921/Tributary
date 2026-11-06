@@ -8,9 +8,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
+use media::Part;
 use percent_encoding::percent_decode_str;
 use reqwest::header::{ACCEPT_ENCODING, HeaderMap, HeaderName, HeaderValue};
-use reqwest::{Client, NoProxy, Proxy, Url, redirect};
+use reqwest::{Client, NoProxy, Proxy, Response, Url, redirect};
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
@@ -22,6 +23,7 @@ use crate::error::Error;
 use crate::ftp::{self, FtpTarget};
 use crate::limits::{Limits, Quota};
 use crate::name;
+use crate::parts::{self, PartsJob, Position};
 use crate::remote::{self, Problem, Remote};
 use crate::scheduler::{Command, Moment, Queue, QueueId, Scheduler};
 use crate::segments::{Segment, SegmentMap};
@@ -38,6 +40,10 @@ const MAX_RESTARTS: u32 = 3;
 
 /// How much each new measurement moves the reported speed.
 const SPEED_SMOOTHING: f64 = 0.3;
+
+/// The most that's read of a playlist. More than any real one, but it comes from a web
+/// page, so it mustn't be able to fill memory.
+const MAX_TEXT_BYTES: usize = 32 << 20;
 
 /// Headers that must never be saved. They're kept in memory while the program runs.
 /// After a restart, the caller has to supply them again.
@@ -100,6 +106,8 @@ pub struct NewDownload {
     pub category: Option<String>,
     /// Used if the server asks for one. Kept in memory only.
     pub login: Option<Login>,
+    /// Makes this a stream: these parts are joined in order into one file.
+    pub parts: Option<Vec<Part>>,
 }
 
 /// A proxy the user has set up by hand.
@@ -165,6 +173,7 @@ pub struct FileInfo {
     pub resumable: bool,
     /// The address leads to a web page rather than a file.
     pub is_web_page: bool,
+    pub content_type: Option<String>,
 }
 
 /// A queue and how it's doing right now.
@@ -206,6 +215,16 @@ struct LiveOptions {
     server_limits: Vec<ServerLimit>,
     client: Client,
     ftp_passive: bool,
+}
+
+impl LiveOptions {
+    /// How many connections to use with a server.
+    fn connections_for(&self, host: &str) -> usize {
+        self.server_limits
+            .iter()
+            .find(|limit| wildcard_match(&limit.pattern, host))
+            .map_or(self.connections, |limit| limit.connections.max(1))
+    }
 }
 
 struct Running {
@@ -399,6 +418,11 @@ impl Engine {
     /// fetched again. The old file stays until the new one is complete.
     async fn check_for_update(&self, id: DownloadId) -> Result<(), Error> {
         let download = self.get(id)?;
+        // A stream's address is its playlist, which says nothing about the saved file.
+        if download.is_stream {
+            return Ok(());
+        }
+
         let mut headers = to_header_map(&download.headers)?;
         if let Some(secrets) = self.inner.secrets().get(&id) {
             headers.extend(secrets.clone());
@@ -543,6 +567,7 @@ impl Engine {
             size: remote.size,
             resumable: remote.ranged,
             is_web_page: remote.is_web_page(),
+            content_type: remote.content_type.clone(),
         })
     }
 
@@ -568,6 +593,9 @@ impl Engine {
             &saved,
         )?;
 
+        if let Some(parts) = &new.parts {
+            self.inner.store.set_stream_parts(id, parts)?;
+        }
         if !secret.is_empty() {
             self.inner.secrets().insert(id, secret);
         }
@@ -590,6 +618,59 @@ impl Engine {
             self.start(id)?;
         }
         Ok(id)
+    }
+
+    /// Links the picture and sound of a video that's saved as two downloads.
+    pub fn link_companions(&self, first: DownloadId, second: DownloadId) -> Result<(), Error> {
+        Ok(self.inner.store.link_companions(first, second)?)
+    }
+
+    /// Records that a finished file was replaced by one of a different size.
+    pub fn file_replaced(&self, id: DownloadId, size: u64) -> Result<(), Error> {
+        Ok(self.inner.store.set_size(id, size)?)
+    }
+
+    /// Reads a small text file, such as a playlist.
+    pub async fn fetch_text(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+        login: Option<Login>,
+    ) -> Result<String, String> {
+        let headers = to_header_map(headers).map_err(|error| error.to_string())?;
+        let client = self.inner.client();
+        let policy = self.inner.config.retry;
+        let mut auth: Option<Arc<Authenticator>> = None;
+        let mut failures = 0;
+
+        loop {
+            let request = client.get(url).headers(headers.clone());
+            let request = remote::authorize(request, auth.as_deref(), url);
+            let outcome = match request.send().await {
+                Ok(response) => read_text(response).await,
+                Err(error) => Err(Problem::from_request(error)),
+            };
+
+            match (outcome, &login) {
+                (Ok(text), _) => return Ok(text),
+                (
+                    Err(Problem::LoginRequired {
+                        challenge: Some(challenge),
+                    }),
+                    Some(login),
+                ) if auth.is_none() => {
+                    auth = Some(Arc::new(Authenticator::new(login.clone(), challenge)));
+                }
+                (Err(Problem::Retry { reason, wait }), _) => {
+                    failures += 1;
+                    if failures > policy.attempts {
+                        return Err(reason);
+                    }
+                    tokio::time::sleep(wait.unwrap_or(policy.delay(failures))).await;
+                }
+                (Err(problem), _) => return Err(problem.into_reason()),
+            }
+        }
     }
 
     /// Changes a download that isn't running.
@@ -708,6 +789,22 @@ impl Engine {
         });
         Ok(())
     }
+}
+
+async fn read_text(mut response: Response) -> Result<String, Problem> {
+    let status = response.status();
+    if !status.is_success() {
+        return Err(Problem::from_status(status, response.headers()));
+    }
+
+    let mut data = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(Problem::from_request)? {
+        data.extend_from_slice(&chunk);
+        if data.len() > MAX_TEXT_BYTES {
+            return Err(Problem::Fatal("the file is too large to read".to_owned()));
+        }
+    }
+    Ok(String::from_utf8_lossy(&data).into_owned())
 }
 
 fn build_client(config: &Config, network: &NetworkOptions) -> Result<Client, Error> {
@@ -943,6 +1040,10 @@ async fn attempt(
     let mut headers = to_header_map(&download.headers).map_err(|error| error.to_string())?;
     headers.extend(secrets.clone());
 
+    if download.is_stream {
+        return attempt_stream(inner, id, download, headers, stop).await;
+    }
+
     let login = inner.logins().get(&id).cloned();
     let (remote, auth) = match probe(inner, &download.url, &headers, login.clone(), stop).await {
         Ok(probed) => probed,
@@ -964,38 +1065,11 @@ async fn attempt(
         }
     };
 
-    let LiveOptions {
-        connections,
-        temp_dir,
-        server_limits,
-        client,
-        ..
-    } = inner.live().clone();
-
+    let live = inner.live().clone();
     let parsed_url = Url::parse(&remote.url).map_err(|error| error.to_string())?;
-    let host = parsed_url.host_str().unwrap_or_default();
-    let connections = server_limits
-        .iter()
-        .find(|limit| wildcard_match(&limit.pattern, host))
-        .map_or(connections, |limit| limit.connections.max(1));
-
-    if download.part_dir.is_none() {
-        let part_dir = temp_dir.unwrap_or_else(|| download.dest_dir.clone());
-        inner
-            .store
-            .set_part_dir(id, &part_dir)
-            .map_err(|error| error.to_string())?;
-        download.part_dir = Some(part_dir);
-    }
-
-    let path = part_path(&download, &file_name);
-    for folder in [path.parent(), Some(download.dest_dir.as_path())]
-        .into_iter()
-        .flatten()
-    {
-        std::fs::create_dir_all(folder)
-            .map_err(|error| format!("could not create the folder: {error}"))?;
-    }
+    let connections = live.connections_for(parsed_url.host_str().unwrap_or_default());
+    let path = prepare_folders(inner, &mut download, &live, &file_name)?;
+    let client = live.client;
 
     let segmented = remote.ranged && remote.size.is_some_and(|size| size > 0);
     let resuming =
@@ -1050,14 +1124,133 @@ async fn attempt(
         Box::pin(transfer::run_stream(Arc::clone(&job)))
     };
 
-    let ended = watch(inner, id, &job, segmented, transfer).await;
+    let ended = watch(inner, id, &*job, segmented, transfer).await;
     if segmented {
-        checkpoint(inner, id, &job).await?;
+        job.checkpoint(inner, id).await?;
     }
 
     let transferred = job.transferred.load(Ordering::Relaxed);
     drop(job);
 
+    let size = remote.size.unwrap_or(transferred);
+    conclude(ended, &download, path, file_name, size).await
+}
+
+/// One pass at a stream. There's no file on a server to check first, so it starts from
+/// however many parts are already safely on disk.
+async fn attempt_stream(
+    inner: &Inner,
+    id: DownloadId,
+    mut download: Download,
+    headers: HeaderMap,
+    stop: &CancellationToken,
+) -> Result<Attempt, String> {
+    let parts = inner
+        .store
+        .stream_parts(id)
+        .map_err(|error| error.to_string())?;
+    let first_url = parts
+        .first()
+        .map(|part| part.url.clone())
+        .ok_or("the video has no parts")?;
+    let file_name = download.file_name.clone().ok_or("the video has no name")?;
+
+    let login = inner.logins().get(&id).cloned();
+    let auth = match login {
+        None => None,
+        Some(login) => match probe(inner, &first_url, &headers, Some(login), stop).await {
+            Ok((_, auth)) => auth,
+            Err(Problem::Stopped) => return Ok(Attempt::Done(Finish::Paused)),
+            Err(problem) => return Err(problem.into_reason()),
+        },
+    };
+
+    let live = inner.live().clone();
+    let parsed_url = Url::parse(&first_url).map_err(|error| error.to_string())?;
+    let connections = live.connections_for(parsed_url.host_str().unwrap_or_default());
+    let path = prepare_folders(inner, &mut download, &live, &file_name)?;
+
+    // Only what the database counts as safe is kept. Anything past it may be incomplete.
+    let on_disk = std::fs::metadata(&path).map_or(0, |file| file.len());
+    let start = if download.parts_done > 0 && on_disk >= download.downloaded {
+        Position {
+            parts: download.parts_done,
+            bytes: download.downloaded,
+        }
+    } else {
+        Position::default()
+    };
+
+    let file = if start.parts > 0 {
+        PartFile::open(&path).and_then(|file| file.set_len(start.bytes).map(|()| file))
+    } else {
+        inner
+            .store
+            .save_stream_progress(id, 0, 0)
+            .map_err(|error| error.to_string())?;
+        PartFile::create(&path, None)
+    }
+    .map_err(|error| format!("could not open the file: {error}"))?;
+
+    let setup = parts::Setup {
+        client: live.client,
+        parts,
+        headers,
+        file: Arc::new(file),
+        stop: stop.child_token(),
+        policy: inner.config.retry,
+        limits: Arc::clone(&inner.limits),
+        auth,
+    };
+    let job = Arc::new(PartsJob::new(setup, start));
+
+    let transfer = Box::pin(parts::run(Arc::clone(&job), connections));
+    let ended = watch(inner, id, &*job, true, transfer).await;
+    job.checkpoint(inner, id).await?;
+
+    let size = job.position().bytes;
+    drop(job);
+    conclude(ended, &download, path, file_name, size).await
+}
+
+/// Decides where `.part` files go, and makes sure the folders exist.
+fn prepare_folders(
+    inner: &Inner,
+    download: &mut Download,
+    live: &LiveOptions,
+    file_name: &str,
+) -> Result<PathBuf, String> {
+    if download.part_dir.is_none() {
+        let part_dir = live
+            .temp_dir
+            .clone()
+            .unwrap_or_else(|| download.dest_dir.clone());
+        inner
+            .store
+            .set_part_dir(download.id, &part_dir)
+            .map_err(|error| error.to_string())?;
+        download.part_dir = Some(part_dir);
+    }
+
+    let path = part_path(download, file_name);
+    for folder in [path.parent(), Some(download.dest_dir.as_path())]
+        .into_iter()
+        .flatten()
+    {
+        std::fs::create_dir_all(folder)
+            .map_err(|error| format!("could not create the folder: {error}"))?;
+    }
+    Ok(path)
+}
+
+/// Turns the end of a transfer into a result, moving a finished file into place.
+async fn conclude(
+    ended: Ended,
+    download: &Download,
+    path: PathBuf,
+    file_name: String,
+    size: u64,
+) -> Result<Attempt, String> {
     match ended {
         Ended::Finished => {
             // Moving between drives copies the whole file, so keep it off the async threads.
@@ -1076,10 +1269,7 @@ async fn attempt(
             .await
             .map_err(|error| error.to_string())??;
 
-            Ok(Attempt::Done(Finish::Completed {
-                path: target,
-                size: remote.size.unwrap_or(transferred),
-            }))
+            Ok(Attempt::Done(Finish::Completed { path: target, size }))
         }
         Ended::Stopped => Ok(Attempt::Done(Finish::Paused)),
         Ended::Changed => Ok(Attempt::FileChanged),
@@ -1087,12 +1277,84 @@ async fn attempt(
     }
 }
 
+/// What progress reports and checkpoints need to know about a running transfer.
+trait Progress {
+    fn received(&self) -> u64;
+    fn total(&self) -> Option<u64>;
+    fn segments(&self) -> Vec<Segment>;
+    async fn checkpoint(&self, inner: &Inner, id: DownloadId) -> Result<(), String>;
+}
+
+impl Progress for Job {
+    fn received(&self) -> u64 {
+        self.transferred.load(Ordering::Relaxed)
+    }
+
+    fn total(&self) -> Option<u64> {
+        self.size
+    }
+
+    fn segments(&self) -> Vec<Segment> {
+        self.map().snapshot()
+    }
+
+    /// Makes progress safe. The order matters: the snapshot is taken first, so everything
+    /// in it was written before the flush, and it's saved only after the flush succeeds.
+    /// The database can then never claim bytes the file doesn't have.
+    async fn checkpoint(&self, inner: &Inner, id: DownloadId) -> Result<(), String> {
+        let snapshot = self.map().snapshot();
+        let store = Arc::clone(&inner.store);
+        let file = Arc::clone(&self.file);
+
+        tokio::task::spawn_blocking(move || {
+            file.sync()
+                .map_err(|error| format!("could not flush the file: {error}"))?;
+            store
+                .save_segments(id, &snapshot)
+                .map_err(|error| error.to_string())
+        })
+        .await
+        .map_err(|error| error.to_string())?
+    }
+}
+
+impl Progress for PartsJob {
+    fn received(&self) -> u64 {
+        PartsJob::received(self)
+    }
+
+    fn total(&self) -> Option<u64> {
+        self.estimated_total()
+    }
+
+    fn segments(&self) -> Vec<Segment> {
+        Vec::new()
+    }
+
+    /// The same order as for a file: what's saved was written before the flush.
+    async fn checkpoint(&self, inner: &Inner, id: DownloadId) -> Result<(), String> {
+        let Position { parts, bytes } = self.position();
+        let store = Arc::clone(&inner.store);
+        let file = self.file();
+
+        tokio::task::spawn_blocking(move || {
+            file.sync()
+                .map_err(|error| format!("could not flush the file: {error}"))?;
+            store
+                .save_stream_progress(id, parts, bytes)
+                .map_err(|error| error.to_string())
+        })
+        .await
+        .map_err(|error| error.to_string())?
+    }
+}
+
 /// Reports progress and saves checkpoints until the transfer ends.
-async fn watch(
+async fn watch<P: Progress>(
     inner: &Inner,
     id: DownloadId,
-    job: &Job,
-    segmented: bool,
+    job: &P,
+    checkpoints: bool,
     mut transfer: Pin<Box<dyn Future<Output = Ended> + Send>>,
 ) -> Ended {
     let mut ticker = tokio::time::interval(inner.config.progress_interval);
@@ -1100,14 +1362,14 @@ async fn watch(
 
     let mut last_checkpoint = Instant::now();
     let mut last_tick = Instant::now();
-    let mut last_bytes = job.transferred.load(Ordering::Relaxed);
+    let mut last_bytes = job.received();
     let mut speed = 0.0;
 
     loop {
         tokio::select! {
             ended = &mut transfer => return ended,
             _ = ticker.tick() => {
-                let bytes = job.transferred.load(Ordering::Relaxed);
+                let bytes = job.received();
                 let elapsed = last_tick.elapsed().as_secs_f64().max(0.001);
                 let measured = bytes.saturating_sub(last_bytes) as f64 / elapsed;
                 speed += SPEED_SMOOTHING * (measured - speed);
@@ -1117,37 +1379,18 @@ async fn watch(
                 inner.emit(Event::Progress {
                     id,
                     downloaded: bytes,
-                    total: job.size,
+                    total: job.total(),
                     bytes_per_second: speed as u64,
-                    segments: if segmented { job.map().snapshot() } else { Vec::new() },
+                    segments: if checkpoints { job.segments() } else { Vec::new() },
                 });
 
-                if segmented && last_checkpoint.elapsed() >= inner.config.checkpoint_interval {
+                if checkpoints && last_checkpoint.elapsed() >= inner.config.checkpoint_interval {
                     // A missed checkpoint only means a little more to fetch after a
                     // crash, and the next one tries again.
-                    let _ = checkpoint(inner, id, job).await;
+                    let _ = job.checkpoint(inner, id).await;
                     last_checkpoint = Instant::now();
                 }
             }
         }
     }
-}
-
-/// Makes progress safe. The order matters: the snapshot is taken first, so everything
-/// in it was written before the flush, and it's saved only after the flush succeeds.
-/// The database can then never claim bytes the file doesn't have.
-async fn checkpoint(inner: &Inner, id: DownloadId, job: &Job) -> Result<(), String> {
-    let snapshot = job.map().snapshot();
-    let store = Arc::clone(&inner.store);
-    let file = Arc::clone(&job.file);
-
-    tokio::task::spawn_blocking(move || {
-        file.sync()
-            .map_err(|error| format!("could not flush the file: {error}"))?;
-        store
-            .save_segments(id, &snapshot)
-            .map_err(|error| error.to_string())
-    })
-    .await
-    .map_err(|error| error.to_string())?
 }

@@ -326,6 +326,9 @@ mod tests {
             queue: None,
             category: None,
             replace_on_finish: false,
+            is_stream: false,
+            parts_done: 0,
+            companion: None,
         }
     }
 

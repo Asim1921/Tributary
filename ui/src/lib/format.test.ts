@@ -1,5 +1,36 @@
 import { describe, expect, it } from 'vitest';
 
+import { describeVideoChoice, isStreamAddress } from './format';
+
+describe('describeVideoChoice', () => {
+  it('gives the size and length', () => {
+    expect(describeVideoChoice({ estimatedBytes: 1024 * 1024, seconds: 95 })).toBe(
+      'about 1.0 MB, 1:35',
+    );
+  });
+
+  it('gives only the length when the size is unknown', () => {
+    expect(describeVideoChoice({ estimatedBytes: null, seconds: 4 })).toBe('0:04');
+  });
+
+  it('rounds up into the next minute', () => {
+    expect(describeVideoChoice({ estimatedBytes: null, seconds: 59.6 })).toBe('1:00');
+  });
+});
+
+describe('isStreamAddress', () => {
+  it('recognises playlists and manifests', () => {
+    expect(isStreamAddress('https://x.test/a.m3u8')).toBe(true);
+    expect(isStreamAddress('https://x.test/A.MPD?token=1')).toBe(true);
+    expect(isStreamAddress('https://x.test/a.m3u8#t=1')).toBe(true);
+  });
+
+  it('leaves other addresses alone', () => {
+    expect(isStreamAddress('https://x.test/a.mp4')).toBe(false);
+    expect(isStreamAddress('https://x.test/m3u8/a.zip')).toBe(false);
+  });
+});
+
 import {
   displayName,
   droppedLink,
