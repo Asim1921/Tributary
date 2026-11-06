@@ -91,7 +91,7 @@ async fn follow(engine: &Engine, id: DownloadId) -> Result<Download, Error> {
                         ),
                     }
                 }
-                Ok(Event::State { .. }) | Err(RecvError::Lagged(_)) => {}
+                Ok(Event::State { .. } | Event::Queues | Event::QueueFinished { .. }) | Err(RecvError::Lagged(_)) => {}
                 Err(RecvError::Closed) => return engine.get(id),
             },
         }

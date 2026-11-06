@@ -4,10 +4,12 @@ import { open } from '@tauri-apps/plugin-dialog';
 
 import type {
   AddRequest,
+  CategoryChoice,
   Download,
   EditRequest,
   FileInfo,
   ProgressEvent,
+  Queue,
   Settings,
   StateEvent,
 } from './types';
@@ -26,12 +28,29 @@ export const openFile = (id: number) => invoke<void>('open_file', { id });
 export const showInFolder = (id: number) => invoke<void>('show_in_folder', { id });
 export const getSettings = () => invoke<Settings>('get_settings');
 export const saveSettings = (settings: Settings) => invoke<void>('save_settings', { settings });
+export const suggestCategory = (fileName: string, url: string) =>
+  invoke<CategoryChoice>('suggest_category', { fileName, url });
+export const listQueues = () => invoke<Queue[]>('list_queues');
+export const saveQueue = (queue: Queue) => invoke<number>('save_queue', { queue });
+export const deleteQueue = (id: number) => invoke<void>('delete_queue', { id });
+export const startQueue = (id: number) => invoke<void>('start_queue', { id });
+export const stopQueue = (id: number) => invoke<void>('stop_queue', { id });
+export const setDownloadQueue = (id: number, queueId: number | null) =>
+  invoke<void>('set_download_queue', { id, queueId });
+export const reorderQueue = (ids: number[]) => invoke<void>('reorder_queue', { ids });
+export const cancelShutdown = () => invoke<void>('cancel_shutdown');
 
 export const onProgress = (handler: (event: ProgressEvent) => void): Promise<UnlistenFn> =>
   listen<ProgressEvent>('download-progress', (event) => handler(event.payload));
 
 export const onState = (handler: (event: StateEvent) => void): Promise<UnlistenFn> =>
   listen<StateEvent>('download-state', (event) => handler(event.payload));
+
+export const onQueuesChanged = (handler: () => void): Promise<UnlistenFn> =>
+  listen('queues-changed', () => handler());
+
+export const onShutdownPending = (handler: (seconds: number) => void): Promise<UnlistenFn> =>
+  listen<number>('shutdown-pending', (event) => handler(event.payload));
 
 /** Asks the user for a folder. Returns null if they cancel. */
 export async function pickFolder(current?: string): Promise<string | null> {

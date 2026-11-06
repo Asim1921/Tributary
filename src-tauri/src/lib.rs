@@ -1,12 +1,15 @@
 //! The desktop app: connects the download engine to the window and the tray.
 
+mod after_queue;
 mod commands;
+mod rules;
 mod settings;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::time::Duration;
 
-use engine::{Config, Engine, Event};
+use engine::{Config, Engine, Event, QueueId};
 use serde::Serialize;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -14,8 +17,12 @@ use tauri::{App, AppHandle, Emitter, Manager, WindowEvent};
 use tauri_plugin_autostart::MacosLauncher;
 use tokio::sync::broadcast::error::RecvError;
 
+use crate::after_queue::{AfterAction, SHUTDOWN_DELAY_SECONDS, WakeTimer};
 use crate::commands::{AppState, apply_to_engine, state_name};
 use crate::settings::Settings;
+
+/// How often the wake timer is brought up to date.
+const WAKE_TIMER_REFRESH: Duration = Duration::from_secs(60);
 
 /// Passed when Windows starts the app at sign-in, so it opens in the tray.
 const MINIMIZED_FLAG: &str = "--minimized";
@@ -23,6 +30,10 @@ const MAIN_WINDOW: &str = "main";
 
 /// Keeps data in another folder, so automated tests never touch real downloads.
 const DATA_DIR_VARIABLE: &str = "TRIBUTARY_DATA_DIR";
+
+/// Lets an automated test run beside the user's own copy. Only honoured together with
+/// [`DATA_DIR_VARIABLE`], because a single copy is what protects the shared database.
+const SECOND_COPY_VARIABLE: &str = "TRIBUTARY_ALLOW_SECOND_COPY";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -105,6 +116,26 @@ fn build_tray(app: &App) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Carries out what a queue was set to do when it ends.
+fn run_after_action(app: &AppHandle, id: QueueId) {
+    let state = app.state::<AppState>();
+    let action = state
+        .engine
+        .queues()
+        .ok()
+        .and_then(|queues| queues.into_iter().find(|info| info.queue.id == id))
+        .map(|info| AfterAction::parse(&info.queue.after_action))
+        .unwrap_or_default();
+
+    if !action.program.trim().is_empty() {
+        let _ = after_queue::run_program(&action.program);
+    }
+    if action.shutdown && after_queue::start_shutdown(action.force).is_ok() {
+        show_main_window(app);
+        let _ = app.emit("shutdown-pending", SHUTDOWN_DELAY_SECONDS);
+    }
+}
+
 /// Forwards engine events to the window for as long as the app runs.
 fn forward_events(app: AppHandle, engine: &Engine) {
     let mut events = engine.subscribe();
@@ -146,6 +177,13 @@ fn forward_events(app: AppHandle, engine: &Engine) {
                         },
                     );
                 }
+                Ok(Event::Queues) => {
+                    let _ = app.emit("queues-changed", ());
+                }
+                Ok(Event::QueueFinished { id }) => {
+                    run_after_action(&app, id);
+                    let _ = app.emit("queues-changed", ());
+                }
                 // A burst of events was missed. The next ones bring things up to date.
                 Err(RecvError::Lagged(_)) => {}
                 Err(RecvError::Closed) => return,
@@ -169,12 +207,24 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     apply_to_engine(&engine, &settings);
     forward_events(app.handle().clone(), &engine);
 
+    let scheduler = engine.clone();
+    tauri::async_runtime::spawn(async move { scheduler.run_scheduler().await });
+
     app.manage(AppState {
         engine,
         settings: Mutex::new(settings),
         settings_path,
+        wake_timer: WakeTimer::new(),
     });
     build_tray(app)?;
+
+    let handle = app.handle().clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            handle.state::<AppState>().update_wake_timer();
+            tokio::time::sleep(WAKE_TIMER_REFRESH).await;
+        }
+    });
 
     if !std::env::args().any(|arg| arg == MINIMIZED_FLAG) {
         show_main_window(app.handle());
@@ -183,11 +233,18 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 pub fn run() {
-    let result = tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+
+    let separate_copy = std::env::var_os(DATA_DIR_VARIABLE).is_some()
+        && std::env::var_os(SECOND_COPY_VARIABLE).is_some();
+    if !separate_copy {
         // Registered first so a second launch never reaches the shared database.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main_window(app);
-        }))
+        }));
+    }
+
+    let result = builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(
@@ -226,6 +283,15 @@ pub fn run() {
             commands::show_in_folder,
             commands::get_settings,
             commands::save_settings,
+            commands::suggest_category,
+            commands::list_queues,
+            commands::save_queue,
+            commands::delete_queue,
+            commands::start_queue,
+            commands::stop_queue,
+            commands::set_download_queue,
+            commands::reorder_queue,
+            commands::cancel_shutdown,
         ])
         .run(tauri::generate_context!());
 

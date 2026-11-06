@@ -8,8 +8,8 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use engine::{
-    Config, Download, DownloadEdit, DownloadId, Engine, Error, Event, NewDownload, RetryPolicy,
-    State,
+    Config, Download, DownloadEdit, DownloadId, Engine, Error, Event, Moment, NewDownload, Queue,
+    QueueId, QueueKind, Quota, RETRY_DELAY_SECONDS, RetryPolicy, State,
 };
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -757,7 +757,7 @@ async fn sends_cookies_but_never_saves_them() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_download_needing_cookies_gets_them_again_on_resume() {
+async fn cookies_survive_a_pause_but_not_a_restart() {
     let fixture = fixture().await;
     let cookie = ("Cookie".to_owned(), "session=abc".to_owned());
     let target = "/file/32M.bin?rate=2M&require_cookie=session%3Dabc";
@@ -772,13 +772,446 @@ async fn a_download_needing_cookies_gets_them_again_on_resume() {
     fixture.wait_for_progress(id, MIB).await;
     fixture.engine.pause(id).await.unwrap();
 
+    // Within a session, resuming needs nothing extra.
     fixture.engine.resume(id, &[]).unwrap();
-    let refused = fixture.engine.wait(id).await.unwrap();
+    fixture.wait_for_progress(id, 2 * MIB).await;
+    fixture.engine.pause(id).await.unwrap();
+
+    // After a restart the cookie is gone, because it was never saved.
+    let reopened =
+        Engine::open(&fixture.folder.path().join("downloads.db"), fast_config()).unwrap();
+    reopened.resume(id, &[]).unwrap();
+    let refused = reopened.wait(id).await.unwrap();
     assert_eq!(refused.state, State::Failed);
     assert!(refused.error.unwrap().contains("403"));
 
-    fixture.engine.resume(id, &[cookie]).unwrap();
+    reopened.resume(id, &[cookie]).unwrap();
+    assert_completed(&reopened.wait(id).await.unwrap(), 1, 32 * MIB);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn removing_the_speed_limit_takes_effect_on_a_running_download() {
+    let fixture = fixture().await;
+    fixture.engine.set_speed_limit(Some(MIB));
+    let id = fixture.start("/file/32M.bin");
+    fixture.wait_for_progress(id, MIB).await;
+
+    fixture.engine.set_speed_limit(None);
+
+    let began = Instant::now();
     assert_completed(&fixture.engine.wait(id).await.unwrap(), 1, 32 * MIB);
+    assert!(began.elapsed() < Duration::from_secs(10), "still limited");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_quota_pauses_and_resumes_on_its_own() {
+    let fixture = fixture().await;
+    fixture.engine.set_quota(Some(Quota {
+        bytes: MIB,
+        period: Duration::from_secs(1),
+    }));
+    let began = Instant::now();
+
+    let download = fixture.download("/file/3M.bin").await;
+
+    assert_completed(&download, 1, 3 * MIB);
+    assert!(
+        began.elapsed() >= Duration::from_millis(1900),
+        "3 MiB at 1 MiB per second took only {:?}",
+        began.elapsed()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stopping_during_a_speed_limit_wait_is_prompt() {
+    let fixture = fixture().await;
+    fixture.engine.set_speed_limit(Some(100 << 10));
+    let id = fixture.start("/file/32M.bin");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let began = Instant::now();
+    fixture.engine.pause(id).await.unwrap();
+
+    assert!(began.elapsed() < Duration::from_secs(2));
+    assert_eq!(fixture.engine.get(id).unwrap().state, State::Paused);
+}
+
+/// Adds a file to a queue without starting it.
+fn queued(fixture: &Fixture, target: &str, queue: QueueId) -> DownloadId {
+    fixture
+        .engine
+        .add(NewDownload {
+            paused: true,
+            queue: Some(queue),
+            ..fixture.new_download(target)
+        })
+        .unwrap()
+}
+
+fn queue_is_active(fixture: &Fixture, queue: QueueId) -> bool {
+    fixture
+        .engine
+        .queues()
+        .unwrap()
+        .iter()
+        .any(|info| info.queue.id == queue && info.active)
+}
+
+/// Steps the scheduler until the queue ends, `step_seconds` of pretend time per tick.
+async fn run_queue(fixture: &Fixture, queue: QueueId, step_seconds: i64) {
+    let mut now = Moment::now();
+    for _ in 0..3000 {
+        fixture.engine.tick(now).await.unwrap();
+        if !queue_is_active(fixture, queue) {
+            return;
+        }
+        now.seconds += step_seconds;
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("the queue never ended");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_new_database_has_a_main_queue() {
+    let fixture = fixture().await;
+    let queues = fixture.engine.queues().unwrap();
+
+    assert_eq!(queues.len(), 1);
+    assert_eq!(queues[0].queue.id, QueueId::MAIN);
+    assert_eq!(queues[0].queue.name, "Main queue");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_queue_downloads_everything_then_reports_finished() {
+    let fixture = fixture().await;
+    let mut events = fixture.engine.subscribe();
+    let ids = [
+        queued(&fixture, "/file/1M.bin?seed=1", QueueId::MAIN),
+        queued(&fixture, "/file/1M.bin?seed=2", QueueId::MAIN),
+        queued(&fixture, "/file/1M.bin?seed=3", QueueId::MAIN),
+    ];
+
+    fixture.engine.start_queue(QueueId::MAIN).unwrap();
+    run_queue(&fixture, QueueId::MAIN, 1).await;
+
+    for (index, id) in ids.iter().enumerate() {
+        assert_completed(&fixture.engine.get(*id).unwrap(), index as u64 + 1, MIB);
+    }
+    assert!(
+        fixture.engine.queues().unwrap()[0].files.is_empty(),
+        "finished files should leave the queue"
+    );
+
+    let mut finished = 0;
+    while let Ok(event) = events.try_recv() {
+        if event == (Event::QueueFinished { id: QueueId::MAIN }) {
+            finished += 1;
+        }
+    }
+    assert_eq!(finished, 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_queue_keeps_to_its_concurrency_and_order() {
+    let fixture = fixture().await;
+    let mut queue = Queue::new("one at a time");
+    queue.concurrency = 1;
+    let queue = fixture.engine.save_queue(&queue).unwrap();
+
+    let first = queued(&fixture, "/file/2M.bin?seed=1&rate=4M", queue);
+    let second = queued(&fixture, "/file/2M.bin?seed=2&rate=4M", queue);
+    let third = queued(&fixture, "/file/2M.bin?seed=3&rate=4M", queue);
+    fixture
+        .engine
+        .reorder_queue(&[third, first, second])
+        .unwrap();
+
+    fixture.engine.start_queue(queue).unwrap();
+    let mut now = Moment::now();
+    let mut most_running = 0;
+    while queue_is_active(&fixture, queue) {
+        fixture.engine.tick(now).await.unwrap();
+        let running = fixture
+            .engine
+            .list()
+            .unwrap()
+            .iter()
+            .filter(|download| download.state == State::Running)
+            .count();
+        most_running = most_running.max(running);
+        now.seconds += 1;
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    assert_eq!(most_running, 1);
+    let finish_order: Vec<i64> = [first, second, third]
+        .iter()
+        .map(|id| fixture.engine.get(*id).unwrap().id.0)
+        .collect();
+    assert_eq!(finish_order.len(), 3);
+
+    let mut records = fixture.server.records();
+    records.sort_by_key(|record| record.sequence);
+    let first_seen = records
+        .iter()
+        .find(|record| record.target.contains("seed="))
+        .unwrap();
+    assert!(
+        first_seen.target.contains("seed=3"),
+        "the reordered file goes first"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_file_is_retried_and_the_queue_carries_on() {
+    let fixture = fixture().await;
+    let flaky = queued(
+        &fixture,
+        "/file/1M.bin?seed=1&fail=404&fail_times=1",
+        QueueId::MAIN,
+    );
+    let fine = queued(&fixture, "/file/1M.bin?seed=2", QueueId::MAIN);
+
+    fixture.engine.start_queue(QueueId::MAIN).unwrap();
+    run_queue(&fixture, QueueId::MAIN, RETRY_DELAY_SECONDS + 1).await;
+
+    assert_completed(&fixture.engine.get(flaky).unwrap(), 1, MIB);
+    assert_completed(&fixture.engine.get(fine).unwrap(), 2, MIB);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_queue_gives_up_on_a_file_that_keeps_failing() {
+    let fixture = fixture().await;
+    let mut queue = Queue::new("short");
+    queue.retries = 1;
+    let queue = fixture.engine.save_queue(&queue).unwrap();
+
+    let broken = queued(&fixture, "/missing/a", queue);
+    let fine = queued(&fixture, "/file/1M.bin", queue);
+
+    fixture.engine.start_queue(queue).unwrap();
+    run_queue(&fixture, queue, RETRY_DELAY_SECONDS + 1).await;
+
+    assert_eq!(fixture.engine.get(broken).unwrap().state, State::Failed);
+    assert_completed(&fixture.engine.get(fine).unwrap(), 1, MIB);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stopping_a_queue_stops_its_files_without_reporting_finished() {
+    let fixture = fixture().await;
+    let mut events = fixture.engine.subscribe();
+    let id = queued(&fixture, "/file/32M.bin?rate=1M", QueueId::MAIN);
+
+    fixture.engine.start_queue(QueueId::MAIN).unwrap();
+    fixture.engine.tick(Moment::now()).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    fixture.engine.stop_queue(QueueId::MAIN).await.unwrap();
+
+    assert_eq!(fixture.engine.get(id).unwrap().state, State::Paused);
+    assert!(!queue_is_active(&fixture, QueueId::MAIN));
+    while let Ok(event) = events.try_recv() {
+        assert!(!matches!(event, Event::QueueFinished { .. }));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_file_stopped_by_hand_stays_stopped_while_its_queue_runs() {
+    let fixture = fixture().await;
+    let stopped = queued(&fixture, "/file/32M.bin?rate=1M&seed=1", QueueId::MAIN);
+    let other = queued(&fixture, "/file/1M.bin?seed=2", QueueId::MAIN);
+
+    fixture.engine.start_queue(QueueId::MAIN).unwrap();
+    fixture.engine.tick(Moment::now()).await.unwrap();
+    fixture.engine.pause(stopped).await.unwrap();
+
+    run_queue(&fixture, QueueId::MAIN, 1).await;
+
+    assert_eq!(fixture.engine.get(stopped).unwrap().state, State::Paused);
+    assert_completed(&fixture.engine.get(other).unwrap(), 2, MIB);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_scheduled_queue_starts_at_its_time() {
+    let fixture = fixture().await;
+    let mut queue = Queue::new("night");
+    queue.start_minute = Some(120);
+    let queue = fixture.engine.save_queue(&queue).unwrap();
+    let id = queued(&fixture, "/file/1M.bin", queue);
+
+    let moment = |minute: u16| Moment {
+        seconds: i64::from(minute) * 60,
+        day: 1000,
+        weekday: 0,
+        minute,
+    };
+
+    fixture.engine.tick(moment(119)).await.unwrap();
+    assert_eq!(fixture.engine.get(id).unwrap().state, State::Paused);
+
+    fixture.engine.tick(moment(120)).await.unwrap();
+    assert_completed(&fixture.engine.wait(id).await.unwrap(), 1, MIB);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sync_queue_refetches_a_changed_file_in_place() {
+    let fixture = fixture().await;
+    fixture.engine.set_connections(1);
+    let mut queue = Queue::new("sync");
+    queue.kind = QueueKind::Sync;
+    queue.sync_minutes = 1;
+    let queue = fixture.engine.save_queue(&queue).unwrap();
+
+    // The probe and the download are visits 1 and 2, so the next check sees a new file.
+    let id = queued(&fixture, "/file/512K.bin?change_after=2", queue);
+    fixture.engine.start_queue(queue).unwrap();
+
+    let mut now = Moment::now();
+    for _ in 0..600 {
+        fixture.engine.tick(now).await.unwrap();
+        let download = fixture.engine.get(id).unwrap();
+        let changed = download.final_path.as_ref().is_some_and(|path| {
+            download.state == State::Completed && sha256_of(path) == content::sha256(2, 512 << 10)
+        });
+        if changed {
+            break;
+        }
+        now.seconds += 61;
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    assert_completed(&fixture.engine.get(id).unwrap(), 2, 512 << 10);
+    assert_eq!(
+        fixture.files(),
+        ["512K.bin"],
+        "the file is replaced, not duplicated"
+    );
+    assert_eq!(
+        fixture.engine.queues().unwrap()[1].files,
+        [id],
+        "sync files stay queued"
+    );
+    fixture.engine.stop_queue(queue).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sync_queue_leaves_an_unchanged_file_alone() {
+    let fixture = fixture().await;
+    fixture.engine.set_connections(1);
+    let mut queue = Queue::new("sync");
+    queue.kind = QueueKind::Sync;
+    queue.sync_minutes = 1;
+    let queue = fixture.engine.save_queue(&queue).unwrap();
+
+    let id = queued(&fixture, "/file/512K.bin", queue);
+    fixture.engine.start_queue(queue).unwrap();
+
+    let mut now = Moment::now();
+    for _ in 0..30 {
+        fixture.engine.tick(now).await.unwrap();
+        now.seconds += 61;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    assert_completed(&fixture.engine.get(id).unwrap(), 1, 512 << 10);
+    let full_fetches = fixture
+        .server
+        .records()
+        .iter()
+        .filter(|record| record.body_bytes_sent >= 512 << 10)
+        .count();
+    assert_eq!(full_fetches, 1, "it should only be downloaded once");
+    fixture.engine.stop_queue(queue).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn deleting_a_queue_keeps_its_files() {
+    let fixture = fixture().await;
+    let queue = fixture.engine.save_queue(&Queue::new("temporary")).unwrap();
+    let id = queued(&fixture, "/file/1M.bin", queue);
+
+    fixture.engine.delete_queue(queue).await.unwrap();
+
+    assert_eq!(fixture.engine.queues().unwrap().len(), 1);
+    assert_eq!(fixture.engine.get(id).unwrap().queue, None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_main_queue_cannot_be_deleted() {
+    let fixture = fixture().await;
+
+    let result = fixture.engine.delete_queue(QueueId::MAIN).await;
+
+    assert!(matches!(result, Err(Error::MainQueue)));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn queues_and_categories_survive_a_restart() {
+    let fixture = fixture().await;
+    let mut queue = Queue::new("saved");
+    queue.start_minute = Some(90);
+    queue.stop_minute = Some(600);
+    queue.kind = QueueKind::Sync;
+    queue.concurrency = 3;
+    queue.days = 0b001_0101;
+    queue.after_action = "{\"shutdown\":true}".to_owned();
+    let saved_id = fixture.engine.save_queue(&queue).unwrap();
+
+    let id = fixture
+        .engine
+        .add(NewDownload {
+            paused: true,
+            queue: Some(saved_id),
+            category: Some("Music".to_owned()),
+            ..fixture.new_download("/file/1M.bin")
+        })
+        .unwrap();
+
+    let reopened =
+        Engine::open(&fixture.folder.path().join("downloads.db"), fast_config()).unwrap();
+    let info = reopened
+        .queues()
+        .unwrap()
+        .into_iter()
+        .find(|info| info.queue.id == saved_id)
+        .unwrap();
+
+    queue.id = saved_id;
+    assert_eq!(info.queue, queue);
+    assert_eq!(info.files, [id]);
+    assert_eq!(reopened.get(id).unwrap().category.as_deref(), Some("Music"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_download_can_move_between_queues_and_leave_them() {
+    let fixture = fixture().await;
+    let other = fixture.engine.save_queue(&Queue::new("other")).unwrap();
+    let id = queued(&fixture, "/file/1M.bin", QueueId::MAIN);
+
+    fixture.engine.set_queue(id, Some(other)).unwrap();
+    assert_eq!(fixture.engine.get(id).unwrap().queue, Some(other));
+
+    fixture.engine.set_queue(id, None).unwrap();
+    assert_eq!(fixture.engine.get(id).unwrap().queue, None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn inspecting_a_web_page_says_so() {
+    let fixture = fixture().await;
+
+    let page = fixture
+        .engine
+        .inspect(&fixture.server.url("/"), &[])
+        .await
+        .unwrap();
+    assert!(page.is_web_page);
+
+    let file = fixture
+        .engine
+        .inspect(&fixture.server.url("/file/1K.zip"), &[])
+        .await
+        .unwrap();
+    assert!(!file.is_web_page);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -807,6 +1240,7 @@ async fn reports_progress_and_state_changes() {
                 seen_progress = true;
             }
             Event::State { state, .. } => states.push(state),
+            Event::Queues | Event::QueueFinished { .. } => {}
         }
     }
     assert!(seen_progress);

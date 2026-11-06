@@ -340,6 +340,17 @@ async fn refuses_requests_over_the_connection_limit_until_a_slot_frees() {
 }
 
 #[tokio::test]
+async fn can_delay_its_answer() {
+    let server = start().await;
+    let began = Instant::now();
+
+    let reply = get(&server, "/file/1K.bin?delay=300", &[]).await;
+
+    assert_eq!(reply.status, 200);
+    assert!(began.elapsed().as_millis() >= 280);
+}
+
+#[tokio::test]
 async fn refuses_methods_that_are_not_downloads() {
     let server = start().await;
     let reply = send(&server, "POST", "/file/1K.bin", &[]).await;

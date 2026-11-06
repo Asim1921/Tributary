@@ -21,6 +21,8 @@ export interface Download {
   resumable: boolean;
   addedAt: number;
   completedAt: number | null;
+  queueId: number | null;
+  category: string | null;
 }
 
 /** A download plus the live figures that only exist while it runs. */
@@ -46,6 +48,7 @@ export interface FileInfo {
   fileName: string;
   size: number | null;
   resumable: boolean;
+  isWebPage: boolean;
 }
 
 export interface AddRequest {
@@ -54,6 +57,8 @@ export interface AddRequest {
   fileName?: string;
   description?: string;
   paused?: boolean;
+  queueId?: number | null;
+  category?: string | null;
 }
 
 export interface EditRequest {
@@ -84,4 +89,46 @@ export interface Settings {
   toolbar: string[];
   toolbarSize: ToolbarSize;
   urlHistory: string[];
+  categories: Category[];
+  rememberLastFolder: boolean;
+  lastFolder: string | null;
+  speedLimitEnabled: boolean;
+  speedLimitKb: number;
+  quotaEnabled: boolean;
+  quotaMb: number;
+  quotaHours: number;
+}
+
+export interface Category {
+  name: string;
+  folder: string | null;
+  extensions: string[];
+  sites: string[];
+}
+
+export interface CategoryChoice {
+  name: string | null;
+  folder: string;
+}
+
+export interface AfterAction {
+  shutdown: boolean;
+  force: boolean;
+  program: string;
+  wake: boolean;
+}
+
+export interface Queue {
+  id: number;
+  name: string;
+  sync: boolean;
+  concurrency: number;
+  retries: number;
+  startMinute: number | null;
+  stopMinute: number | null;
+  days: number;
+  syncMinutes: number;
+  after: AfterAction;
+  active: boolean;
+  files: number[];
 }

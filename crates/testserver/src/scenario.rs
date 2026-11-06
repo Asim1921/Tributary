@@ -17,6 +17,7 @@
 //! | `fail=STATUS`             | Answers early requests with STATUS                           |
 //! | `fail_times=N`            | Number of requests to fail (default 1)                       |
 //! | `retry_after=SECONDS`     | Adds `Retry-After` to those failures                         |
+//! | `delay=MS`                | Waits this many milliseconds before answering                |
 //! | `limit=N`                 | Answers 503 to requests beyond N at once for this URL        |
 //! | `redirects=N`             | Redirects N times before serving                             |
 //! | `change_after=N`          | Replaces the file with new content after N requests          |
@@ -42,6 +43,7 @@ pub struct Scenario {
     pub fail: Option<u16>,
     pub fail_times: u32,
     pub retry_after: Option<u32>,
+    pub delay: Option<u64>,
     pub limit: Option<u32>,
     pub redirects: u32,
     pub change_after: Option<u32>,
@@ -65,6 +67,7 @@ impl Scenario {
             fail: None,
             fail_times: 1,
             retry_after: None,
+            delay: None,
             limit: None,
             redirects: 0,
             change_after: None,
@@ -86,6 +89,7 @@ impl Scenario {
                 "fail" => scenario.fail = Some(status(key, value)?),
                 "fail_times" => scenario.fail_times = number(key, value)?,
                 "retry_after" => scenario.retry_after = Some(number(key, value)?),
+                "delay" => scenario.delay = Some(number(key, value)?),
                 "limit" => scenario.limit = Some(number(key, value)?),
                 "redirects" => scenario.redirects = number(key, value)?,
                 "change_after" => scenario.change_after = Some(number(key, value)?),

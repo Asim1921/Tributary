@@ -9,6 +9,9 @@ export const ICONS = {
   options:
     '<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>',
   folder: '<path d="M3.5 18.5v-13h6l2 2.5h9v10.5z"/>',
+  scheduler: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7v5.5l3.5 2"/>',
+  startQueue: '<path d="M4 6h7M4 12h7M4 18h7"/><path d="M14 7.5v9l6-4.5z"/>',
+  stopQueue: '<path d="M4 6h7M4 12h7M4 18h7"/><path d="M14.5 8h5v8h-5z"/>',
 } as const;
 
 export type IconName = keyof typeof ICONS;
@@ -20,6 +23,9 @@ export type ToolbarAction =
   | 'stopAll'
   | 'delete'
   | 'deleteCompleted'
+  | 'scheduler'
+  | 'startQueue'
+  | 'stopQueue'
   | 'options';
 
 export interface ToolbarButton {
@@ -35,6 +41,9 @@ export const TOOLBAR_BUTTONS: ToolbarButton[] = [
   { id: 'stopAll', label: 'Stop all', icon: 'stopAll' },
   { id: 'delete', label: 'Delete', icon: 'delete' },
   { id: 'deleteCompleted', label: 'Clear finished', icon: 'deleteCompleted' },
+  { id: 'scheduler', label: 'Scheduler', icon: 'scheduler' },
+  { id: 'startQueue', label: 'Start queue', icon: 'startQueue' },
+  { id: 'stopQueue', label: 'Stop queue', icon: 'stopQueue' },
   { id: 'options', label: 'Options', icon: 'options' },
 ];
 

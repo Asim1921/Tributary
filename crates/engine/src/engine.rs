@@ -17,8 +17,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::disk::{self, PartFile};
 use crate::error::Error;
+use crate::limits::{Limits, Quota};
 use crate::name;
 use crate::remote::{self, Problem, Remote};
+use crate::scheduler::{Command, Moment, Queue, QueueId, Scheduler};
 use crate::segments::{Segment, SegmentMap};
 use crate::store::{Download, DownloadId, State, Store};
 use crate::transfer::{self, Ended, Job, RetryPolicy};
@@ -33,8 +35,12 @@ const MAX_RESTARTS: u32 = 3;
 /// How much each new measurement moves the reported speed.
 const SPEED_SMOOTHING: f64 = 0.3;
 
-/// Headers that must never be saved. The caller supplies them again to resume.
+/// Headers that must never be saved. They're kept in memory while the program runs.
+/// After a restart, the caller has to supply them again.
 const SECRET_HEADERS: [&str; 3] = ["cookie", "authorization", "proxy-authorization"];
+
+/// How often the scheduler looks at the queues.
+const SCHEDULER_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -85,6 +91,9 @@ pub struct NewDownload {
     pub headers: Vec<(String, String)>,
     /// Saves the download without starting it.
     pub paused: bool,
+    /// Adds it to the end of this queue.
+    pub queue: Option<QueueId>,
+    pub category: Option<String>,
 }
 
 /// Changes to a download that isn't running. `None` leaves a field as it is.
@@ -103,6 +112,16 @@ pub struct FileInfo {
     pub file_name: String,
     pub size: Option<u64>,
     pub resumable: bool,
+    /// The address leads to a web page rather than a file.
+    pub is_web_page: bool,
+}
+
+/// A queue and how it's doing right now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueueInfo {
+    pub queue: Queue,
+    pub active: bool,
+    pub files: Vec<DownloadId>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -110,6 +129,12 @@ pub enum Event {
     State {
         id: DownloadId,
         state: State,
+    },
+    /// A queue or its files changed.
+    Queues,
+    /// A queue ended on its own, so its after-queue action should run.
+    QueueFinished {
+        id: QueueId,
     },
     Progress {
         id: DownloadId,
@@ -139,13 +164,27 @@ struct Inner {
     client: Client,
     config: Config,
     live: Mutex<LiveOptions>,
+    limits: Arc<Limits>,
     events: broadcast::Sender<Event>,
     running: Mutex<HashMap<DownloadId, Running>>,
+    scheduler: Mutex<Scheduler>,
+    /// Secret headers, in memory only.
+    secrets: Mutex<HashMap<DownloadId, HeaderMap>>,
 }
 
 impl Inner {
     fn running(&self) -> MutexGuard<'_, HashMap<DownloadId, Running>> {
         self.running.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn scheduler(&self) -> MutexGuard<'_, Scheduler> {
+        self.scheduler
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn secrets(&self) -> MutexGuard<'_, HashMap<DownloadId, HeaderMap>> {
+        self.secrets.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn live(&self) -> MutexGuard<'_, LiveOptions> {
@@ -158,7 +197,9 @@ impl Inner {
     }
 }
 
-/// Runs downloads and remembers them. Must be used inside a Tokio runtime.
+/// Runs downloads and remembers them. Must be used inside a Tokio runtime. Clones
+/// share the same downloads.
+#[derive(Clone)]
 pub struct Engine {
     inner: Arc<Inner>,
 }
@@ -189,14 +230,193 @@ impl Engine {
                 client,
                 config,
                 live: Mutex::new(live),
+                limits: Arc::default(),
                 events,
                 running: Mutex::default(),
+                scheduler: Mutex::default(),
+                secrets: Mutex::default(),
             }),
         })
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.inner.events.subscribe()
+    }
+
+    /// Sets the total bytes per second across all downloads. Applies straight away.
+    pub fn set_speed_limit(&self, bytes_per_second: Option<u64>) {
+        self.inner.limits.set_rate(bytes_per_second);
+    }
+
+    /// Sets how much can be downloaded per period. Applies straight away.
+    pub fn set_quota(&self, quota: Option<Quota>) {
+        self.inner.limits.set_quota(quota);
+    }
+
+    /// Looks after the queues for as long as the returned future runs.
+    pub async fn run_scheduler(&self) {
+        let mut ticker = tokio::time::interval(SCHEDULER_INTERVAL);
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        loop {
+            ticker.tick().await;
+            // A failure here is usually temporary, and the next tick tries again.
+            let _ = self.tick(Moment::now()).await;
+        }
+    }
+
+    /// Does whatever the queues need at this moment.
+    pub async fn tick(&self, now: Moment) -> Result<(), Error> {
+        let queues = self
+            .inner
+            .store
+            .queues()?
+            .into_iter()
+            .map(|queue| {
+                let files = self.inner.store.queue_files(queue.id)?;
+                Ok((queue, files))
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+
+        let commands = self.inner.scheduler().tick(now, &queues);
+        let changed = !commands.is_empty();
+        for command in commands {
+            self.execute(command).await?;
+        }
+        if changed {
+            self.inner.emit(Event::Queues);
+        }
+        Ok(())
+    }
+
+    async fn execute(&self, command: Command) -> Result<(), Error> {
+        match command {
+            Command::Start(id) => match self.start(id) {
+                Err(Error::AlreadyRunning(_)) => {}
+                other => other?,
+            },
+            Command::Pause(id) => self.stop_running(id).await,
+            Command::MoveToEnd(id) => {
+                let queue = self.get(id)?.queue;
+                self.inner.store.set_queue(id, queue)?;
+            }
+            Command::LeaveQueue(id) => self.inner.store.set_queue(id, None)?,
+            Command::CheckForUpdate(id) => {
+                // A server that can't be reached is simply checked again next time.
+                let _ = self.check_for_update(id).await;
+            }
+            Command::Finished(id) => self.inner.emit(Event::QueueFinished { id }),
+        }
+        Ok(())
+    }
+
+    /// Asks the server whether a finished file has changed, and if so marks it to be
+    /// fetched again. The old file stays until the new one is complete.
+    async fn check_for_update(&self, id: DownloadId) -> Result<(), Error> {
+        let download = self.get(id)?;
+        let mut headers = to_header_map(&download.headers)?;
+        if let Some(secrets) = self.inner.secrets().get(&id) {
+            headers.extend(secrets.clone());
+        }
+
+        let remote = remote::probe(&self.inner.client, &download.url, &headers)
+            .await
+            .map_err(|problem| Error::Request(problem.into_reason()))?;
+
+        if !remote.same_file(&download) {
+            self.inner.store.prepare_refresh(id)?;
+            self.inner.emit(Event::State {
+                id,
+                state: State::Paused,
+            });
+        }
+        Ok(())
+    }
+
+    pub fn queues(&self) -> Result<Vec<QueueInfo>, Error> {
+        let scheduler = self.inner.scheduler();
+        self.inner
+            .store
+            .queues()?
+            .into_iter()
+            .map(|queue| {
+                let files = self.inner.store.queue_files(queue.id)?;
+                Ok(QueueInfo {
+                    active: scheduler.is_active(queue.id),
+                    files: files.into_iter().map(|file| file.id).collect(),
+                    queue,
+                })
+            })
+            .collect()
+    }
+
+    /// Creates a queue, or changes one that exists. Returns its id.
+    pub fn save_queue(&self, queue: &Queue) -> Result<QueueId, Error> {
+        let id = self.inner.store.save_queue(queue)?;
+        self.inner.emit(Event::Queues);
+        Ok(id)
+    }
+
+    /// Deletes a queue, stopping it first. Its files stay in the list.
+    pub async fn delete_queue(&self, id: QueueId) -> Result<(), Error> {
+        if id == QueueId::MAIN {
+            return Err(Error::MainQueue);
+        }
+        self.stop_queue(id).await?;
+        self.inner.store.delete_queue(id)?;
+        self.inner.emit(Event::Queues);
+        Ok(())
+    }
+
+    /// Starts a queue by hand. Its next steps happen on the following ticks.
+    pub fn start_queue(&self, id: QueueId) -> Result<(), Error> {
+        let queue = self
+            .inner
+            .store
+            .queues()?
+            .into_iter()
+            .find(|queue| queue.id == id)
+            .ok_or(Error::QueueNotFound(id))?;
+        let files = self.inner.store.queue_files(id)?;
+
+        self.inner
+            .scheduler()
+            .start_now(&queue, &files, Moment::now());
+        self.inner.emit(Event::Queues);
+        Ok(())
+    }
+
+    /// Stops a queue by hand, along with its running files. Its after-queue action
+    /// doesn't run.
+    pub async fn stop_queue(&self, id: QueueId) -> Result<(), Error> {
+        self.inner.scheduler().stop_now(id);
+        for file in self.inner.store.queue_files(id)? {
+            if file.state == State::Running {
+                self.stop_running(file.id).await;
+            }
+        }
+        self.inner.emit(Event::Queues);
+        Ok(())
+    }
+
+    /// Moves a download to the end of a queue, or out of queues with `None`.
+    pub fn set_queue(&self, id: DownloadId, queue: Option<QueueId>) -> Result<(), Error> {
+        self.get(id)?;
+        self.inner.store.set_queue(id, queue)?;
+        self.inner.emit(Event::Queues);
+        Ok(())
+    }
+
+    /// Sets the order of a queue's files.
+    pub fn reorder_queue(&self, ids: &[DownloadId]) -> Result<(), Error> {
+        self.inner.store.reorder_queue(ids)?;
+        self.inner.emit(Event::Queues);
+        Ok(())
+    }
+
+    pub fn set_category(&self, id: DownloadId, category: Option<&str>) -> Result<(), Error> {
+        self.get(id)?;
+        self.inner.store.set_category(id, category)?;
+        Ok(())
     }
 
     /// Sets the connections used by downloads started from now on.
@@ -227,6 +447,7 @@ impl Engine {
             file_name: name::sanitize(suggested),
             size: remote.size,
             resumable: remote.ranged,
+            is_web_page: remote.is_web_page(),
         })
     }
 
@@ -250,13 +471,23 @@ impl Engine {
             &saved,
         )?;
 
+        if !secret.is_empty() {
+            self.inner.secrets().insert(id, secret);
+        }
+        if let Some(queue) = new.queue {
+            self.inner.store.set_queue(id, Some(queue))?;
+        }
+        if new.category.is_some() {
+            self.inner.store.set_category(id, new.category.as_deref())?;
+        }
+
         if new.paused {
             self.inner.emit(Event::State {
                 id,
                 state: State::Paused,
             });
         } else {
-            self.start(id, secret)?;
+            self.start(id)?;
         }
         Ok(id)
     }
@@ -278,24 +509,36 @@ impl Engine {
         Ok(())
     }
 
-    /// Stops a running download, keeping its progress. Does nothing if it isn't running.
+    /// Stops a download by hand, keeping its progress. Its queue leaves it alone until
+    /// it's resumed. Does nothing if it isn't running.
     pub async fn pause(&self, id: DownloadId) -> Result<(), Error> {
+        self.inner.scheduler().hold(id);
+        self.stop_running(id).await;
+        Ok(())
+    }
+
+    /// Stops a download and waits until its progress is saved.
+    async fn stop_running(&self, id: DownloadId) {
         let running = self.inner.running().remove(&id);
         if let Some(running) = running {
             running.stop.cancel();
             let _ = running.task.await;
         }
-        Ok(())
     }
 
-    /// Continues a paused or failed download. Secret headers aren't saved, so a
-    /// download that needs them must be given them again.
+    /// Continues a paused or failed download. Secret headers are remembered until the
+    /// program closes. After that, a download that needs them must be given them again.
     pub fn resume(&self, id: DownloadId, secret_headers: &[(String, String)]) -> Result<(), Error> {
         let download = self.get(id)?;
         if download.state == State::Completed {
             return Err(Error::AlreadyCompleted(id));
         }
-        self.start(id, to_header_map(secret_headers)?)
+        if !secret_headers.is_empty() {
+            let headers = to_header_map(secret_headers)?;
+            self.inner.secrets().insert(id, headers);
+        }
+        self.inner.scheduler().release(id);
+        self.start(id)
     }
 
     /// Forgets a download and deletes its unfinished `.part` file. A completed file
@@ -311,6 +554,8 @@ impl Engine {
             remove_if_present(path)?;
         }
         self.inner.store.delete(id)?;
+        self.inner.secrets().remove(&id);
+        self.inner.scheduler().release(id);
         Ok(())
     }
 
@@ -336,12 +581,13 @@ impl Engine {
         }
     }
 
-    fn start(&self, id: DownloadId, secret_headers: HeaderMap) -> Result<(), Error> {
+    fn start(&self, id: DownloadId) -> Result<(), Error> {
         let mut running = self.inner.running();
         if running.contains_key(&id) {
             return Err(Error::AlreadyRunning(id));
         }
 
+        let secret_headers = self.inner.secrets().get(&id).cloned().unwrap_or_default();
         self.inner.store.set_state(id, State::Running, None)?;
         let stop = CancellationToken::new();
         let task = tokio::spawn(run(
@@ -590,6 +836,7 @@ async fn attempt(
         map: Mutex::new(map),
         stop: stop.child_token(),
         policy: inner.config.retry,
+        limits: Arc::clone(&inner.limits),
     });
 
     let transfer: Pin<Box<dyn Future<Output = Ended> + Send>> = if segmented {
@@ -610,9 +857,16 @@ async fn attempt(
         Ended::Finished => {
             // Moving between drives copies the whole file, so keep it off the async threads.
             let dest_dir = download.dest_dir.clone();
+            let replacing = download
+                .final_path
+                .clone()
+                .filter(|_| download.replace_on_finish);
             let target = tokio::task::spawn_blocking(move || {
-                disk::finish(&path, &dest_dir, &file_name)
-                    .map_err(|error| format!("could not finish the file: {error}"))
+                match replacing {
+                    Some(target) => disk::replace(&path, &target).map(|()| target),
+                    None => disk::finish(&path, &dest_dir, &file_name),
+                }
+                .map_err(|error| format!("could not finish the file: {error}"))
             })
             .await
             .map_err(|error| error.to_string())??;

@@ -10,13 +10,22 @@
   import OptionsDialog from './components/OptionsDialog.svelte';
   import ProgressDialog from './components/ProgressDialog.svelte';
   import PropertiesDialog from './components/PropertiesDialog.svelte';
+  import SchedulerDialog from './components/SchedulerDialog.svelte';
   import Sidebar from './components/Sidebar.svelte';
   import StartDialog from './components/StartDialog.svelte';
   import Toolbar from './components/Toolbar.svelte';
   import * as api from './lib/api';
   import { resolveColumns, sortRows, type SortOrder } from './lib/columns';
   import { downloads } from './lib/downloads.svelte';
-  import { filterCounts, filterRows, type Filter } from './lib/filters';
+  import {
+    ALL,
+    categoryEntries,
+    filterKey,
+    filterRows,
+    queueEntries,
+    statusEntries,
+    type Filter,
+  } from './lib/filters';
   import { formatSpeed } from './lib/format';
   import { clickRow, keepExisting, rightClickRow, type SelectionState } from './lib/selection';
   import { resolveToolbar, type ToolbarAction } from './lib/toolbar';
@@ -30,12 +39,16 @@
     | { kind: 'complete'; id: number }
     | { kind: 'delete'; ids: number[] }
     | { kind: 'options' }
+    | { kind: 'scheduler' }
+    | { kind: 'shutdown'; seconds: number }
     | { kind: 'error'; message: string };
+
+  const MAIN_QUEUE = 1;
 
   let settings = $state<Settings | null>(null);
   let selection = $state<SelectionState>({ selected: new Set(), anchor: null });
   let order = $state<SortOrder>({ column: 'added', ascending: false });
-  let filter = $state<Filter>('all');
+  let filter = $state<Filter>(ALL);
   let dialog = $state<Dialog | null>(null);
   let menu = $state<{ x: number; y: number } | null>(null);
 
@@ -43,7 +56,20 @@
   const selectedRows = $derived(rows.filter((row) => selection.selected.has(row.id)));
   const columns = $derived(resolveColumns(settings?.columns ?? []));
   const toolbarButtons = $derived(resolveToolbar(settings?.toolbar ?? []));
-  const counts = $derived(filterCounts(downloads.rows));
+  const sidebarGroups = $derived([
+    { title: 'Status', entries: statusEntries(downloads.rows) },
+    { title: 'Categories', entries: categoryEntries(downloads.rows, settings?.categories ?? []) },
+    { title: 'Queues', entries: queueEntries(downloads.rows, downloads.queues) },
+  ]);
+  /** The queue the toolbar acts on: the one being viewed, otherwise the main queue. */
+  const targetQueue = $derived(
+    downloads.queues.find((queue) => queue.id === (filter.kind === 'queue' ? filter.id : MAIN_QUEUE)),
+  );
+  const defaultFolder = $derived(
+    settings?.rememberLastFolder && settings.lastFolder
+      ? settings.lastFolder
+      : (settings?.downloadDir ?? ''),
+  );
   const running = $derived(downloads.rows.filter((row) => row.state === 'running').length);
 
   const canResume = (row: DownloadRow) => row.state === 'paused' || row.state === 'failed';
@@ -55,6 +81,22 @@
         settings = loaded;
       })
       .catch(showError);
+
+    void api.onShutdownPending((seconds) => {
+      dialog = { kind: 'shutdown', seconds };
+    });
+  });
+
+  // Counts down the shutdown message.
+  $effect(() => {
+    if (dialog?.kind !== 'shutdown') return;
+
+    const timer = setInterval(() => {
+      if (dialog?.kind === 'shutdown' && dialog.seconds > 0) {
+        dialog = { kind: 'shutdown', seconds: dialog.seconds - 1 };
+      }
+    }, 1000);
+    return () => clearInterval(timer);
   });
 
   $effect(() => {
@@ -124,7 +166,10 @@
       await api.addDownload(request);
       await downloads.refresh();
       const fresh = await api.getSettings();
-      if (settings) settings.urlHistory = fresh.urlHistory;
+      if (settings) {
+        settings.urlHistory = fresh.urlHistory;
+        settings.lastFolder = fresh.lastFolder;
+      }
     } catch (error) {
       showError(error);
     }
@@ -184,6 +229,15 @@
           false,
         );
         break;
+      case 'scheduler':
+        dialog = { kind: 'scheduler' };
+        break;
+      case 'startQueue':
+        if (targetQueue) api.startQueue(targetQueue.id).catch(showError);
+        break;
+      case 'stopQueue':
+        if (targetQueue) api.stopQueue(targetQueue.id).catch(showError);
+        break;
       case 'options':
         dialog = { kind: 'options' };
         break;
@@ -202,6 +256,10 @@
         return selectedRows.length > 0;
       case 'deleteCompleted':
         return downloads.rows.some((row) => row.state === 'completed');
+      case 'startQueue':
+        return !!targetQueue && !targetQueue.active && targetQueue.files.length > 0;
+      case 'stopQueue':
+        return !!targetQueue?.active;
       default:
         return true;
     }
@@ -248,6 +306,20 @@
         run: () => {
           if (single) dialog = { kind: 'progress', id: single.id };
         },
+      },
+      ...downloads.queues.map(
+        (queue, index): MenuItem => ({
+          label: `Add to ${queue.name}`,
+          separatorBefore: index === 0,
+          disabled: selectedRows.every((row) => row.queueId === queue.id),
+          run: () =>
+            void forEachRow(selectedRows, (id) => api.setDownloadQueue(id, queue.id)),
+        }),
+      ),
+      {
+        label: 'Remove from queue',
+        disabled: selectedRows.every((row) => row.queueId === null),
+        run: () => void forEachRow(selectedRows, (id) => api.setDownloadQueue(id, null)),
       },
       {
         label: 'Copy address',
@@ -312,7 +384,11 @@
   {/if}
 
   <div class="body">
-    <Sidebar filters={counts} active={filter} onchange={(next) => (filter = next)} />
+    <Sidebar
+      groups={sidebarGroups}
+      activeKey={filterKey(filter)}
+      onchange={(next) => (filter = next)}
+    />
 
     <main>
       {#if downloads.rows.length === 0}
@@ -368,7 +444,9 @@
 {:else if dialog?.kind === 'start'}
   <StartDialog
     url={dialog.url}
-    defaultFolder={settings?.downloadDir ?? ''}
+    {defaultFolder}
+    categories={settings?.categories ?? []}
+    queues={downloads.queues}
     onsubmit={addDownload}
     onclose={closeDialog}
   />
@@ -422,6 +500,38 @@
     }}
     onclose={closeDialog}
   />
+{:else if dialog?.kind === 'scheduler'}
+  <SchedulerDialog
+    queues={downloads.queues}
+    rows={downloads.rows}
+    onsave={async (queue) => {
+      const id = await api.saveQueue(queue);
+      await downloads.refresh();
+      return id;
+    }}
+    ondelete={(id) => api.deleteQueue(id).catch(showError)}
+    onstart={(id) => api.startQueue(id).catch(showError)}
+    onstop={(id) => api.stopQueue(id).catch(showError)}
+    onreorder={(ids) => api.reorderQueue(ids).catch(showError)}
+    onremovefile={(id) => api.setDownloadQueue(id, null).catch(showError)}
+    onclose={closeDialog}
+  />
+{:else if dialog?.kind === 'shutdown'}
+  <Modal title="Shutting down" onclose={closeDialog}>
+    <p>A queue finished. This computer will shut down in {dialog.seconds} seconds.</p>
+    {#snippet footer()}
+      <button
+        type="button"
+        class="primary"
+        onclick={() => {
+          closeDialog();
+          api.cancelShutdown().catch(showError);
+        }}
+      >
+        Cancel shutdown
+      </button>
+    {/snippet}
+  </Modal>
 {:else if dialog?.kind === 'error'}
   <Modal title="Something went wrong" onclose={closeDialog}>
     <p class="error-text">{dialog.message}</p>

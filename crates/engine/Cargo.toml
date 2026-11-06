@@ -6,6 +6,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 percent-encoding = "2"
 # native-tls uses Windows' own TLS and certificate store, and needs no extra build
 # tools. HTTP/2 stays off on purpose: it shares one TCP connection, and the speed

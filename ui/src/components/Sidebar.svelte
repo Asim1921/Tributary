@@ -1,26 +1,29 @@
 <script lang="ts">
-  import type { Filter } from '../lib/filters';
+  import type { Filter, FilterEntry } from '../lib/filters';
 
   interface Props {
-    filters: { id: Filter; label: string; count: number }[];
-    active: Filter;
+    groups: { title: string; entries: FilterEntry[] }[];
+    activeKey: string;
     onchange: (filter: Filter) => void;
   }
 
-  let { filters, active, onchange }: Props = $props();
+  let { groups, activeKey, onchange }: Props = $props();
 </script>
 
 <nav aria-label="Filter downloads">
-  {#each filters as filter (filter.id)}
-    <button
-      type="button"
-      class:active={filter.id === active}
-      aria-current={filter.id === active ? 'true' : undefined}
-      onclick={() => onchange(filter.id)}
-    >
-      <span>{filter.label}</span>
-      <span class="count">{filter.count}</span>
-    </button>
+  {#each groups as group (group.title)}
+    <h2>{group.title}</h2>
+    {#each group.entries as entry (entry.key)}
+      <button
+        type="button"
+        class:active={entry.key === activeKey}
+        aria-current={entry.key === activeKey ? 'true' : undefined}
+        onclick={() => onchange(entry.filter)}
+      >
+        <span class="label">{entry.label}</span>
+        <span class="count">{entry.count}</span>
+      </button>
+    {/each}
   {/each}
 </nav>
 
@@ -28,18 +31,29 @@
   nav {
     display: grid;
     align-content: start;
-    gap: 2px;
-    width: 170px;
+    gap: 1px;
+    width: 180px;
     flex: none;
-    padding: 8px;
+    padding: 4px 8px 8px;
+    overflow-y: auto;
     background: var(--surface);
     border-right: 1px solid var(--line);
+  }
+
+  h2 {
+    margin: 10px 10px 3px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
   }
 
   button {
     display: flex;
     justify-content: space-between;
-    padding: 6px 10px;
+    gap: 8px;
+    padding: 4px 10px;
     background: transparent;
     border-color: transparent;
     text-align: left;
@@ -48,6 +62,12 @@
   button.active {
     background: var(--selected);
     font-weight: 600;
+  }
+
+  .label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .count {

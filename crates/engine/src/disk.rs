@@ -10,7 +10,9 @@ use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::ptr;
 
-use windows_sys::Win32::Storage::FileSystem::{MOVEFILE_COPY_ALLOWED, MoveFileExW};
+use windows_sys::Win32::Storage::FileSystem::{
+    MOVEFILE_COPY_ALLOWED, MOVEFILE_REPLACE_EXISTING, MoveFileExW,
+};
 use windows_sys::Win32::System::IO::DeviceIoControl;
 use windows_sys::Win32::System::Ioctl::FSCTL_SET_SPARSE;
 
@@ -116,15 +118,29 @@ pub fn finish(part: &Path, folder: &Path, name: &str) -> io::Result<PathBuf> {
     ))
 }
 
+/// Moves a finished `.part` file over an earlier version of the same download. Only a
+/// sync queue does this, and only for a file it downloaded itself.
+pub fn replace(part: &Path, target: &Path) -> io::Result<()> {
+    move_file(
+        part,
+        target,
+        MOVEFILE_COPY_ALLOWED | MOVEFILE_REPLACE_EXISTING,
+    )
+}
+
 /// Unlike `std::fs::rename`, this fails rather than replacing an existing file, and
 /// the check and the move are a single step. Moving to another drive copies the
 /// file, so that can take a while.
 fn move_without_replacing(from: &Path, to: &Path) -> io::Result<()> {
+    move_file(from, to, MOVEFILE_COPY_ALLOWED)
+}
+
+fn move_file(from: &Path, to: &Path, flags: u32) -> io::Result<()> {
     let from = wide(from.as_os_str());
     let to = wide(to.as_os_str());
 
     // SAFETY: both paths are null-terminated and outlive the call.
-    let moved = unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), MOVEFILE_COPY_ALLOWED) };
+    let moved = unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), flags) };
     if moved == 0 {
         return Err(io::Error::last_os_error());
     }

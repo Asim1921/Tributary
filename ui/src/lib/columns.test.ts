@@ -18,6 +18,8 @@ function row(id: number, changes: Partial<DownloadRow> = {}): DownloadRow {
     resumable: true,
     addedAt: id,
     completedAt: null,
+    queueId: null,
+    category: null,
     speed: 0,
     segments: [],
     ...changes,

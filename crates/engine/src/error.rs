@@ -3,6 +3,7 @@
 //! Problems during a transfer don't appear here. They are recorded on the download
 //! and reported through its state, because they happen long after the call returns.
 
+use crate::scheduler::QueueId;
 use crate::store::DownloadId;
 
 #[derive(Debug, thiserror::Error)]
@@ -17,6 +18,10 @@ pub enum Error {
     AlreadyRunning(DownloadId),
     #[error("download {} has already completed", .0.0)]
     AlreadyCompleted(DownloadId),
+    #[error("the main queue can't be deleted")]
+    MainQueue,
+    #[error("queue {} does not exist", .0.0)]
+    QueueNotFound(QueueId),
     #[error("{0}")]
     Request(String),
     #[error("the database was created by a newer version of this program")]

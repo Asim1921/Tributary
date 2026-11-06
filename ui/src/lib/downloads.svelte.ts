@@ -1,5 +1,5 @@
-import { listDownloads, onProgress, onState } from './api';
-import type { Download, DownloadRow, ProgressEvent } from './types';
+import { listDownloads, listQueues, onProgress, onQueuesChanged, onState } from './api';
+import type { Download, DownloadRow, ProgressEvent, Queue } from './types';
 
 function toRow(download: Download, previous?: DownloadRow): DownloadRow {
   return {
@@ -17,6 +17,7 @@ function toRow(download: Download, previous?: DownloadRow): DownloadRow {
 /** The list of downloads, kept current by events from the app. */
 class DownloadStore {
   rows = $state<DownloadRow[]>([]);
+  queues = $state<Queue[]>([]);
   /** Ids that finished since the app opened, in order, for the complete dialog. */
   justCompleted = $state<number[]>([]);
 
@@ -25,11 +26,13 @@ class DownloadStore {
   async start(): Promise<void> {
     await onProgress((event) => this.applyProgress(event));
     await onState(() => void this.refresh());
+    await onQueuesChanged(() => void this.refresh());
     await this.refresh();
   }
 
   async refresh(): Promise<void> {
-    const downloads = await listDownloads();
+    const [downloads, queues] = await Promise.all([listDownloads(), listQueues()]);
+    this.queues = queues;
     const previous = new Map(this.rows.map((row) => [row.id, row]));
 
     for (const download of downloads) {

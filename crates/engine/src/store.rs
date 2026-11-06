@@ -11,6 +11,7 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use crate::error::Error;
 use crate::remote::Remote;
+use crate::scheduler::{Queue, QueueFile, QueueId, QueueKind};
 use crate::segments::Segment;
 
 const SETTINGS: &str = "
@@ -21,7 +22,7 @@ const SETTINGS: &str = "
 
 /// Each entry upgrades the database by one version, tracked in `PRAGMA user_version`.
 /// Add new entries to the end. Never change an entry that has been released.
-const MIGRATIONS: [&str; 2] = [
+const MIGRATIONS: [&str; 3] = [
     "
     CREATE TABLE IF NOT EXISTS downloads (
         id            INTEGER PRIMARY KEY,
@@ -52,14 +53,41 @@ const MIGRATIONS: [&str; 2] = [
     ALTER TABLE downloads ADD COLUMN completed_at INTEGER;
     ALTER TABLE downloads ADD COLUMN part_dir     TEXT;
     ",
+    "
+    CREATE TABLE queues (
+        id           INTEGER PRIMARY KEY,
+        name         TEXT NOT NULL,
+        kind         TEXT NOT NULL DEFAULT 'download',
+        concurrency  INTEGER NOT NULL DEFAULT 2,
+        retries      INTEGER NOT NULL DEFAULT 5,
+        start_minute INTEGER,
+        stop_minute  INTEGER,
+        days         INTEGER NOT NULL DEFAULT 127,
+        sync_minutes INTEGER NOT NULL DEFAULT 60,
+        after_action TEXT NOT NULL DEFAULT ''
+    );
+    INSERT INTO queues (id, name) VALUES (1, 'Main queue');
+
+    ALTER TABLE downloads ADD COLUMN queue_id INTEGER REFERENCES queues(id) ON DELETE SET NULL;
+    ALTER TABLE downloads ADD COLUMN queue_position INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE downloads ADD COLUMN category TEXT;
+    ALTER TABLE downloads ADD COLUMN replace_on_finish INTEGER NOT NULL DEFAULT 0;
+    ",
 ];
 
 const SELECT_DOWNLOAD: &str = "
     SELECT d.id, d.url, d.dest_dir, d.file_name, d.headers, d.size, d.etag, d.last_modified,
            d.ranged, d.state, d.error, d.final_path,
            COALESCE((SELECT SUM(s.written) FROM segments s WHERE s.download_id = d.id), 0),
-           d.description, d.added_at, d.completed_at, d.part_dir
+           d.description, d.added_at, d.completed_at, d.part_dir,
+           d.queue_id, d.category, d.replace_on_finish
     FROM downloads d
+";
+
+const SELECT_QUEUE: &str = "
+    SELECT id, name, kind, concurrency, retries, start_minute, stop_minute, days,
+           sync_minutes, after_action
+    FROM queues
 ";
 
 fn now() -> i64 {
@@ -124,6 +152,10 @@ pub struct Download {
     /// Where the `.part` file lives. Fixed when the download first runs, so later
     /// changes to the destination or the temporary folder can't lose it.
     pub part_dir: Option<PathBuf>,
+    pub queue: Option<QueueId>,
+    pub category: Option<String>,
+    /// The next finish replaces `final_path`, because a sync queue found a new version.
+    pub replace_on_finish: bool,
 }
 
 impl Download {
@@ -154,7 +186,35 @@ impl Download {
             added_at: row.get(14)?,
             completed_at: row.get(15)?,
             part_dir: row.get::<_, Option<String>>(16)?.map(PathBuf::from),
+            queue: row.get::<_, Option<i64>>(17)?.map(QueueId),
+            category: row.get(18)?,
+            replace_on_finish: row.get(19)?,
         })
+    }
+}
+
+fn queue_from_row(row: &Row) -> rusqlite::Result<Queue> {
+    Ok(Queue {
+        id: QueueId(row.get(0)?),
+        name: row.get(1)?,
+        kind: match row.get::<_, String>(2)?.as_str() {
+            "sync" => QueueKind::Sync,
+            _ => QueueKind::Download,
+        },
+        concurrency: row.get(3)?,
+        retries: row.get(4)?,
+        start_minute: row.get(5)?,
+        stop_minute: row.get(6)?,
+        days: row.get(7)?,
+        sync_minutes: row.get(8)?,
+        after_action: row.get(9)?,
+    })
+}
+
+fn kind_name(kind: QueueKind) -> &'static str {
+    match kind {
+        QueueKind::Download => "download",
+        QueueKind::Sync => "sync",
     }
 }
 
@@ -264,6 +324,118 @@ impl Store {
         Ok(())
     }
 
+    pub fn queues(&self) -> rusqlite::Result<Vec<Queue>> {
+        let connection = self.lock();
+        let mut statement = connection.prepare(&format!("{SELECT_QUEUE} ORDER BY id"))?;
+        statement.query_map([], queue_from_row)?.collect()
+    }
+
+    /// Saves a queue, creating it if it's new, and returns its id.
+    pub fn save_queue(&self, queue: &Queue) -> rusqlite::Result<QueueId> {
+        let connection = self.lock();
+        let values = params![
+            queue.name,
+            kind_name(queue.kind),
+            queue.concurrency,
+            queue.retries,
+            queue.start_minute,
+            queue.stop_minute,
+            queue.days,
+            queue.sync_minutes,
+            queue.after_action,
+            queue.id.0
+        ];
+
+        if queue.id == QueueId::NEW {
+            connection.execute(
+                "INSERT INTO queues (name, kind, concurrency, retries, start_minute, stop_minute,
+                                     days, sync_minutes, after_action)
+                 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9 WHERE ?10 = 0",
+                values,
+            )?;
+            return Ok(QueueId(connection.last_insert_rowid()));
+        }
+
+        connection.execute(
+            "UPDATE queues
+             SET name = ?1, kind = ?2, concurrency = ?3, retries = ?4, start_minute = ?5,
+                 stop_minute = ?6, days = ?7, sync_minutes = ?8, after_action = ?9
+             WHERE id = ?10",
+            values,
+        )?;
+        Ok(queue.id)
+    }
+
+    /// Deletes a queue. Its files stay in the list, outside any queue.
+    pub fn delete_queue(&self, id: QueueId) -> rusqlite::Result<()> {
+        self.lock()
+            .execute("DELETE FROM queues WHERE id = ?1", params![id.0])?;
+        Ok(())
+    }
+
+    /// The files of a queue, in queue order.
+    pub fn queue_files(&self, id: QueueId) -> rusqlite::Result<Vec<QueueFile>> {
+        let connection = self.lock();
+        let mut statement = connection.prepare(
+            "SELECT id, state FROM downloads WHERE queue_id = ?1 ORDER BY queue_position, id",
+        )?;
+        statement
+            .query_map(params![id.0], |row| {
+                Ok(QueueFile {
+                    id: DownloadId(row.get(0)?),
+                    state: State::parse(&row.get::<_, String>(1)?),
+                })
+            })?
+            .collect()
+    }
+
+    /// Puts a download at the end of a queue, or takes it out of queues altogether.
+    pub fn set_queue(&self, id: DownloadId, queue: Option<QueueId>) -> rusqlite::Result<()> {
+        self.lock().execute(
+            "UPDATE downloads
+             SET queue_id = ?2,
+                 queue_position = 1 + COALESCE(
+                     (SELECT MAX(queue_position) FROM downloads WHERE queue_id = ?2), 0)
+             WHERE id = ?1",
+            params![id.0, queue.map(|queue| queue.0)],
+        )?;
+        Ok(())
+    }
+
+    /// Sets the order of files in a queue. Files not listed keep their place after these.
+    pub fn reorder_queue(&self, ids: &[DownloadId]) -> rusqlite::Result<()> {
+        let mut connection = self.lock();
+        let transaction = connection.transaction()?;
+        for (position, id) in ids.iter().enumerate() {
+            transaction.execute(
+                "UPDATE downloads SET queue_position = ?2 WHERE id = ?1",
+                params![id.0, position as i64],
+            )?;
+        }
+        transaction.commit()
+    }
+
+    pub fn set_category(&self, id: DownloadId, category: Option<&str>) -> rusqlite::Result<()> {
+        self.lock().execute(
+            "UPDATE downloads SET category = ?2 WHERE id = ?1",
+            params![id.0, category],
+        )?;
+        Ok(())
+    }
+
+    /// Gets a finished download ready to be fetched again, keeping its old file until
+    /// the new one is complete.
+    pub fn prepare_refresh(&self, id: DownloadId) -> rusqlite::Result<()> {
+        let mut connection = self.lock();
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "UPDATE downloads SET state = ?2, replace_on_finish = 1 WHERE id = ?1",
+            params![id.0, State::Paused.as_str()],
+        )?;
+        replace_segments(&transaction, id, &[])?;
+        transaction.commit()
+    }
+
     pub fn set_part_dir(&self, id: DownloadId, part_dir: &Path) -> rusqlite::Result<()> {
         self.lock().execute(
             "UPDATE downloads SET part_dir = ?2 WHERE id = ?1",
@@ -330,7 +502,8 @@ impl Store {
     pub fn set_completed(&self, id: DownloadId, path: &Path, size: u64) -> rusqlite::Result<()> {
         self.lock().execute(
             "UPDATE downloads
-             SET state = ?2, error = NULL, final_path = ?3, size = ?4, completed_at = ?5
+             SET state = ?2, error = NULL, final_path = ?3, size = ?4, completed_at = ?5,
+                 replace_on_finish = 0
              WHERE id = ?1",
             params![
                 id.0,

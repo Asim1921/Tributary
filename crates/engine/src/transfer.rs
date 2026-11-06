@@ -11,6 +11,7 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::disk::PartFile;
+use crate::limits::Limits;
 use crate::remote::{ContentRange, Problem, text};
 use crate::segments::{Claim, SegmentMap};
 
@@ -60,6 +61,8 @@ pub struct Job {
     pub transferred: AtomicU64,
     pub stop: CancellationToken,
     pub policy: RetryPolicy,
+    /// Shared by every download.
+    pub limits: Arc<Limits>,
 }
 
 impl Job {
@@ -80,6 +83,13 @@ impl Job {
             () = self.stop.cancelled() => false,
             () = tokio::time::sleep(delay) => true,
         }
+    }
+
+    /// Counts received bytes against the limits, waiting if needed. Not reading is
+    /// what slows the server down. Returns false if stopped meanwhile.
+    async fn throttle(&self, bytes: usize) -> bool {
+        let wait = self.limits.charge(bytes as u64);
+        wait.is_zero() || self.wait(wait).await
     }
 
     /// Writes out `buffer` at `offset`, off the async threads, leaving it empty.
@@ -210,8 +220,14 @@ async fn fetch_segment(job: &Job, claim: Claim) -> Result<(), Problem> {
                 if done || buffer.len() >= WRITE_BUFFER_BYTES {
                     flush(job, claim, &mut buffer, &mut position).await?;
                 }
+                // Before the `done` check, so a segment's last bytes count as well.
+                let allowed = job.throttle(taken).await;
                 if done {
                     return Ok(());
+                }
+                if !allowed {
+                    flush(job, claim, &mut buffer, &mut position).await?;
+                    return Err(Problem::Stopped);
                 }
             }
             Ok(None) => {
@@ -324,6 +340,9 @@ async fn fetch_whole(job: &Job) -> Result<(), Problem> {
                     let count = buffer.len() as u64;
                     job.write(&mut buffer, position).await?;
                     position += count;
+                }
+                if !job.throttle(bytes.len()).await {
+                    return Err(Problem::Stopped);
                 }
             }
             None => break,

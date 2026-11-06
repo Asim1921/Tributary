@@ -26,6 +26,8 @@ const download: Download = {
   resumable: true,
   addedAt: 0,
   completedAt: null,
+  queueId: null,
+  category: null,
 };
 
 const row: DownloadRow = { ...download, speed: 50, segments: [] };

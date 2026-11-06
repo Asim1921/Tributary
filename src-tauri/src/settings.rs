@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::rules::{Category, default_categories};
+
 pub const MIN_CONNECTIONS: usize = 1;
 pub const MAX_CONNECTIONS: usize = 32;
 const DEFAULT_CONNECTIONS: usize = 8;
@@ -54,6 +56,15 @@ pub struct Settings {
     pub toolbar: Vec<String>,
     pub toolbar_size: ToolbarSize,
     pub url_history: Vec<String>,
+    pub categories: Vec<Category>,
+    /// Offers the last folder used instead of the default one.
+    pub remember_last_folder: bool,
+    pub last_folder: Option<PathBuf>,
+    pub speed_limit_enabled: bool,
+    pub speed_limit_kb: u64,
+    pub quota_enabled: bool,
+    pub quota_mb: u64,
+    pub quota_hours: u64,
 }
 
 impl Default for Settings {
@@ -71,6 +82,14 @@ impl Default for Settings {
             toolbar: Vec::new(),
             toolbar_size: ToolbarSize::default(),
             url_history: Vec::new(),
+            categories: default_categories(),
+            remember_last_folder: false,
+            last_folder: None,
+            speed_limit_enabled: false,
+            speed_limit_kb: 1024,
+            quota_enabled: false,
+            quota_mb: 1024,
+            quota_hours: 1,
         }
     }
 }
@@ -105,6 +124,14 @@ impl Settings {
         fs::rename(&temporary, path)
     }
 
+    /// The folder a new download should use when nothing more specific applies.
+    pub fn default_folder(&self) -> &Path {
+        self.last_folder
+            .as_deref()
+            .filter(|_| self.remember_last_folder)
+            .unwrap_or(&self.download_dir)
+    }
+
     /// Puts a URL at the front of the history, without repeats.
     pub fn remember_url(&mut self, url: &str) {
         self.url_history.retain(|existing| existing != url);
@@ -121,6 +148,38 @@ mod tests {
 
     fn load(path: &Path) -> Settings {
         Settings::load(path, Path::new(DOWNLOADS))
+    }
+
+    #[test]
+    fn the_default_folder_follows_the_setting() {
+        let mut settings = Settings {
+            download_dir: PathBuf::from(r"C:\Downloads"),
+            last_folder: Some(PathBuf::from(r"D:\Last")),
+            ..Settings::default()
+        };
+        assert_eq!(settings.default_folder(), Path::new(r"C:\Downloads"));
+
+        settings.remember_last_folder = true;
+        assert_eq!(settings.default_folder(), Path::new(r"D:\Last"));
+
+        settings.last_folder = None;
+        assert_eq!(settings.default_folder(), Path::new(r"C:\Downloads"));
+    }
+
+    #[test]
+    fn new_settings_come_with_the_standard_categories() {
+        assert_eq!(Settings::default().categories.len(), 5);
+    }
+
+    #[test]
+    fn a_user_can_remove_every_category() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("settings.json");
+        let mut settings = load(&path);
+        settings.categories.clear();
+        settings.save(&path).unwrap();
+
+        assert!(load(&path).categories.is_empty());
     }
 
     #[test]

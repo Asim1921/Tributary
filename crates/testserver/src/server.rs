@@ -364,6 +364,10 @@ async fn serve_file(
     };
     let visit = state.visit(&head.target);
 
+    if let Some(milliseconds) = scenario.delay {
+        tokio::time::sleep(Duration::from_millis(milliseconds)).await;
+    }
+
     if let Some(required) = &scenario.require_cookie {
         let cookies = head.header("cookie").unwrap_or_default();
         if !cookies.split(';').any(|cookie| cookie.trim() == required) {

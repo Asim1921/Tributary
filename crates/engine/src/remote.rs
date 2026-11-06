@@ -4,8 +4,8 @@ use std::error::Error as _;
 use std::time::Duration;
 
 use reqwest::header::{
-    CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE, ETAG, HeaderMap, HeaderName, LAST_MODIFIED,
-    RANGE, RETRY_AFTER,
+    CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG, HeaderMap, HeaderName,
+    LAST_MODIFIED, RANGE, RETRY_AFTER,
 };
 use reqwest::{Client, StatusCode};
 
@@ -133,9 +133,18 @@ pub struct Remote {
     pub etag: Option<String>,
     pub last_modified: Option<String>,
     pub suggested_name: Option<String>,
+    pub content_type: Option<String>,
 }
 
 impl Remote {
+    /// Whether the address leads to a web page rather than a file.
+    pub fn is_web_page(&self) -> bool {
+        self.content_type.as_deref().is_some_and(|value| {
+            let value = value.to_ascii_lowercase();
+            value.starts_with("text/html") || value.starts_with("application/xhtml")
+        })
+    }
+
     /// The validator for `If-Range`. RFC 9110 doesn't allow a weak ETag there.
     pub fn if_range(&self) -> Option<&str> {
         self.etag
@@ -203,6 +212,7 @@ pub async fn probe(client: &Client, url: &str, headers: &HeaderMap) -> Result<Re
         etag: text(response_headers, ETAG),
         last_modified: text(response_headers, LAST_MODIFIED),
         suggested_name,
+        content_type: text(response_headers, CONTENT_TYPE),
     })
 }
 
@@ -223,7 +233,22 @@ mod tests {
             etag: Some("\"a\"".to_owned()),
             last_modified: Some("yesterday".to_owned()),
             suggested_name: None,
+            content_type: None,
         }
+    }
+
+    #[test]
+    fn recognises_web_pages() {
+        let with_type = |value: &str| Remote {
+            content_type: Some(value.to_owned()),
+            ..remote()
+        };
+
+        assert!(with_type("text/html; charset=utf-8").is_web_page());
+        assert!(with_type("TEXT/HTML").is_web_page());
+        assert!(with_type("application/xhtml+xml").is_web_page());
+        assert!(!with_type("video/mp4").is_web_page());
+        assert!(!remote().is_web_page());
     }
 
     fn saved(size: u64, etag: Option<&str>, last_modified: Option<&str>) -> Download {
@@ -245,6 +270,9 @@ mod tests {
             added_at: 0,
             completed_at: None,
             part_dir: None,
+            queue: None,
+            category: None,
+            replace_on_finish: false,
         }
     }
 

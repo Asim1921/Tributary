@@ -65,6 +65,14 @@ export const COLUMNS: ColumnDefinition[] = [
     sortValue: (row) => row.addedAt,
   },
   {
+    id: 'category',
+    label: 'Category',
+    width: 110,
+    visible: false,
+    text: (row) => row.category ?? '',
+    sortValue: (row) => row.category?.toLowerCase() ?? null,
+  },
+  {
     id: 'description',
     label: 'Description',
     width: 200,

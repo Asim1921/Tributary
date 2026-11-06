@@ -15,10 +15,12 @@
 
   let { settings, onsave, onclose }: Props = $props();
 
-  type Tab = 'general' | 'downloads' | 'columns' | 'toolbar';
+  type Tab = 'general' | 'downloads' | 'connection' | 'categories' | 'columns' | 'toolbar';
   const TABS: { id: Tab; label: string }[] = [
     { id: 'general', label: 'General' },
     { id: 'downloads', label: 'Downloads' },
+    { id: 'connection', label: 'Connection' },
+    { id: 'categories', label: 'Categories' },
     { id: 'columns', label: 'Columns' },
     { id: 'toolbar', label: 'Toolbar' },
   ];
@@ -58,6 +60,23 @@
   async function browseTemp() {
     const chosen = await pickFolder(draft.tempDir ?? undefined);
     if (chosen) draft.tempDir = chosen;
+  }
+
+  const splitList = (text: string) =>
+    text
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+  function addCategory() {
+    draft.categories.push({ name: 'New category', folder: null, extensions: [], sites: [] });
+  }
+
+  async function browseCategory(index: number) {
+    const category = draft.categories[index];
+    if (!category) return;
+    const chosen = await pickFolder(category.folder ?? draft.downloadDir);
+    if (chosen) category.folder = chosen;
   }
 
   function save() {
@@ -135,6 +154,10 @@
       </label>
 
       <label class="check">
+        <input type="checkbox" bind:checked={draft.rememberLastFolder} />
+        Offer the last folder used
+      </label>
+      <label class="check">
         <input type="checkbox" bind:checked={draft.showStartDialog} />
         Ask before starting a download
       </label>
@@ -150,6 +173,75 @@
       >
         Clear address history
       </button>
+    {:else if tab === 'connection'}
+      <label class="check">
+        <input type="checkbox" bind:checked={draft.speedLimitEnabled} />
+        Limit download speed
+      </label>
+      <label class="field">
+        Speed limit (KB per second, all downloads together)
+        <input
+          type="number"
+          min="1"
+          bind:value={draft.speedLimitKb}
+          disabled={!draft.speedLimitEnabled}
+        />
+      </label>
+
+      <label class="check">
+        <input type="checkbox" bind:checked={draft.quotaEnabled} />
+        Limit how much is downloaded
+      </label>
+      <div class="pair">
+        <label class="field">
+          No more than (MB)
+          <input type="number" min="1" bind:value={draft.quotaMb} disabled={!draft.quotaEnabled} />
+        </label>
+        <label class="field">
+          Every (hours)
+          <input type="number" min="1" bind:value={draft.quotaHours} disabled={!draft.quotaEnabled} />
+        </label>
+      </div>
+      <p class="note">Downloads wait when the limit is reached, and carry on by themselves.</p>
+    {:else if tab === 'categories'}
+      <div class="categories">
+        {#each draft.categories as category, index (index)}
+          <div class="category">
+            <label class="field">
+              Name
+              <input type="text" bind:value={category.name} />
+            </label>
+            <label class="field">
+              File types, separated by commas
+              <input
+                type="text"
+                value={category.extensions.join(', ')}
+                onchange={(event) => (category.extensions = splitList(event.currentTarget.value))}
+              />
+            </label>
+            <label class="field">
+              Sites, such as *.example.com
+              <input
+                type="text"
+                value={category.sites.join(', ')}
+                onchange={(event) => (category.sites = splitList(event.currentTarget.value))}
+              />
+            </label>
+            <div class="folder-row">
+              <input
+                type="text"
+                aria-label="Folder for {category.name}"
+                value={category.folder ?? ''}
+                placeholder="Default folder"
+                onchange={(event) => (category.folder = event.currentTarget.value.trim() || null)}
+              />
+              <button type="button" onclick={() => browseCategory(index)}>Browse…</button>
+              <button type="button" onclick={() => draft.categories.splice(index, 1)}>Remove</button>
+            </div>
+          </div>
+        {/each}
+      </div>
+      <button type="button" onclick={addCategory}>Add category</button>
     {:else if tab === 'columns'}
       <ul>
         {#each columns as column, index (column.id)}
@@ -239,6 +331,30 @@
 
   .panel {
     min-height: 290px;
+  }
+
+  .pair {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+
+  .categories {
+    max-height: 300px;
+    margin-bottom: 8px;
+    overflow-y: auto;
+  }
+
+  .category {
+    margin-bottom: 10px;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+  }
+
+  .category .field {
+    margin-bottom: 6px;
+    font-weight: 400;
   }
 
   .block {
