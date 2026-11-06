@@ -17,6 +17,10 @@ pub enum Error {
     AlreadyRunning(DownloadId),
     #[error("download {} has already completed", .0.0)]
     AlreadyCompleted(DownloadId),
+    #[error("{0}")]
+    Request(String),
+    #[error("the database was created by a newer version of this program")]
+    NewerDatabase,
     #[error("database error: {0}")]
     Database(#[from] rusqlite::Error),
     #[error(transparent)]

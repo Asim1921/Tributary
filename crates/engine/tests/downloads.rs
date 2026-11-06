@@ -7,7 +7,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use engine::{Config, Download, DownloadId, Engine, Error, Event, NewDownload, RetryPolicy, State};
+use engine::{
+    Config, Download, DownloadEdit, DownloadId, Engine, Error, Event, NewDownload, RetryPolicy,
+    State,
+};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use testserver::{Record, TestServer, content};
@@ -445,14 +448,235 @@ async fn removing_a_download_deletes_its_part_file_only() {
     let id = fixture.start("/file/32M.bin?rate=1M");
     fixture.wait_for_progress(id, MIB).await;
 
-    fixture.engine.remove(id).await.unwrap();
+    fixture.engine.remove(id, false).await.unwrap();
 
     assert!(fixture.files().is_empty());
     assert!(matches!(fixture.engine.get(id), Err(Error::NotFound(_))));
 
     let kept = fixture.download("/file/1K.bin").await;
-    fixture.engine.remove(kept.id).await.unwrap();
+    fixture.engine.remove(kept.id, false).await.unwrap();
     assert_eq!(fixture.files(), ["1K.bin"], "completed files stay");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn removing_can_also_delete_the_finished_file() {
+    let fixture = fixture().await;
+    let download = fixture.download("/file/1K.bin").await;
+
+    fixture.engine.remove(download.id, true).await.unwrap();
+
+    assert!(fixture.files().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_download_can_be_added_without_starting() {
+    let fixture = fixture().await;
+    let id = fixture
+        .engine
+        .add(NewDownload {
+            paused: true,
+            description: Some("for later".to_owned()),
+            ..fixture.new_download("/file/1M.bin")
+        })
+        .unwrap();
+
+    let saved = fixture.engine.get(id).unwrap();
+    assert_eq!(saved.state, State::Paused);
+    assert_eq!(saved.description.as_deref(), Some("for later"));
+    assert!(saved.added_at > 0);
+    assert!(
+        fixture.server.records().is_empty(),
+        "nothing should be sent"
+    );
+
+    fixture.engine.resume(id, &[]).unwrap();
+    let finished = fixture.engine.wait(id).await.unwrap();
+    assert_completed(&finished, 1, MIB);
+    assert!(finished.completed_at.unwrap() >= saved.added_at);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn inspecting_reports_the_file_without_downloading_it() {
+    let fixture = fixture().await;
+
+    let info = fixture
+        .engine
+        .inspect(&fixture.server.url("/file/3M.bin"), &[])
+        .await
+        .unwrap();
+    assert_eq!(info.file_name, "3M.bin");
+    assert_eq!(info.size, Some(3 * MIB));
+    assert!(info.resumable);
+
+    let single = fixture
+        .engine
+        .inspect(&fixture.server.url("/file/3M.bin?ranges=0"), &[])
+        .await
+        .unwrap();
+    assert!(!single.resumable);
+
+    let missing = fixture
+        .engine
+        .inspect(&fixture.server.url("/missing"), &[])
+        .await;
+    assert!(matches!(missing, Err(Error::Request(reason)) if reason.contains("404")));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_new_link_for_the_same_file_continues_the_download() {
+    let fixture = fixture().await;
+    let size = 32 * MIB;
+    let id = fixture.start("/file/32M.bin?rate=2M&run=old-link");
+
+    fixture.wait_for_progress(id, 8 * MIB).await;
+    fixture.engine.pause(id).await.unwrap();
+    let paused = fixture.engine.get(id).unwrap();
+
+    fixture
+        .engine
+        .edit(
+            id,
+            DownloadEdit {
+                url: Some(fixture.server.url("/file/32M.bin?run=new-link")),
+                ..DownloadEdit::default()
+            },
+        )
+        .unwrap();
+    fixture.engine.resume(id, &[]).unwrap();
+
+    let finished = fixture.engine.wait(id).await.unwrap();
+    assert_completed(&finished, 1, size);
+
+    let records = fixture.server.records();
+    let new_link_bytes: u64 = records
+        .iter()
+        .filter(|record| record.target.contains("new-link"))
+        .map(|record| record.body_bytes_sent)
+        .sum();
+    assert!(
+        new_link_bytes < size - paused.downloaded / 2,
+        "fetched {new_link_bytes} bytes from the new link"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_new_link_to_a_different_file_starts_again() {
+    let fixture = fixture().await;
+    let id = fixture.start("/file/32M.bin?rate=2M");
+
+    fixture.wait_for_progress(id, MIB).await;
+    fixture.engine.pause(id).await.unwrap();
+
+    fixture
+        .engine
+        .edit(
+            id,
+            DownloadEdit {
+                url: Some(fixture.server.url("/file/32M.bin?seed=5")),
+                ..DownloadEdit::default()
+            },
+        )
+        .unwrap();
+    fixture.engine.resume(id, &[]).unwrap();
+
+    assert_completed(&fixture.engine.wait(id).await.unwrap(), 5, 32 * MIB);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_running_download_cannot_be_edited() {
+    let fixture = fixture().await;
+    let id = fixture.start("/file/32M.bin?rate=1M");
+
+    let result = fixture.engine.edit(id, DownloadEdit::default());
+
+    assert!(matches!(result, Err(Error::AlreadyRunning(_))));
+    fixture.engine.pause(id).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn changing_the_folder_mid_download_keeps_progress() {
+    let fixture = fixture().await;
+    let id = fixture.start("/file/32M.bin?rate=2M");
+
+    fixture.wait_for_progress(id, 4 * MIB).await;
+    fixture.engine.pause(id).await.unwrap();
+    let paused = fixture.engine.get(id).unwrap();
+
+    let new_folder = fixture.folder.path().join("moved");
+    fixture
+        .engine
+        .edit(
+            id,
+            DownloadEdit {
+                dest_dir: Some(new_folder.clone()),
+                ..DownloadEdit::default()
+            },
+        )
+        .unwrap();
+    fixture.engine.resume(id, &[]).unwrap();
+
+    let finished = fixture.engine.wait(id).await.unwrap();
+    assert_completed(&finished, 1, 32 * MIB);
+    assert_eq!(finished.final_path.unwrap(), new_folder.join("32M.bin"));
+
+    let resumed = records_after_probe(&fixture.server.records(), 2);
+    let sent: u64 = resumed.iter().map(|record| record.body_bytes_sent).sum();
+    assert!(
+        sent < 32 * MIB - paused.downloaded / 2,
+        "fetched {sent} bytes"
+    );
+    assert!(
+        fixture.files().is_empty(),
+        "the .part file should have moved"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_temporary_folder_on_another_drive_works() {
+    // The system temp folder is on C: and the build folder is on D: on this machine,
+    // so the final move has to copy between drives.
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = fixture_with(Config {
+        temp_dir: Some(temp.path().to_owned()),
+        ..fast_config()
+    })
+    .await;
+    let dest = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+
+    let id = fixture
+        .engine
+        .add(NewDownload {
+            dest_dir: dest.path().to_owned(),
+            ..fixture.new_download("/file/4M.bin")
+        })
+        .unwrap();
+    let finished = fixture.engine.wait(id).await.unwrap();
+
+    assert_completed(&finished, 1, 4 * MIB);
+    assert_eq!(finished.final_path.unwrap(), dest.path().join("4M.bin"));
+    assert_eq!(
+        fs::read_dir(temp.path()).unwrap().count(),
+        0,
+        "nothing left behind"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_new_connection_count_applies_to_the_next_download() {
+    let fixture = fixture().await;
+    fixture.engine.set_connections(2);
+
+    let download = fixture.download("/file/8M.bin").await;
+
+    assert_completed(&download, 1, 8 * MIB);
+    let first_wave = fixture
+        .server
+        .records()
+        .iter()
+        .filter_map(range_start)
+        .filter(|&start| start == 0 || start == 4 * MIB)
+        .count();
+    assert_eq!(first_wave, 2);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -569,8 +793,17 @@ async fn reports_progress_and_state_changes() {
     let mut states = Vec::new();
     while let Ok(event) = events.try_recv() {
         match event {
-            Event::Progress { total, .. } => {
+            Event::Progress {
+                total, segments, ..
+            } => {
                 assert_eq!(total, Some(8 * MIB));
+                assert_eq!(
+                    segments
+                        .iter()
+                        .map(|part| part.end - part.start)
+                        .sum::<u64>(),
+                    8 * MIB
+                );
                 seen_progress = true;
             }
             Event::State { state, .. } => states.push(state),

@@ -43,6 +43,15 @@ impl Problem {
         Self::retry(describe(error))
     }
 
+    /// Explains the problem in words.
+    pub fn into_reason(self) -> String {
+        match self {
+            Self::Stopped => "stopped".to_owned(),
+            Self::Changed => "the file changed on the server".to_owned(),
+            Self::Retry { reason, .. } | Self::Fatal(reason) => reason,
+        }
+    }
+
     /// Classifies a response that wasn't the expected success.
     pub fn from_status(status: StatusCode, headers: &HeaderMap) -> Self {
         let reason = format!("the server answered {status}");
@@ -232,6 +241,10 @@ mod tests {
             error: None,
             final_path: None,
             downloaded: 1,
+            description: None,
+            added_at: 0,
+            completed_at: None,
+            part_dir: None,
         }
     }
 

@@ -1,0 +1,170 @@
+:root {
+  color-scheme: light;
+  --bg: #f3f5f6;
+  --surface: #ffffff;
+  --surface-2: #eceff1;
+  --hover: #e8edef;
+  --selected: #d5ecE8;
+  --text: #1a2226;
+  --muted: #5b6870;
+  --line: #d9dfe2;
+  --accent: #0f766e;
+  --accent-text: #ffffff;
+  --danger: #b42318;
+  --warn: #a15c07;
+  --success: #15803d;
+  --shadow: 0 12px 32px rgb(16 24 32 / 18%);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --bg: #12171a;
+    --surface: #1a2024;
+    --surface-2: #232b30;
+    --hover: #262f35;
+    --selected: #17413d;
+    --text: #e7ecee;
+    --muted: #9aa6ad;
+    --line: #2d363c;
+    --accent: #2fc4b2;
+    --accent-text: #052421;
+    --danger: #f97066;
+    --warn: #fdb022;
+    --success: #4ade80;
+    --shadow: 0 12px 32px rgb(0 0 0 / 50%);
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #12171a;
+  --surface: #1a2024;
+  --surface-2: #232b30;
+  --hover: #262f35;
+  --selected: #17413d;
+  --text: #e7ecee;
+  --muted: #9aa6ad;
+  --line: #2d363c;
+  --accent: #2fc4b2;
+  --accent-text: #052421;
+  --danger: #f97066;
+  --warn: #fdb022;
+  --success: #4ade80;
+  --shadow: 0 12px 32px rgb(0 0 0 / 50%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.45 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+  overflow: hidden;
+  user-select: none;
+}
+
+input,
+select,
+textarea,
+button {
+  font: inherit;
+  color: inherit;
+}
+
+input[type='text'],
+input[type='url'],
+input[type='number'],
+select,
+textarea {
+  width: 100%;
+  padding: 6px 8px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  user-select: text;
+}
+
+input:disabled,
+textarea:disabled {
+  color: var(--muted);
+  background: var(--surface-2);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+button {
+  padding: 6px 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+button:disabled {
+  color: var(--muted);
+  cursor: default;
+  opacity: 0.6;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+button.primary:hover:not(:disabled) {
+  background: var(--accent);
+  filter: brightness(1.08);
+}
+
+label.field {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 12px;
+  font-weight: 600;
+}
+
+label.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.folder-row {
+  display: flex;
+  gap: 6px;
+}
+
+.note {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.error-text {
+  color: var(--danger);
+  user-select: text;
+}
+
+.selectable {
+  user-select: text;
+  overflow-wrap: anywhere;
+}

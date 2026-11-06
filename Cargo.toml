@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/engine", "crates/testserver"]
+members = ["crates/engine", "crates/testserver", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,3 +12,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+
+[profile.release]
+lto = "thin"
+strip = true

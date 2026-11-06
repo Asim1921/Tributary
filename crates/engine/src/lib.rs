@@ -13,7 +13,7 @@ pub mod segments;
 mod store;
 mod transfer;
 
-pub use engine::{Config, Engine, Event, NewDownload};
+pub use engine::{Config, DownloadEdit, Engine, Event, FileInfo, NewDownload};
 pub use error::Error;
 pub use store::{Download, DownloadId, State};
 pub use transfer::RetryPolicy;

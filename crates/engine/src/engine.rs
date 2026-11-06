@@ -19,7 +19,7 @@ use crate::disk::{self, PartFile};
 use crate::error::Error;
 use crate::name;
 use crate::remote::{self, Problem, Remote};
-use crate::segments::SegmentMap;
+use crate::segments::{Segment, SegmentMap};
 use crate::store::{Download, DownloadId, State, Store};
 use crate::transfer::{self, Ended, Job, RetryPolicy};
 
@@ -40,6 +40,9 @@ const SECRET_HEADERS: [&str; 3] = ["cookie", "authorization", "proxy-authorizati
 pub struct Config {
     /// Connections per download.
     pub connections: usize,
+    /// Where `.part` files go. `None` keeps them next to the destination, which
+    /// avoids a slow copy between drives when a download finishes.
+    pub temp_dir: Option<PathBuf>,
     /// The smallest piece a file is split into.
     pub min_split: u64,
     pub retry: RetryPolicy,
@@ -55,6 +58,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             connections: 8,
+            temp_dir: None,
             min_split: 1 << 20,
             retry: RetryPolicy {
                 attempts: 6,
@@ -76,8 +80,29 @@ pub struct NewDownload {
     pub dest_dir: PathBuf,
     /// Overrides the name from the server.
     pub file_name: Option<String>,
+    pub description: Option<String>,
     /// Extra request headers. `Cookie` and similar are used but never saved.
     pub headers: Vec<(String, String)>,
+    /// Saves the download without starting it.
+    pub paused: bool,
+}
+
+/// Changes to a download that isn't running. `None` leaves a field as it is.
+#[derive(Debug, Clone, Default)]
+pub struct DownloadEdit {
+    /// A new address for the same file, for example to replace an expired link.
+    /// If it turns out to be a different file, the download starts again.
+    pub url: Option<String>,
+    pub dest_dir: Option<PathBuf>,
+    pub description: Option<String>,
+}
+
+/// What a server says about a file before downloading it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileInfo {
+    pub file_name: String,
+    pub size: Option<u64>,
+    pub resumable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -91,7 +116,17 @@ pub enum Event {
         downloaded: u64,
         total: Option<u64>,
         bytes_per_second: u64,
+        /// Each part of the file and how far it has got. Empty on one connection.
+        segments: Vec<Segment>,
     },
+}
+
+/// Settings that can change while the engine runs. A change applies to downloads
+/// started afterwards.
+#[derive(Debug, Clone)]
+struct LiveOptions {
+    connections: usize,
+    temp_dir: Option<PathBuf>,
 }
 
 struct Running {
@@ -103,6 +138,7 @@ struct Inner {
     store: Arc<Store>,
     client: Client,
     config: Config,
+    live: Mutex<LiveOptions>,
     events: broadcast::Sender<Event>,
     running: Mutex<HashMap<DownloadId, Running>>,
 }
@@ -110,6 +146,10 @@ struct Inner {
 impl Inner {
     fn running(&self) -> MutexGuard<'_, HashMap<DownloadId, Running>> {
         self.running.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn live(&self) -> MutexGuard<'_, LiveOptions> {
+        self.live.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn emit(&self, event: Event) {
@@ -139,11 +179,16 @@ impl Engine {
             .build()?;
 
         let (events, _) = broadcast::channel(EVENT_BUFFER);
+        let live = LiveOptions {
+            connections: config.connections,
+            temp_dir: config.temp_dir.clone(),
+        };
         Ok(Self {
             inner: Arc::new(Inner {
                 store: Arc::new(Store::open(path)?),
                 client,
                 config,
+                live: Mutex::new(live),
                 events,
                 running: Mutex::default(),
             }),
@@ -154,12 +199,40 @@ impl Engine {
         self.inner.events.subscribe()
     }
 
-    /// Saves a download and starts it.
+    /// Sets the connections used by downloads started from now on.
+    pub fn set_connections(&self, connections: usize) {
+        self.inner.live().connections = connections.max(1);
+    }
+
+    /// Sets where new downloads keep their `.part` files.
+    pub fn set_temp_dir(&self, temp_dir: Option<PathBuf>) {
+        self.inner.live().temp_dir = temp_dir;
+    }
+
+    /// Asks the server about a file without downloading it.
+    pub async fn inspect(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+    ) -> Result<FileInfo, Error> {
+        let url = parse_url(url)?;
+        let headers = to_header_map(headers)?;
+
+        let remote = remote::probe(&self.inner.client, url.as_str(), &headers)
+            .await
+            .map_err(|problem| Error::Request(problem.into_reason()))?;
+
+        let suggested = remote.suggested_name.as_deref().unwrap_or_default();
+        Ok(FileInfo {
+            file_name: name::sanitize(suggested),
+            size: remote.size,
+            resumable: remote.ranged,
+        })
+    }
+
+    /// Saves a download and, unless asked not to, starts it.
     pub fn add(&self, new: NewDownload) -> Result<DownloadId, Error> {
-        let url = Url::parse(&new.url).map_err(|_| Error::InvalidUrl(new.url.clone()))?;
-        if !matches!(url.scheme(), "http" | "https") {
-            return Err(Error::InvalidUrl(new.url));
-        }
+        let url = parse_url(&new.url)?;
 
         let (secret, saved): (Vec<_>, Vec<_>) = new
             .headers
@@ -169,13 +242,40 @@ impl Engine {
         to_header_map(&saved)?;
 
         let file_name = new.file_name.as_deref().map(name::sanitize);
-        let id =
-            self.inner
-                .store
-                .insert(url.as_str(), &new.dest_dir, file_name.as_deref(), &saved)?;
+        let id = self.inner.store.insert(
+            url.as_str(),
+            &new.dest_dir,
+            file_name.as_deref(),
+            new.description.as_deref(),
+            &saved,
+        )?;
 
-        self.start(id, secret)?;
+        if new.paused {
+            self.inner.emit(Event::State {
+                id,
+                state: State::Paused,
+            });
+        } else {
+            self.start(id, secret)?;
+        }
         Ok(id)
+    }
+
+    /// Changes a download that isn't running.
+    pub fn edit(&self, id: DownloadId, edit: DownloadEdit) -> Result<(), Error> {
+        if self.inner.running().contains_key(&id) {
+            return Err(Error::AlreadyRunning(id));
+        }
+        self.get(id)?;
+
+        let url = edit.url.as_deref().map(parse_url).transpose()?;
+        self.inner.store.edit(
+            id,
+            url.as_ref().map(Url::as_str),
+            edit.dest_dir.as_deref(),
+            edit.description.as_deref(),
+        )?;
+        Ok(())
     }
 
     /// Stops a running download, keeping its progress. Does nothing if it isn't running.
@@ -198,19 +298,17 @@ impl Engine {
         self.start(id, to_header_map(secret_headers)?)
     }
 
-    /// Forgets a download and deletes its unfinished `.part` file. A completed file stays.
-    pub async fn remove(&self, id: DownloadId) -> Result<(), Error> {
+    /// Forgets a download and deletes its unfinished `.part` file. A completed file
+    /// stays unless `delete_file` is set.
+    pub async fn remove(&self, id: DownloadId, delete_file: bool) -> Result<(), Error> {
         self.pause(id).await?;
         let download = self.get(id)?;
 
         if let Some(file_name) = &download.file_name {
-            let path = part_path(&download.dest_dir, file_name, id);
-            match std::fs::remove_file(path) {
-                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                    return Err(error.into());
-                }
-                _ => {}
-            }
+            remove_if_present(&part_path(&download, file_name))?;
+        }
+        if let Some(path) = download.final_path.as_deref().filter(|_| delete_file) {
+            remove_if_present(path)?;
         }
         self.inner.store.delete(id)?;
         Ok(())
@@ -262,6 +360,23 @@ impl Engine {
     }
 }
 
+fn parse_url(text: &str) -> Result<Url, Error> {
+    let invalid = || Error::InvalidUrl(text.to_owned());
+    let url = Url::parse(text).map_err(|_| invalid())?;
+    if matches!(url.scheme(), "http" | "https") {
+        Ok(url)
+    } else {
+        Err(invalid())
+    }
+}
+
+fn remove_if_present(path: &Path) -> Result<(), Error> {
+    match std::fs::remove_file(path) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
+        _ => Ok(()),
+    }
+}
+
 fn is_secret(name: &str) -> bool {
     SECRET_HEADERS
         .iter()
@@ -280,8 +395,12 @@ fn to_header_map(pairs: &[(String, String)]) -> Result<HeaderMap, Error> {
     Ok(headers)
 }
 
-fn part_path(dest_dir: &Path, file_name: &str, id: DownloadId) -> PathBuf {
-    dest_dir.join(format!("{file_name}.{}.part", id.0))
+fn part_path(download: &Download, file_name: &str) -> PathBuf {
+    download
+        .part_dir
+        .as_ref()
+        .unwrap_or(&download.dest_dir)
+        .join(format!("{file_name}.{}.part", download.id.0))
 }
 
 /// How one run of a download ended, once restarts are out of the way.
@@ -379,7 +498,7 @@ async fn attempt(
     secrets: &HeaderMap,
     stop: &CancellationToken,
 ) -> Result<Attempt, String> {
-    let download = inner
+    let mut download = inner
         .store
         .get(id)
         .map_err(|error| error.to_string())?
@@ -408,9 +527,28 @@ async fn attempt(
         }
     };
 
-    std::fs::create_dir_all(&download.dest_dir)
-        .map_err(|error| format!("could not create the folder: {error}"))?;
-    let path = part_path(&download.dest_dir, &file_name, id);
+    let LiveOptions {
+        connections,
+        temp_dir,
+    } = inner.live().clone();
+
+    if download.part_dir.is_none() {
+        let part_dir = temp_dir.unwrap_or_else(|| download.dest_dir.clone());
+        inner
+            .store
+            .set_part_dir(id, &part_dir)
+            .map_err(|error| error.to_string())?;
+        download.part_dir = Some(part_dir);
+    }
+
+    let path = part_path(&download, &file_name);
+    for folder in [path.parent(), Some(download.dest_dir.as_path())]
+        .into_iter()
+        .flatten()
+    {
+        std::fs::create_dir_all(folder)
+            .map_err(|error| format!("could not create the folder: {error}"))?;
+    }
 
     let segmented = remote.ranged && remote.size.is_some_and(|size| size > 0);
     let resuming =
@@ -426,7 +564,7 @@ async fn attempt(
         (file, SegmentMap::from_saved(&saved, min_split))
     } else {
         let size = remote.size.unwrap_or(0);
-        let map = SegmentMap::new(size, inner.config.connections, min_split);
+        let map = SegmentMap::new(size, connections, min_split);
         let planned = if segmented {
             map.snapshot()
         } else {
@@ -455,10 +593,7 @@ async fn attempt(
     });
 
     let transfer: Pin<Box<dyn Future<Output = Ended> + Send>> = if segmented {
-        Box::pin(transfer::run_segments(
-            Arc::clone(&job),
-            inner.config.connections,
-        ))
+        Box::pin(transfer::run_segments(Arc::clone(&job), connections))
     } else {
         Box::pin(transfer::run_stream(Arc::clone(&job)))
     };
@@ -473,8 +608,15 @@ async fn attempt(
 
     match ended {
         Ended::Finished => {
-            let target = disk::finish(&path, &download.dest_dir, &file_name)
-                .map_err(|error| format!("could not finish the file: {error}"))?;
+            // Moving between drives copies the whole file, so keep it off the async threads.
+            let dest_dir = download.dest_dir.clone();
+            let target = tokio::task::spawn_blocking(move || {
+                disk::finish(&path, &dest_dir, &file_name)
+                    .map_err(|error| format!("could not finish the file: {error}"))
+            })
+            .await
+            .map_err(|error| error.to_string())??;
+
             Ok(Attempt::Done(Finish::Completed {
                 path: target,
                 size: remote.size.unwrap_or(transferred),
@@ -518,6 +660,7 @@ async fn watch(
                     downloaded: bytes,
                     total: job.size,
                     bytes_per_second: speed as u64,
+                    segments: if segmented { job.map().snapshot() } else { Vec::new() },
                 });
 
                 if segmented && last_checkpoint.elapsed() >= inner.config.checkpoint_interval {
