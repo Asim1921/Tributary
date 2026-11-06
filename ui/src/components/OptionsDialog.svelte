@@ -1,7 +1,13 @@
 <script lang="ts">
   import { untrack } from 'svelte';
 
-  import { pickFolder } from '../lib/api';
+  import {
+    deleteSiteLogin,
+    pickFile,
+    pickFolder,
+    playSound,
+    saveSiteLogin,
+  } from '../lib/api';
   import { columnById, resolveColumns } from '../lib/columns';
   import { moveItem, resolveToolbar, TOOLBAR_BUTTONS } from '../lib/toolbar';
   import type { ColumnSetting, Settings } from '../lib/types';
@@ -9,18 +15,34 @@
 
   interface Props {
     settings: Settings;
-    onsave: (settings: Settings) => void;
+    onsave: (settings: Settings, proxyPassword: string) => void;
+    onexport: () => void;
+    onimport: () => void;
     onclose: () => void;
   }
 
-  let { settings, onsave, onclose }: Props = $props();
+  let { settings, onsave, onexport, onimport, onclose }: Props = $props();
 
-  type Tab = 'general' | 'downloads' | 'connection' | 'categories' | 'columns' | 'toolbar';
+  type Tab =
+    | 'general'
+    | 'downloads'
+    | 'connection'
+    | 'proxy'
+    | 'logins'
+    | 'categories'
+    | 'security'
+    | 'sounds'
+    | 'columns'
+    | 'toolbar';
   const TABS: { id: Tab; label: string }[] = [
     { id: 'general', label: 'General' },
     { id: 'downloads', label: 'Downloads' },
     { id: 'connection', label: 'Connection' },
+    { id: 'proxy', label: 'Proxy' },
+    { id: 'logins', label: 'Logins' },
     { id: 'categories', label: 'Categories' },
+    { id: 'security', label: 'Security' },
+    { id: 'sounds', label: 'Sounds' },
     { id: 'columns', label: 'Columns' },
     { id: 'toolbar', label: 'Toolbar' },
   ];
@@ -51,6 +73,45 @@
   let draft = $state<Settings>(opening);
   let columns = $state<ColumnSetting[]>(resolveColumns(opening.columns));
   let toolbar = $state<ToolbarEntry[]>(toolbarEntries(opening.toolbar));
+  let proxyPassword = $state('');
+  let newSite = $state({ pattern: '', username: '', password: '' });
+  let loginProblem = $state('');
+
+  const SOUND_EVENTS = [
+    { key: 'complete', label: 'Download finished' },
+    { key: 'failed', label: 'Download failed' },
+    { key: 'queue', label: 'Queue finished' },
+  ] as const;
+
+  async function addSite() {
+    const { pattern, username, password } = newSite;
+    try {
+      await saveSiteLogin(pattern.trim(), username.trim(), password);
+      draft.siteLogins = [
+        ...draft.siteLogins.filter((site) => site.pattern !== pattern.trim()),
+        { pattern: pattern.trim(), username: username.trim() },
+      ];
+      newSite = { pattern: '', username: '', password: '' };
+      loginProblem = '';
+    } catch (error) {
+      loginProblem = String(error);
+    }
+  }
+
+  async function removeSite(pattern: string) {
+    await deleteSiteLogin(pattern);
+    draft.siteLogins = draft.siteLogins.filter((site) => site.pattern !== pattern);
+  }
+
+  async function browseSound(key: 'complete' | 'failed' | 'queue') {
+    const chosen = await pickFile('Sound', ['wav']);
+    if (chosen) draft.sounds[key] = chosen;
+  }
+
+  async function browseScanner() {
+    const chosen = await pickFile('Program', ['exe']);
+    if (chosen) draft.scannerPath = chosen;
+  }
 
   async function browseDownloads() {
     const chosen = await pickFolder(draft.downloadDir);
@@ -84,7 +145,7 @@
       ...$state.snapshot(draft),
       columns: $state.snapshot(columns),
       toolbar: toolbar.filter((entry) => entry.shown).map((entry) => entry.id),
-    } as Settings);
+    } as Settings, proxyPassword);
   }
 </script>
 
@@ -121,6 +182,11 @@
         <input type="checkbox" bind:checked={draft.closeToTray} />
         Keep running in the tray when the window is closed
       </label>
+      <div class="data-buttons">
+        <button type="button" onclick={onexport}>Export settings and list…</button>
+        <button type="button" onclick={onimport}>Import…</button>
+      </div>
+      <p class="note">Exports never include passwords.</p>
     {:else if tab === 'downloads'}
       <div class="block">
         <label class="field" for="options-folder">Default folder</label>
@@ -203,6 +269,142 @@
         </label>
       </div>
       <p class="note">Downloads wait when the limit is reached, and carry on by themselves.</p>
+
+      <label class="field">
+        User agent (blank uses Tributary's own)
+        <input type="text" bind:value={draft.userAgent} />
+      </label>
+      <label class="check">
+        <input type="checkbox" bind:checked={draft.ftpPassive} />
+        Use passive mode for FTP
+      </label>
+
+      <p class="heading">Connections for particular servers</p>
+      {#each draft.serverRules as rule, index (index)}
+        <div class="rule">
+          <input type="text" aria-label="Server" bind:value={rule.pattern} placeholder="*.example.com" />
+          <input type="number" aria-label="Connections" min="1" max="32" bind:value={rule.connections} />
+          <button type="button" onclick={() => draft.serverRules.splice(index, 1)}>Remove</button>
+        </div>
+      {/each}
+      <button
+        type="button"
+        onclick={() => draft.serverRules.push({ pattern: '', connections: 1 })}
+      >
+        Add server
+      </button>
+    {:else if tab === 'proxy'}
+      <label class="field">
+        Connect through
+        <select bind:value={draft.proxyChoice}>
+          <option value="system">Windows proxy settings</option>
+          <option value="direct">No proxy</option>
+          <option value="manual">This proxy</option>
+        </select>
+      </label>
+      {#if draft.proxyChoice === 'manual'}
+        <label class="field">
+          Proxy address
+          <input
+            type="text"
+            bind:value={draft.proxyUrl}
+            placeholder="http://host:8080 or socks5://host:1080"
+          />
+        </label>
+        <div class="pair">
+          <label class="field">
+            Proxy user name
+            <input type="text" bind:value={draft.proxyUsername} autocomplete="off" />
+          </label>
+          <label class="field">
+            Proxy password
+            <input
+              type="password"
+              bind:value={proxyPassword}
+              placeholder="Unchanged"
+              autocomplete="off"
+            />
+          </label>
+        </div>
+        <label class="field">
+          Don't use the proxy for (separated by commas)
+          <input type="text" bind:value={draft.proxyExceptions} placeholder="localhost, 192.168.*" />
+        </label>
+      {/if}
+    {:else if tab === 'logins'}
+      <p class="note">Passwords are kept in Windows Credential Manager.</p>
+      <ul>
+        {#each draft.siteLogins as site (site.pattern)}
+          <li>
+            <span>{site.pattern} ({site.username})</span>
+            <button type="button" aria-label="Remove {site.pattern}" onclick={() => removeSite(site.pattern)}>
+              Remove
+            </button>
+          </li>
+        {/each}
+      </ul>
+      <p class="heading">Add a site</p>
+      <label class="field">
+        Site
+        <input type="text" bind:value={newSite.pattern} placeholder="*.example.com" />
+      </label>
+      <div class="pair">
+        <label class="field">
+          User name
+          <input type="text" bind:value={newSite.username} autocomplete="off" />
+        </label>
+        <label class="field">
+          Password
+          <input type="password" bind:value={newSite.password} autocomplete="off" />
+        </label>
+      </div>
+      <button
+        type="button"
+        disabled={!newSite.pattern.trim() || !newSite.username.trim()}
+        onclick={addSite}
+      >
+        Add login
+      </button>
+      {#if loginProblem}<p class="error-text">{loginProblem}</p>{/if}
+    {:else if tab === 'security'}
+      <label class="check">
+        <input type="checkbox" bind:checked={draft.scanEnabled} />
+        Scan finished downloads for viruses
+      </label>
+      <div class="block">
+        <label class="field" for="options-scanner">Scanner program</label>
+        <div class="folder-row">
+          <input id="options-scanner" type="text" bind:value={draft.scannerPath} />
+          <button type="button" onclick={browseScanner}>Browse…</button>
+        </div>
+      </div>
+      <label class="field">
+        Scanner arguments
+        <input type="text" bind:value={draft.scannerArguments} />
+      </label>
+      <p class="note">{'{file}'} stands for the downloaded file. Windows Defender is set up by default.</p>
+    {:else if tab === 'sounds'}
+      {#each SOUND_EVENTS as item (item.key)}
+        <div class="block">
+          <label class="field" for="sound-{item.key}">{item.label}</label>
+          <div class="folder-row">
+            <input
+              id="sound-{item.key}"
+              type="text"
+              bind:value={draft.sounds[item.key]}
+              placeholder="No sound"
+            />
+            <button type="button" onclick={() => browseSound(item.key)}>Browse…</button>
+            <button
+              type="button"
+              disabled={!draft.sounds[item.key]}
+              onclick={() => playSound(draft.sounds[item.key])}
+            >
+              Play
+            </button>
+          </div>
+        </div>
+      {/each}
     {:else if tab === 'categories'}
       <div class="categories">
         {#each draft.categories as category, index (index)}
@@ -311,9 +513,32 @@
 <style>
   .tabs {
     display: flex;
+    flex-wrap: wrap;
     gap: 2px;
     margin-bottom: 12px;
     border-bottom: 1px solid var(--line);
+  }
+
+  .tabs button {
+    padding: 6px 9px;
+  }
+
+  .heading {
+    margin: 10px 0 6px;
+    font-weight: 600;
+  }
+
+  .rule {
+    display: grid;
+    grid-template-columns: 1fr 80px auto;
+    gap: 6px;
+    margin-bottom: 6px;
+  }
+
+  .data-buttons {
+    display: flex;
+    gap: 8px;
+    margin-top: 14px;
   }
 
   .tabs button {

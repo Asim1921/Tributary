@@ -8,15 +8,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
+use percent_encoding::percent_decode_str;
 use reqwest::header::{ACCEPT_ENCODING, HeaderMap, HeaderName, HeaderValue};
-use reqwest::{Client, Url, redirect};
+use reqwest::{Client, NoProxy, Proxy, Url, redirect};
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 
+use crate::auth::{Authenticator, Login};
 use crate::disk::{self, PartFile};
 use crate::error::Error;
+use crate::ftp::{self, FtpTarget};
 use crate::limits::{Limits, Quota};
 use crate::name;
 use crate::remote::{self, Problem, Remote};
@@ -24,6 +27,7 @@ use crate::scheduler::{Command, Moment, Queue, QueueId, Scheduler};
 use crate::segments::{Segment, SegmentMap};
 use crate::store::{Download, DownloadId, State, Store};
 use crate::transfer::{self, Ended, Job, RetryPolicy};
+use crate::wildcard::wildcard_match;
 
 const USER_AGENT: &str = concat!("Tributary/", env!("CARGO_PKG_VERSION"));
 const MAX_REDIRECTS: usize = 10;
@@ -94,6 +98,53 @@ pub struct NewDownload {
     /// Adds it to the end of this queue.
     pub queue: Option<QueueId>,
     pub category: Option<String>,
+    /// Used if the server asks for one. Kept in memory only.
+    pub login: Option<Login>,
+}
+
+/// A proxy the user has set up by hand.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ManualProxy {
+    /// Such as `http://host:8080` or `socks5://host:1080`.
+    pub url: String,
+    pub login: Option<Login>,
+    /// Hosts to reach directly, separated by commas.
+    pub exceptions: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ProxyMode {
+    /// Follows Windows' proxy settings.
+    #[default]
+    System,
+    Direct,
+    Manual(ManualProxy),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetworkOptions {
+    /// Replaces the program's own name in requests.
+    pub user_agent: Option<String>,
+    pub proxy: ProxyMode,
+    pub ftp_passive: bool,
+}
+
+impl Default for NetworkOptions {
+    fn default() -> Self {
+        Self {
+            user_agent: None,
+            proxy: ProxyMode::default(),
+            ftp_passive: true,
+        }
+    }
+}
+
+/// How many connections to use for downloads from particular servers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerLimit {
+    /// A host pattern such as `*.example.com`.
+    pub pattern: String,
+    pub connections: usize,
 }
 
 /// Changes to a download that isn't running. `None` leaves a field as it is.
@@ -152,6 +203,9 @@ pub enum Event {
 struct LiveOptions {
     connections: usize,
     temp_dir: Option<PathBuf>,
+    server_limits: Vec<ServerLimit>,
+    client: Client,
+    ftp_passive: bool,
 }
 
 struct Running {
@@ -161,7 +215,6 @@ struct Running {
 
 struct Inner {
     store: Arc<Store>,
-    client: Client,
     config: Config,
     live: Mutex<LiveOptions>,
     limits: Arc<Limits>,
@@ -170,6 +223,8 @@ struct Inner {
     scheduler: Mutex<Scheduler>,
     /// Secret headers, in memory only.
     secrets: Mutex<HashMap<DownloadId, HeaderMap>>,
+    /// Logins, in memory only.
+    logins: Mutex<HashMap<DownloadId, Login>>,
 }
 
 impl Inner {
@@ -185,6 +240,24 @@ impl Inner {
 
     fn secrets(&self) -> MutexGuard<'_, HashMap<DownloadId, HeaderMap>> {
         self.secrets.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn logins(&self) -> MutexGuard<'_, HashMap<DownloadId, Login>> {
+        self.logins.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn client(&self) -> Client {
+        self.live().client.clone()
+    }
+
+    fn ftp_target(&self, url: &Url, login: Option<Login>) -> FtpTarget {
+        FtpTarget {
+            url: url.clone(),
+            login,
+            passive: self.live().ftp_passive,
+            connect_timeout: self.config.connect_timeout,
+            read_timeout: self.config.read_timeout,
+        }
     }
 
     fn live(&self) -> MutexGuard<'_, LiveOptions> {
@@ -207,27 +280,20 @@ pub struct Engine {
 impl Engine {
     /// Opens the database at `path`. Downloads interrupted by a crash come back paused.
     pub fn open(path: &Path, config: Config) -> Result<Self, Error> {
-        let mut default_headers = HeaderMap::new();
-        // Ranges count bytes of the stored file, so compression must stay off.
-        default_headers.insert(ACCEPT_ENCODING, HeaderValue::from_static("identity"));
-
-        let client = Client::builder()
-            .user_agent(USER_AGENT)
-            .default_headers(default_headers)
-            .redirect(redirect::Policy::limited(MAX_REDIRECTS))
-            .connect_timeout(config.connect_timeout)
-            .read_timeout(config.read_timeout)
-            .build()?;
+        let network = NetworkOptions::default();
+        let client = build_client(&config, &network)?;
 
         let (events, _) = broadcast::channel(EVENT_BUFFER);
         let live = LiveOptions {
             connections: config.connections,
             temp_dir: config.temp_dir.clone(),
+            server_limits: Vec::new(),
+            client,
+            ftp_passive: network.ftp_passive,
         };
         Ok(Self {
             inner: Arc::new(Inner {
                 store: Arc::new(Store::open(path)?),
-                client,
                 config,
                 live: Mutex::new(live),
                 limits: Arc::default(),
@@ -235,12 +301,32 @@ impl Engine {
                 running: Mutex::default(),
                 scheduler: Mutex::default(),
                 secrets: Mutex::default(),
+                logins: Mutex::default(),
             }),
         })
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.inner.events.subscribe()
+    }
+
+    /// Sets the user agent, proxy and FTP mode for downloads started from now on.
+    pub fn set_network(&self, options: &NetworkOptions) -> Result<(), Error> {
+        let client = build_client(&self.inner.config, options)?;
+        let mut live = self.inner.live();
+        live.client = client;
+        live.ftp_passive = options.ftp_passive;
+        Ok(())
+    }
+
+    /// Sets connection counts for particular servers, for downloads started from now on.
+    pub fn set_server_limits(&self, limits: Vec<ServerLimit>) {
+        self.inner.live().server_limits = limits;
+    }
+
+    /// Gives a download a login, kept in memory only.
+    pub fn set_login(&self, id: DownloadId, login: Login) {
+        self.inner.logins().insert(id, login);
     }
 
     /// Sets the total bytes per second across all downloads. Applies straight away.
@@ -317,8 +403,10 @@ impl Engine {
         if let Some(secrets) = self.inner.secrets().get(&id) {
             headers.extend(secrets.clone());
         }
+        let login = self.inner.logins().get(&id).cloned();
 
-        let remote = remote::probe(&self.inner.client, &download.url, &headers)
+        let stop = CancellationToken::new();
+        let (remote, _) = probe(&self.inner, &download.url, &headers, login, &stop)
             .await
             .map_err(|problem| Error::Request(problem.into_reason()))?;
 
@@ -434,13 +522,20 @@ impl Engine {
         &self,
         url: &str,
         headers: &[(String, String)],
+        login: Option<Login>,
     ) -> Result<FileInfo, Error> {
-        let url = parse_url(url)?;
+        let mut url = parse_url(url)?;
+        let login = take_url_login(&mut url).or(login);
         let headers = to_header_map(headers)?;
 
-        let remote = remote::probe(&self.inner.client, url.as_str(), &headers)
+        // One try only, because someone is waiting for the answer.
+        let stop = CancellationToken::new();
+        let (remote, _) = probe_once(&self.inner, url.as_str(), &headers, login, &stop)
             .await
-            .map_err(|problem| Error::Request(problem.into_reason()))?;
+            .map_err(|problem| match problem {
+                Problem::LoginRequired { .. } => Error::LoginRequired,
+                other => Error::Request(other.into_reason()),
+            })?;
 
         let suggested = remote.suggested_name.as_deref().unwrap_or_default();
         Ok(FileInfo {
@@ -453,7 +548,9 @@ impl Engine {
 
     /// Saves a download and, unless asked not to, starts it.
     pub fn add(&self, new: NewDownload) -> Result<DownloadId, Error> {
-        let url = parse_url(&new.url)?;
+        let mut url = parse_url(&new.url)?;
+        // A password in the address must not reach the database.
+        let login = take_url_login(&mut url).or(new.login);
 
         let (secret, saved): (Vec<_>, Vec<_>) = new
             .headers
@@ -473,6 +570,9 @@ impl Engine {
 
         if !secret.is_empty() {
             self.inner.secrets().insert(id, secret);
+        }
+        if let Some(login) = login {
+            self.inner.logins().insert(id, login);
         }
         if let Some(queue) = new.queue {
             self.inner.store.set_queue(id, Some(queue))?;
@@ -499,7 +599,10 @@ impl Engine {
         }
         self.get(id)?;
 
-        let url = edit.url.as_deref().map(parse_url).transpose()?;
+        let mut url = edit.url.as_deref().map(parse_url).transpose()?;
+        if let Some(login) = url.as_mut().and_then(take_url_login) {
+            self.inner.logins().insert(id, login);
+        }
         self.inner.store.edit(
             id,
             url.as_ref().map(Url::as_str),
@@ -555,6 +658,7 @@ impl Engine {
         }
         self.inner.store.delete(id)?;
         self.inner.secrets().remove(&id);
+        self.inner.logins().remove(&id);
         self.inner.scheduler().release(id);
         Ok(())
     }
@@ -606,14 +710,58 @@ impl Engine {
     }
 }
 
+fn build_client(config: &Config, network: &NetworkOptions) -> Result<Client, Error> {
+    let mut default_headers = HeaderMap::new();
+    // Ranges count bytes of the stored file, so compression must stay off.
+    default_headers.insert(ACCEPT_ENCODING, HeaderValue::from_static("identity"));
+
+    let mut builder = Client::builder()
+        .user_agent(network.user_agent.as_deref().unwrap_or(USER_AGENT))
+        .default_headers(default_headers)
+        .redirect(redirect::Policy::limited(MAX_REDIRECTS))
+        .connect_timeout(config.connect_timeout)
+        .read_timeout(config.read_timeout);
+
+    builder = match &network.proxy {
+        ProxyMode::System => builder,
+        ProxyMode::Direct => builder.no_proxy(),
+        ProxyMode::Manual(manual) => {
+            let invalid = |_| Error::InvalidProxy(manual.url.clone());
+            let mut proxy = Proxy::all(&manual.url).map_err(invalid)?;
+            if let Some(login) = &manual.login {
+                proxy = proxy.basic_auth(&login.username, &login.password);
+            }
+            builder.proxy(proxy.no_proxy(NoProxy::from_string(&manual.exceptions)))
+        }
+    };
+
+    Ok(builder.build()?)
+}
+
 fn parse_url(text: &str) -> Result<Url, Error> {
     let invalid = || Error::InvalidUrl(text.to_owned());
     let url = Url::parse(text).map_err(|_| invalid())?;
-    if matches!(url.scheme(), "http" | "https") {
+    if matches!(url.scheme(), "http" | "https" | "ftp") {
         Ok(url)
     } else {
         Err(invalid())
     }
+}
+
+/// Takes `user:password@` out of an address, so it isn't saved.
+fn take_url_login(url: &mut Url) -> Option<Login> {
+    if url.username().is_empty() {
+        return None;
+    }
+
+    let decode = |text: &str| percent_decode_str(text).decode_utf8_lossy().into_owned();
+    let login = Login {
+        username: decode(url.username()),
+        password: decode(url.password().unwrap_or_default()),
+    };
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    Some(login)
 }
 
 fn remove_if_present(path: &Path) -> Result<(), Error> {
@@ -705,21 +853,63 @@ async fn drive(
     Err("the file kept changing on the server".to_owned())
 }
 
+/// What a server said about a file, and how to log in for the requests that follow.
+type Probed = (Remote, Option<Arc<Authenticator>>);
+
+/// Asks the server about a file once, logging in if it asks and there's a login to use.
+async fn probe_once(
+    inner: &Inner,
+    url: &str,
+    headers: &HeaderMap,
+    login: Option<Login>,
+    stop: &CancellationToken,
+) -> Result<Probed, Problem> {
+    if url.starts_with("ftp:") {
+        let parsed = Url::parse(url).map_err(|error| Problem::Fatal(error.to_string()))?;
+        let target = inner.ftp_target(&parsed, login);
+        return tokio::select! {
+            () = stop.cancelled() => Err(Problem::Stopped),
+            remote = ftp::probe(&target) => Ok((remote?, None)),
+        };
+    }
+
+    let client = inner.client();
+    let first = tokio::select! {
+        () = stop.cancelled() => return Err(Problem::Stopped),
+        result = remote::probe(&client, url, headers, None) => result,
+    };
+
+    match (first, login) {
+        (
+            Err(Problem::LoginRequired {
+                challenge: Some(challenge),
+            }),
+            Some(login),
+        ) => {
+            let auth = Arc::new(Authenticator::new(login, challenge));
+            let second = tokio::select! {
+                () = stop.cancelled() => return Err(Problem::Stopped),
+                result = remote::probe(&client, url, headers, Some(&auth)) => result,
+            };
+            Ok((second?, Some(auth)))
+        }
+        (result, _) => Ok((result?, None)),
+    }
+}
+
 /// Asks the server about the file, retrying temporary failures.
 async fn probe(
     inner: &Inner,
     url: &str,
     headers: &HeaderMap,
+    login: Option<Login>,
     stop: &CancellationToken,
-) -> Result<Remote, Problem> {
+) -> Result<Probed, Problem> {
     let policy = inner.config.retry;
     let mut failures = 0;
 
     loop {
-        let result = tokio::select! {
-            () = stop.cancelled() => return Err(Problem::Stopped),
-            result = remote::probe(&inner.client, url, headers) => result,
-        };
+        let result = probe_once(inner, url, headers, login.clone(), stop).await;
 
         let (reason, wait) = match result {
             Err(Problem::Retry { reason, wait }) => (reason, wait),
@@ -753,11 +943,12 @@ async fn attempt(
     let mut headers = to_header_map(&download.headers).map_err(|error| error.to_string())?;
     headers.extend(secrets.clone());
 
-    let remote = match probe(inner, &download.url, &headers, stop).await {
-        Ok(remote) => remote,
+    let login = inner.logins().get(&id).cloned();
+    let (remote, auth) = match probe(inner, &download.url, &headers, login.clone(), stop).await {
+        Ok(probed) => probed,
         Err(Problem::Stopped) => return Ok(Attempt::Done(Finish::Paused)),
-        Err(Problem::Fatal(reason) | Problem::Retry { reason, .. }) => return Err(reason),
         Err(Problem::Changed) => return Ok(Attempt::FileChanged),
+        Err(problem) => return Err(problem.into_reason()),
     };
 
     let file_name = match &download.file_name {
@@ -776,7 +967,17 @@ async fn attempt(
     let LiveOptions {
         connections,
         temp_dir,
+        server_limits,
+        client,
+        ..
     } = inner.live().clone();
+
+    let parsed_url = Url::parse(&remote.url).map_err(|error| error.to_string())?;
+    let host = parsed_url.host_str().unwrap_or_default();
+    let connections = server_limits
+        .iter()
+        .find(|limit| wildcard_match(&limit.pattern, host))
+        .map_or(connections, |limit| limit.connections.max(1));
 
     if download.part_dir.is_none() {
         let part_dir = temp_dir.unwrap_or_else(|| download.dest_dir.clone());
@@ -824,8 +1025,10 @@ async fn attempt(
     };
     let file = file.map_err(|error| format!("could not open the file: {error}"))?;
 
+    let ftp = (parsed_url.scheme() == "ftp").then(|| inner.ftp_target(&parsed_url, login));
+
     let job = Arc::new(Job {
-        client: inner.client.clone(),
+        client,
         url: remote.url.clone(),
         headers,
         if_range: remote.if_range().map(str::to_owned),
@@ -837,6 +1040,8 @@ async fn attempt(
         stop: stop.child_token(),
         policy: inner.config.retry,
         limits: Arc::clone(&inner.limits),
+        auth,
+        ftp,
     });
 
     let transfer: Pin<Box<dyn Future<Output = Ended> + Send>> = if segmented {

@@ -23,6 +23,8 @@
 //! | `change_after=N`          | Replaces the file with new content after N requests          |
 //! | `require_cookie=NAME=VAL` | Answers 403 unless that cookie is sent                       |
 //! | `filename=NAME`           | Sends `Content-Disposition: attachment`                      |
+//! | `basic=USER:PASS`         | Requires this Basic login                                    |
+//! | `digest=USER:PASS`        | Requires this Digest login, refusing replayed counts         |
 //!
 //! Unknown options are rejected, so a typo can't silently run the wrong test.
 
@@ -49,6 +51,8 @@ pub struct Scenario {
     pub change_after: Option<u32>,
     pub require_cookie: Option<String>,
     pub filename: Option<String>,
+    pub basic: Option<String>,
+    pub digest: Option<String>,
 }
 
 impl Scenario {
@@ -73,6 +77,8 @@ impl Scenario {
             change_after: None,
             require_cookie: None,
             filename: None,
+            basic: None,
+            digest: None,
         };
 
         for (key, value) in pairs(query) {
@@ -94,6 +100,8 @@ impl Scenario {
                 "redirects" => scenario.redirects = number(key, value)?,
                 "change_after" => scenario.change_after = Some(number(key, value)?),
                 "require_cookie" => scenario.require_cookie = Some(decode(key, value)?),
+                "basic" => scenario.basic = Some(decode(key, value)?),
+                "digest" => scenario.digest = Some(decode(key, value)?),
                 "filename" => scenario.filename = Some(header_safe(key, decode(key, value)?)?),
                 _ => return Err(format!("unknown option `{key}`")),
             }

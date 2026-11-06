@@ -36,6 +36,8 @@ const dataDir = mkdtempSync(join(tmpdir(), 'tributary-e2e-data-'));
 const downloadDir = mkdtempSync(join(tmpdir(), 'tributary-e2e-files-'));
 
 const results = [];
+const pageErrors = [];
+let activePage;
 let server;
 let app;
 let browser;
@@ -49,6 +51,17 @@ async function step(name, run) {
   } catch (error) {
     results.push({ name, passed: false });
     console.log(`FAIL ${name}\n     ${String(error.message ?? error).split('\n').join('\n     ')}`);
+    if (activePage) {
+      await shot(activePage, 'failure').catch(() => {});
+      const rows = await activePage.locator('tbody tr').allInnerTexts().catch(() => []);
+      console.log(`     rows: ${rows.map((row) => row.replace(/\s+/g, ' ')).join(' | ')}`);
+      const failed = await activePage
+        .evaluate(() => window.__TAURI_INTERNALS__.invoke('list_downloads'))
+        .catch(() => []);
+      for (const download of failed.filter((item) => item.error)) {
+        console.log(`     ${download.url}: ${download.error}`);
+      }
+    }
     throw error;
   }
 }
@@ -114,7 +127,15 @@ try {
   // Set before the app starts, so a test can never write to the real Downloads folder.
   writeFileSync(join(dataDir, 'settings.json'), JSON.stringify({ downloadDir }));
 
-  server = spawn(SERVER, ['--port', String(SERVER_PORT)], { stdio: 'ignore' });
+  server = spawn(SERVER, ['--port', String(SERVER_PORT)], { stdio: ['ignore', 'pipe', 'ignore'] });
+  const ftpBase = await new Promise((resolve, reject) => {
+    server.stdout.on('data', (data) => {
+      const found = /ftp on (\S+)/.exec(String(data));
+      if (found) resolve(found[1]);
+    });
+    server.on('exit', () => reject(new Error('the test server stopped')));
+  });
+
   app = spawn(APP, [], {
     stdio: 'ignore',
     env: {
@@ -128,7 +149,9 @@ try {
 
   const { connected, page } = await connect();
   browser = connected;
+  activePage = page;
   page.setDefaultTimeout(20_000);
+  page.on('pageerror', (error) => pageErrors.push(error.message));
 
   await step('opens on an empty list', async () => {
     await page.getByRole('heading', { name: 'No downloads yet' }).waitFor();
@@ -409,7 +432,10 @@ try {
     );
   });
 
+  // Waits for the clock, so it can be skipped while working on other steps.
   await step('a queue really starts by itself at its scheduled time', async () => {
+    if (process.env.E2E_SKIP_TIMED) return;
+
     const start = new Date(Date.now() + 70_000);
     const time = `${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')}`;
 
@@ -441,12 +467,187 @@ try {
     assert.equal(await sha256(join(downloadDir, '2M.timed')), expectedSha256('2M.timed'));
   });
 
-  await step('a page-level error never appears', async () => {
-    assert.equal(await page.getByRole('heading', { name: 'Something went wrong' }).count(), 0);
+  /** Opens Options on a tab, changes things, and saves. */
+  async function inOptions(tab, change) {
+    await page.getByRole('button', { name: 'Options' }).click();
+    await page.getByRole('tab', { name: tab }).click();
+    await change();
+    await page.getByRole('button', { name: 'Save' }).click();
+    await page.getByRole('dialog').waitFor({ state: 'hidden' });
+    await sleep(300);
+  }
+
+  await step('downloads over FTP', async () => {
+    await addThroughDialogs(page, `${ftpBase}pub/4M.ftp`);
+    await rowFor(page, '4M.ftp').getByText('Complete').waitFor();
+    assert.equal(await sha256(join(downloadDir, '4M.ftp')), expectedSha256('4M.ftp'));
+  });
+
+  await step('the start dialog asks for a login, and the download works with it', async () => {
+    await page.getByRole('button', { name: 'Add URL' }).first().click();
+    await page.getByLabel('Address').fill(`${BASE}/file/2M.login?basic=alice:secret`);
+    await page.getByRole('button', { name: 'Continue' }).click();
+
+    await page.getByLabel('User name').waitFor();
+    await page.getByText('needs a login', { exact: false }).waitFor();
+    await shot(page, '10-login');
+
+    await page.getByLabel('User name').fill('alice');
+    await page.getByLabel('Password').fill('secret');
+    await page.getByRole('button', { name: 'Try again' }).click();
+    await page.getByRole('dialog').getByText('2.0 MB').waitFor();
+
+    await page.getByRole('button', { name: 'Start download' }).click();
+    await rowFor(page, '2M.login').getByText('Complete').waitFor();
+    assert.equal(await sha256(join(downloadDir, '2M.login')), expectedSha256('2M.login'));
+  });
+
+  await step('a download that fails for a login prompts for one', async () => {
+    await inOptions('Downloads', () => page.getByLabel('Ask before starting a download').uncheck());
+
+    await page.getByRole('button', { name: 'Add URL' }).first().click();
+    await page.getByLabel('Address').fill(`${BASE}/file/2M.prompt?digest=bob:%68unter2`);
+    await page.getByRole('button', { name: 'Continue' }).click();
+
+    await page.getByRole('heading', { name: 'Login needed' }).waitFor();
+    await page.getByLabel('User name').fill('bob');
+    await page.getByLabel('Password').fill('wrong password');
+    await page.getByRole('button', { name: 'Try again' }).click();
+
+    // A wrong password asks again rather than failing quietly.
+    await page.getByRole('dialog').waitFor({ state: 'hidden' });
+    await page.getByRole('heading', { name: 'Login needed' }).waitFor();
+    await page.getByLabel('User name').fill('bob');
+    await page.getByLabel('Password').fill('hunter2');
+    await page.getByRole('button', { name: 'Try again' }).click();
+
+    await rowFor(page, '2M.prompt').getByText('Complete').waitFor();
+    assert.equal(await sha256(join(downloadDir, '2M.prompt')), expectedSha256('2M.prompt'));
+  });
+
+  await step('a saved site login is used without asking', async () => {
+    await page.getByRole('button', { name: 'Options' }).click();
+    await page.getByRole('tab', { name: 'Logins' }).click();
+    await page.getByLabel('Site').fill('127.0.0.*');
+    await page.getByLabel('User name').fill('carol');
+    await page.getByLabel('Password').fill('saved-pass');
+    await page.getByRole('button', { name: 'Add login' }).click();
+    await page.getByText('127.0.0.* (carol)').waitFor();
+    await page.getByRole('button', { name: 'Save' }).click();
+    await page.getByRole('dialog').waitFor({ state: 'hidden' });
+
+    await page.getByRole('button', { name: 'Add URL' }).first().click();
+    await page.getByLabel('Address').fill(`${BASE}/file/1M.saved?basic=carol:%73aved-pass`);
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await rowFor(page, '1M.saved').getByText('Complete').waitFor();
+
+    const settings = readFileSync(join(dataDir, 'settings.json'), 'utf8');
+    assert.ok(settings.includes('carol'));
+    assert.ok(!settings.includes('saved-pass'), 'a password reached the settings file');
+    const database = readFileSync(join(dataDir, 'downloads.db'));
+    assert.ok(!database.includes('saved-pass'), 'a password reached the database');
+
+    await page.getByRole('button', { name: 'Options' }).click();
+    await page.getByRole('tab', { name: 'Logins' }).click();
+    await page.getByRole('button', { name: 'Remove 127.0.0.*' }).click();
+    await page.getByText('127.0.0.* (carol)').waitFor({ state: 'detached' });
+    await page.getByRole('button', { name: 'Save' }).click();
+    await page.getByRole('dialog').waitFor({ state: 'hidden' });
+  });
+
+  await step('downloads through a proxy set in Options', async () => {
+    await inOptions('Proxy', async () => {
+      await page.getByLabel('Connect through').selectOption('manual');
+      await page.getByLabel('Proxy address').fill(BASE);
+    });
+
+    // This host doesn't exist, so finishing proves the proxy was used.
+    await page.getByRole('button', { name: 'Add URL' }).first().click();
+    await page.getByLabel('Address').fill('http://tributary.invalid/file/1M.proxied');
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await rowFor(page, '1M.proxied').getByText('Complete').waitFor();
+
+    await inOptions('Proxy', () => page.getByLabel('Connect through').selectOption('system'));
+  });
+
+  await step('a bad proxy address is refused with a clear message', async () => {
+    await inOptions('Proxy', async () => {
+      await page.getByLabel('Connect through').selectOption('manual');
+      await page.getByLabel('Proxy address').fill('not a proxy');
+    });
+    await page.getByRole('heading', { name: 'Something went wrong' }).waitFor();
+    await page.getByText("isn't valid", { exact: false }).waitFor();
+    await page.getByRole('button', { name: 'Close' }).click();
+  });
+
+  await step('the virus scanner runs and a warning is shown', async () => {
+    await inOptions('Security', async () => {
+      await page.getByLabel('Scan finished downloads for viruses').check();
+      await page.getByLabel('Scanner program').fill('C:\\Windows\\System32\\cmd.exe');
+      await page.getByLabel('Scanner arguments').fill('/c exit 2');
+    });
+
+    await page.getByRole('button', { name: 'Add URL' }).first().click();
+    await page.getByLabel('Address').fill(`${BASE}/file/1M.scanned`);
+    await page.getByRole('button', { name: 'Continue' }).click();
+
+    await page.getByRole('heading', { name: 'Virus scan warning' }).waitFor();
+    await page.getByText('code 2', { exact: false }).waitFor();
+    await shot(page, '11-scan-warning');
+    await page.getByRole('button', { name: 'Close' }).click();
+
+    await inOptions('Security', () =>
+      page.getByLabel('Scan finished downloads for viruses').uncheck(),
+    );
+  });
+
+  await step('settings and the list can be exported and imported', async () => {
+    const invoke = (command, args) =>
+      page.evaluate(([name, values]) => window.__TAURI_INTERNALS__.invoke(name, values), [command, args]);
+    const file = join(dataDir, 'export.json');
+
+    const exported = await invoke('export_data', { path: file });
+    assert.ok(exported > 5, `exported ${exported} downloads`);
+
+    const text = readFileSync(file, 'utf8');
+    assert.ok(text.includes('2M.login'));
+    assert.ok(!text.includes('saved-pass') && !text.includes('hunter2'), 'a password was exported');
+
+    assert.equal(await invoke('import_data', { path: file }), 0, 'finished files are not re-added');
+  });
+
+  await step('the complete message buttons work, and a missing file is explained', async () => {
+    await inOptions('Downloads', () =>
+      page.getByLabel('Show a message when a download finishes').check(),
+    );
+
+    await page.getByRole('button', { name: 'Add URL' }).first().click();
+    await page.getByLabel('Address').fill(`${BASE}/file/1M.gone`);
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await page.getByRole('heading', { name: 'Download complete' }).waitFor();
+
+    // Removing the file means pressing Open can't launch anything on the desktop.
+    rmSync(join(downloadDir, '1M.gone'));
+    await page.getByRole('button', { name: 'Open file' }).click();
+    await page.getByRole('heading', { name: 'Something went wrong' }).waitFor();
+    await page.getByText('no longer there', { exact: false }).waitFor();
+    await page.getByRole('button', { name: 'Close' }).click();
+  });
+
+  await step('no script error happened anywhere in the run', async () => {
+    assert.deepEqual(pageErrors, []);
   });
 } finally {
   await browser?.close().catch(() => {});
   app?.kill();
+
+  // The saved login goes to the real Credential Manager, so it's always removed.
+  try {
+    execFileSync('cmdkey', ['/delete:Tributary/site/127.0.0.*'], { stdio: 'ignore' });
+  } catch {
+    // Normally already gone.
+  }
+
   server?.kill();
   await sleep(1000);
   rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });

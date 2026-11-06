@@ -85,7 +85,7 @@ export function formatDate(secondsSince1970: number | null): string {
 export function isDownloadableUrl(text: string): boolean {
   try {
     const { protocol } = new URL(text.trim());
-    return protocol === 'http:' || protocol === 'https:';
+    return protocol === 'http:' || protocol === 'https:' || protocol === 'ftp:';
   } catch {
     return false;
   }

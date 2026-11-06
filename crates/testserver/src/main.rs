@@ -4,10 +4,13 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use testserver::scenario::Scenario;
-use testserver::{Config, TestServer, content};
+use testserver::{Config, FtpConfig, FtpServer, TestServer, content};
 
 const USAGE: &str =
     "usage: testserver [--port N] [--log PATH]\n       testserver sha256 NAME [SEED]";
+
+/// Printed so a test can find the FTP server, which uses a free port.
+const FTP_LINE: &str = "ftp on";
 const DEFAULT_PORT: u16 = 8787;
 
 /// Returns the SHA-256 of a test file, such as `100M.bin` with seed 1.
@@ -26,7 +29,7 @@ fn checksum(mut args: impl Iterator<Item = String>) -> Result<String, String> {
 fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Config, String> {
     let mut config = Config {
         port: DEFAULT_PORT,
-        log_path: None,
+        ..Config::default()
     };
 
     while let Some(arg) = args.next() {
@@ -78,7 +81,16 @@ async fn main() -> ExitCode {
         }
     };
 
+    let ftp = match FtpServer::start(FtpConfig::default()).await {
+        Ok(ftp) => ftp,
+        Err(error) => {
+            eprintln!("could not start FTP: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     println!("listening on {}", server.url("/"));
+    println!("{FTP_LINE} {}", ftp.url("/"));
     match tokio::signal::ctrl_c().await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {

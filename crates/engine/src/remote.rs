@@ -4,13 +4,17 @@ use std::error::Error as _;
 use std::time::Duration;
 
 use reqwest::header::{
-    CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG, HeaderMap, HeaderName,
-    LAST_MODIFIED, RANGE, RETRY_AFTER,
+    AUTHORIZATION, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG,
+    HeaderMap, HeaderName, HeaderValue, LAST_MODIFIED, RANGE, RETRY_AFTER, WWW_AUTHENTICATE,
 };
-use reqwest::{Client, StatusCode};
+use reqwest::{Client, RequestBuilder, StatusCode, Url};
 
+use crate::auth::{Authenticator, Challenge, parse_challenge};
 use crate::name;
 use crate::store::Download;
+
+/// What a download reports when a server wants a login it doesn't have.
+pub const LOGIN_NEEDED: &str = "this site needs a login";
 
 /// The longest `Retry-After` obeyed, so a bad value can't stall a download for days.
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(300);
@@ -29,6 +33,8 @@ pub enum Problem {
     },
     /// Trying again won't help.
     Fatal(String),
+    /// The server wants a login. `challenge` says how, for servers that say.
+    LoginRequired { challenge: Option<Challenge> },
 }
 
 impl Problem {
@@ -49,11 +55,22 @@ impl Problem {
             Self::Stopped => "stopped".to_owned(),
             Self::Changed => "the file changed on the server".to_owned(),
             Self::Retry { reason, .. } | Self::Fatal(reason) => reason,
+            Self::LoginRequired { .. } => LOGIN_NEEDED.to_owned(),
         }
     }
 
     /// Classifies a response that wasn't the expected success.
     pub fn from_status(status: StatusCode, headers: &HeaderMap) -> Self {
+        if status == StatusCode::UNAUTHORIZED {
+            let values = headers
+                .get_all(WWW_AUTHENTICATE)
+                .iter()
+                .filter_map(|value| value.to_str().ok());
+            return Self::LoginRequired {
+                challenge: parse_challenge(values),
+            };
+        }
+
         let reason = format!("the server answered {status}");
         let temporary = status.is_server_error()
             || status == StatusCode::REQUEST_TIMEOUT
@@ -172,13 +189,43 @@ impl Remote {
     }
 }
 
+/// Adds a login to a request, if there is one.
+pub fn authorize(
+    request: RequestBuilder,
+    auth: Option<&Authenticator>,
+    url: &str,
+) -> RequestBuilder {
+    let Some(auth) = auth else {
+        return request;
+    };
+    let Ok(parsed) = Url::parse(url) else {
+        return request;
+    };
+
+    let uri = match parsed.query() {
+        Some(query) => format!("{}?{query}", parsed.path()),
+        None => parsed.path().to_owned(),
+    };
+    let Ok(mut value) = HeaderValue::from_str(&auth.header(&uri)) else {
+        return request;
+    };
+    value.set_sensitive(true);
+    request.header(AUTHORIZATION, value)
+}
+
 /// Asks for one byte, which reveals the size, range support and validators together.
 /// `HEAD` is avoided because some servers answer it differently from `GET`.
-pub async fn probe(client: &Client, url: &str, headers: &HeaderMap) -> Result<Remote, Problem> {
-    let response = client
+pub async fn probe(
+    client: &Client,
+    url: &str,
+    headers: &HeaderMap,
+    auth: Option<&Authenticator>,
+) -> Result<Remote, Problem> {
+    let request = client
         .get(url)
         .headers(headers.clone())
-        .header(RANGE, "bytes=0-0")
+        .header(RANGE, "bytes=0-0");
+    let response = authorize(request, auth, url)
         .send()
         .await
         .map_err(Problem::from_request)?;
@@ -205,7 +252,7 @@ pub async fn probe(client: &Client, url: &str, headers: &HeaderMap) -> Result<Re
         .and_then(|value| name::from_content_disposition(&value))
         .or_else(|| name::from_url(response.url()));
 
-    Ok(Remote {
+    let remote = Remote {
         url: response.url().to_string(),
         size,
         ranged,
@@ -213,7 +260,13 @@ pub async fn probe(client: &Client, url: &str, headers: &HeaderMap) -> Result<Re
         last_modified: text(response_headers, LAST_MODIFIED),
         suggested_name,
         content_type: text(response_headers, CONTENT_TYPE),
-    })
+    };
+
+    // Reading the one byte lets the connection be used again for the download itself.
+    if status == StatusCode::PARTIAL_CONTENT {
+        let _ = response.bytes().await;
+    }
+    Ok(remote)
 }
 
 #[cfg(test)]

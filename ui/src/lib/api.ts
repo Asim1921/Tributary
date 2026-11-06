@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { open } from '@tauri-apps/plugin-dialog';
+import { open, save } from '@tauri-apps/plugin-dialog';
 
 import type {
   AddRequest,
@@ -10,12 +10,17 @@ import type {
   FileInfo,
   ProgressEvent,
   Queue,
+  ScanResult,
   Settings,
   StateEvent,
 } from './types';
 
+/** What the app says when a server wants a login it doesn't have. */
+export const LOGIN_NEEDED = 'this site needs a login';
+
 export const listDownloads = () => invoke<Download[]>('list_downloads');
-export const inspectUrl = (url: string) => invoke<FileInfo>('inspect_url', { url });
+export const inspectUrl = (url: string, username?: string, password?: string) =>
+  invoke<FileInfo>('inspect_url', { url, username, password });
 export const addDownload = (request: AddRequest) => invoke<number>('add_download', { request });
 export const pauseDownload = (id: number) => invoke<void>('pause_download', { id });
 export const resumeDownload = (id: number) => invoke<void>('resume_download', { id });
@@ -39,6 +44,21 @@ export const setDownloadQueue = (id: number, queueId: number | null) =>
   invoke<void>('set_download_queue', { id, queueId });
 export const reorderQueue = (ids: number[]) => invoke<void>('reorder_queue', { ids });
 export const cancelShutdown = () => invoke<void>('cancel_shutdown');
+export const loginAndResume = (
+  id: number,
+  username: string,
+  password: string,
+  remember: boolean,
+) => invoke<void>('login_and_resume', { id, username, password, remember });
+export const saveSiteLogin = (pattern: string, username: string, password: string) =>
+  invoke<void>('save_site_login', { pattern, username, password });
+export const deleteSiteLogin = (pattern: string) =>
+  invoke<void>('delete_site_login', { pattern });
+export const setProxyPassword = (password: string) =>
+  invoke<void>('set_proxy_password', { password });
+export const playSound = (path: string) => invoke<boolean>('play_sound', { path });
+export const exportData = (path: string) => invoke<number>('export_data', { path });
+export const importData = (path: string) => invoke<number>('import_data', { path });
 
 export const onProgress = (handler: (event: ProgressEvent) => void): Promise<UnlistenFn> =>
   listen<ProgressEvent>('download-progress', (event) => handler(event.payload));
@@ -49,8 +69,25 @@ export const onState = (handler: (event: StateEvent) => void): Promise<UnlistenF
 export const onQueuesChanged = (handler: () => void): Promise<UnlistenFn> =>
   listen('queues-changed', () => handler());
 
+export const onScanFinished = (handler: (result: ScanResult) => void): Promise<UnlistenFn> =>
+  listen<ScanResult>('scan-finished', (event) => handler(event.payload));
+
 export const onShutdownPending = (handler: (seconds: number) => void): Promise<UnlistenFn> =>
   listen<number>('shutdown-pending', (event) => handler(event.payload));
+
+/** Asks where to save an export. Returns null if they cancel. */
+export async function pickSavePath(): Promise<string | null> {
+  return save({
+    defaultPath: 'tributary-export.json',
+    filters: [{ name: 'Tributary export', extensions: ['json'] }],
+  });
+}
+
+/** Asks the user for a file. Returns null if they cancel. */
+export async function pickFile(name: string, extensions: string[]): Promise<string | null> {
+  const chosen = await open({ multiple: false, filters: [{ name, extensions }] });
+  return typeof chosen === 'string' ? chosen : null;
+}
 
 /** Asks the user for a folder. Returns null if they cancel. */
 export async function pickFolder(current?: string): Promise<string | null> {

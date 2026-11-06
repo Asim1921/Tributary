@@ -1,5 +1,5 @@
-import { listDownloads, listQueues, onProgress, onQueuesChanged, onState } from './api';
-import type { Download, DownloadRow, ProgressEvent, Queue } from './types';
+import { LOGIN_NEEDED, listDownloads, listQueues, onProgress, onQueuesChanged, onState } from './api';
+import type { Download, DownloadRow, DownloadState, ProgressEvent, Queue } from './types';
 
 function toRow(download: Download, previous?: DownloadRow): DownloadRow {
   return {
@@ -20,12 +20,20 @@ class DownloadStore {
   queues = $state<Queue[]>([]);
   /** Ids that finished since the app opened, in order, for the complete dialog. */
   justCompleted = $state<number[]>([]);
+  /** Ids that just failed because the server wants a login. */
+  needLogin = $state<number[]>([]);
 
-  private previousStates = new Map<number, string>();
+  /** Downloads that just ended, waiting for the list to show why. */
+  private ended = new Map<number, DownloadState>();
 
   async start(): Promise<void> {
     await onProgress((event) => this.applyProgress(event));
-    await onState(() => void this.refresh());
+    await onState((event) => {
+      if (event.state === 'completed' || event.state === 'failed') {
+        this.ended.set(event.id, event.state);
+      }
+      void this.refresh();
+    });
     await onQueuesChanged(() => void this.refresh());
     await this.refresh();
   }
@@ -36,11 +44,14 @@ class DownloadStore {
     const previous = new Map(this.rows.map((row) => [row.id, row]));
 
     for (const download of downloads) {
-      const before = this.previousStates.get(download.id);
-      if (before === 'running' && download.state === 'completed') {
+      if (this.ended.get(download.id) !== download.state) continue;
+
+      this.ended.delete(download.id);
+      if (download.state === 'completed') {
         this.justCompleted.push(download.id);
+      } else if (download.error === LOGIN_NEEDED) {
+        this.needLogin.push(download.id);
       }
-      this.previousStates.set(download.id, download.state);
     }
 
     this.rows = downloads.map((download) => toRow(download, previous.get(download.id)));

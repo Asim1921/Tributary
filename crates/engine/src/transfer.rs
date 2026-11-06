@@ -5,15 +5,21 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
+use bytes::Bytes;
 use reqwest::header::{ETAG, HeaderMap, IF_RANGE, RANGE};
 use reqwest::{Client, RequestBuilder, Response, StatusCode};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
+use crate::auth::Authenticator;
 use crate::disk::PartFile;
+use crate::ftp::{FtpBody, FtpTarget};
 use crate::limits::Limits;
-use crate::remote::{ContentRange, Problem, text};
+use crate::remote::{ContentRange, LOGIN_NEEDED, Problem, authorize, text};
 use crate::segments::{Claim, SegmentMap};
+
+/// How long to wait for the end of a response so its connection can be used again.
+const REUSE_WAIT: Duration = Duration::from_millis(200);
 
 /// Data is gathered to this size first, because network reads are far smaller than
 /// what's efficient to hand to a disk.
@@ -63,6 +69,32 @@ pub struct Job {
     pub policy: RetryPolicy,
     /// Shared by every download.
     pub limits: Arc<Limits>,
+    pub auth: Option<Arc<Authenticator>>,
+    /// Set for an FTP download.
+    pub ftp: Option<FtpTarget>,
+}
+
+/// The bytes of a file arriving from a server.
+enum Body {
+    Http(Response),
+    Ftp(Box<FtpBody>),
+}
+
+impl Body {
+    async fn next(&mut self) -> Result<Option<Bytes>, Problem> {
+        match self {
+            Self::Http(response) => response.chunk().await.map_err(Problem::from_request),
+            Self::Ftp(body) => body.next().await,
+        }
+    }
+
+    /// Reads to the end of a response that has delivered everything, because a
+    /// connection can only be reused once its response is finished.
+    async fn finish(&mut self) {
+        if let Self::Http(response) = self {
+            let _ = tokio::time::timeout(REUSE_WAIT, response.chunk()).await;
+        }
+    }
 }
 
 impl Job {
@@ -163,6 +195,9 @@ async fn worker(job: Arc<Job>) -> Ended {
             Err(Problem::Stopped) => return Ended::Stopped,
             Err(Problem::Changed) => return Ended::Changed,
             Err(Problem::Fatal(reason)) => return Ended::Failed(reason),
+            Err(Problem::LoginRequired { .. }) => {
+                return Ended::Failed(LOGIN_NEEDED.to_owned());
+            }
             Err(Problem::Retry { reason, wait }) => {
                 failures = if progressed { 1 } else { failures + 1 };
                 if failures > job.policy.attempts {
@@ -183,7 +218,16 @@ async fn worker(job: Arc<Job>) -> Ended {
     }
 }
 
-async fn fetch_segment(job: &Job, claim: Claim) -> Result<(), Problem> {
+/// Opens one part of the file, by whichever protocol it uses.
+async fn open_range(job: &Job, claim: Claim) -> Result<Body, Problem> {
+    if let Some(target) = &job.ftp {
+        let opening = FtpBody::open(target, claim.from);
+        return tokio::select! {
+            () = job.stop.cancelled() => Err(Problem::Stopped),
+            body = opening => Ok(Body::Ftp(Box::new(body?))),
+        };
+    }
+
     let mut request = job
         .client
         .get(&job.url)
@@ -192,9 +236,15 @@ async fn fetch_segment(job: &Job, claim: Claim) -> Result<(), Problem> {
     if let Some(validator) = &job.if_range {
         request = request.header(IF_RANGE, validator);
     }
+    let request = authorize(request, job.auth.as_deref(), &job.url);
 
-    let mut response = job.send(request).await?;
+    let response = job.send(request).await?;
     check_partial(job, &response, claim)?;
+    Ok(Body::Http(response))
+}
+
+async fn fetch_segment(job: &Job, claim: Claim) -> Result<(), Problem> {
+    let mut body = open_range(job, claim).await?;
 
     let mut buffer = Vec::with_capacity(WRITE_BUFFER_BYTES);
     let mut position = claim.from;
@@ -205,7 +255,7 @@ async fn fetch_segment(job: &Job, claim: Claim) -> Result<(), Problem> {
                 flush(job, claim, &mut buffer, &mut position).await?;
                 return Err(Problem::Stopped);
             }
-            next = response.chunk() => next,
+            next = body.next() => next,
         };
 
         match next {
@@ -223,6 +273,9 @@ async fn fetch_segment(job: &Job, claim: Claim) -> Result<(), Problem> {
                 // Before the `done` check, so a segment's last bytes count as well.
                 let allowed = job.throttle(taken).await;
                 if done {
+                    if taken == bytes.len() {
+                        body.finish().await;
+                    }
                     return Ok(());
                 }
                 if !allowed {
@@ -234,10 +287,10 @@ async fn fetch_segment(job: &Job, claim: Claim) -> Result<(), Problem> {
                 flush(job, claim, &mut buffer, &mut position).await?;
                 return Err(Problem::retry("the server ended the response early"));
             }
-            Err(error) => {
+            Err(problem) => {
                 // Bytes that did arrive are good, so keep them.
                 flush(job, claim, &mut buffer, &mut position).await?;
-                return Err(Problem::from_request(error));
+                return Err(problem);
             }
         }
     }
@@ -263,6 +316,23 @@ async fn flush(
 fn check_partial(job: &Job, response: &Response, claim: Claim) -> Result<(), Problem> {
     match response.status() {
         StatusCode::PARTIAL_CONTENT => {}
+        // A Digest nonce can expire during a long download. With a fresh one from the
+        // server, the login still works, so this connection only needs another try.
+        StatusCode::UNAUTHORIZED => {
+            let problem = Problem::from_status(StatusCode::UNAUTHORIZED, response.headers());
+            return match (&job.auth, problem) {
+                (
+                    Some(auth),
+                    Problem::LoginRequired {
+                        challenge: Some(fresh),
+                    },
+                ) => {
+                    auth.renew(fresh);
+                    Err(Problem::retry("the login needs renewing"))
+                }
+                (_, problem) => Err(problem),
+            };
+        }
         // A whole file, or a range past the end, means the plan no longer fits the
         // server. That's what `If-Range` answers when the file has changed.
         StatusCode::OK | StatusCode::RANGE_NOT_SATISFIABLE => return Err(Problem::Changed),
@@ -301,6 +371,9 @@ pub async fn run_stream(job: Arc<Job>) -> Ended {
             Err(Problem::Stopped) => return Ended::Stopped,
             Err(Problem::Changed) => return Ended::Changed,
             Err(Problem::Fatal(reason)) => return Ended::Failed(reason),
+            Err(Problem::LoginRequired { .. }) => {
+                return Ended::Failed(LOGIN_NEEDED.to_owned());
+            }
             Err(Problem::Retry { reason, wait }) => {
                 // Unlike with segments, nothing survives a failed attempt, so bytes
                 // fetched during one are not progress. Counting them as progress
@@ -317,12 +390,27 @@ pub async fn run_stream(job: Arc<Job>) -> Ended {
     }
 }
 
-async fn fetch_whole(job: &Job) -> Result<(), Problem> {
+/// Opens the whole file, by whichever protocol it uses.
+async fn open_whole(job: &Job) -> Result<Body, Problem> {
+    if let Some(target) = &job.ftp {
+        let opening = FtpBody::open(target, 0);
+        return tokio::select! {
+            () = job.stop.cancelled() => Err(Problem::Stopped),
+            body = opening => Ok(Body::Ftp(Box::new(body?))),
+        };
+    }
+
     let request = job.client.get(&job.url).headers(job.headers.clone());
-    let mut response = job.send(request).await?;
+    let request = authorize(request, job.auth.as_deref(), &job.url);
+    let response = job.send(request).await?;
     if response.status() != StatusCode::OK {
         return Err(Problem::from_status(response.status(), response.headers()));
     }
+    Ok(Body::Http(response))
+}
+
+async fn fetch_whole(job: &Job) -> Result<(), Problem> {
+    let mut body = open_whole(job).await?;
 
     let mut buffer = Vec::with_capacity(WRITE_BUFFER_BYTES);
     let mut position = 0;
@@ -330,10 +418,10 @@ async fn fetch_whole(job: &Job) -> Result<(), Problem> {
     loop {
         let next = tokio::select! {
             () = job.stop.cancelled() => return Err(Problem::Stopped),
-            next = response.chunk() => next,
+            next = body.next() => next,
         };
 
-        match next.map_err(Problem::from_request)? {
+        match next? {
             Some(bytes) => {
                 buffer.extend_from_slice(&bytes);
                 if buffer.len() >= WRITE_BUFFER_BYTES {

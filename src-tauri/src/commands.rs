@@ -5,8 +5,8 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use engine::{
-    Download, DownloadEdit, DownloadId, Engine, Moment, NewDownload, Queue, QueueId, QueueInfo,
-    QueueKind, Quota, State,
+    Download, DownloadEdit, DownloadId, Engine, Login, ManualProxy, Moment, NetworkOptions,
+    NewDownload, ProxyMode, Queue, QueueId, QueueInfo, QueueKind, Quota, ServerLimit, State,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State as Managed};
@@ -14,10 +14,16 @@ use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_opener::OpenerExt as _;
 
 use crate::after_queue::{self, AfterAction, WakeTimer, seconds_until_start};
-use crate::rules::match_category;
-use crate::settings::{MAX_CONNECTIONS, MIN_CONNECTIONS, Settings};
+use crate::rules::{match_category, site_matches};
+use crate::settings::{MAX_CONNECTIONS, MIN_CONNECTIONS, ProxyChoice, Settings, SiteLogin};
+use crate::{data, scanner, secrets};
 
 const SECONDS_PER_HOUR: u64 = 3600;
+const PROXY_KEY: &str = "proxy";
+
+fn site_key(pattern: &str) -> String {
+    format!("site/{pattern}")
+}
 
 /// Everything the commands share.
 pub struct AppState {
@@ -30,6 +36,31 @@ pub struct AppState {
 impl AppState {
     fn settings(&self) -> MutexGuard<'_, Settings> {
         self.settings.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The saved login for a URL, if a site rule covers it.
+    fn site_login_for(&self, url: &str) -> Option<Login> {
+        let settings = self.settings();
+        let site = settings
+            .site_logins
+            .iter()
+            .find(|site| site_matches(&site.pattern, url))?;
+        let (username, password) = secrets::read(&site_key(&site.pattern))?;
+        Some(Login { username, password })
+    }
+
+    /// Gives every unfinished download its saved login, so queues can use them too.
+    pub fn attach_site_logins(&self) {
+        let Ok(downloads) = self.engine.list() else {
+            return;
+        };
+        for download in downloads {
+            if download.state != State::Completed
+                && let Some(login) = self.site_login_for(&download.url)
+            {
+                self.engine.set_login(download.id, login);
+            }
+        }
     }
 
     /// Points the wake timer at the earliest start that asked for it.
@@ -66,7 +97,18 @@ impl AppState {
 }
 
 /// Passes settings the engine needs through to it.
-pub fn apply_to_engine(engine: &Engine, settings: &Settings) {
+pub fn apply_to_engine(engine: &Engine, settings: &Settings) -> Result<(), engine::Error> {
+    engine.set_network(&network_options(settings))?;
+    engine.set_server_limits(
+        settings
+            .server_rules
+            .iter()
+            .map(|rule| ServerLimit {
+                pattern: rule.pattern.clone(),
+                connections: rule.connections,
+            })
+            .collect(),
+    );
     engine.set_connections(settings.connections);
     engine.set_temp_dir(settings.temp_dir.clone());
     engine.set_speed_limit(
@@ -78,6 +120,30 @@ pub fn apply_to_engine(engine: &Engine, settings: &Settings) {
         bytes: settings.quota_mb * 1024 * 1024,
         period: Duration::from_secs(settings.quota_hours.max(1) * SECONDS_PER_HOUR),
     }));
+    Ok(())
+}
+
+fn network_options(settings: &Settings) -> NetworkOptions {
+    let proxy = match settings.proxy_choice {
+        ProxyChoice::System => ProxyMode::System,
+        ProxyChoice::Direct => ProxyMode::Direct,
+        ProxyChoice::Manual => ProxyMode::Manual(ManualProxy {
+            url: settings.proxy_url.trim().to_owned(),
+            login: (!settings.proxy_username.is_empty()).then(|| Login {
+                username: settings.proxy_username.clone(),
+                password: secrets::read(PROXY_KEY)
+                    .map(|(_, password)| password)
+                    .unwrap_or_default(),
+            }),
+            exceptions: settings.proxy_exceptions.clone(),
+        }),
+    };
+
+    NetworkOptions {
+        user_agent: Some(settings.user_agent.trim().to_owned()).filter(|text| !text.is_empty()),
+        proxy,
+        ftp_passive: settings.ftp_passive,
+    }
 }
 
 pub fn state_name(state: State) -> &'static str {
@@ -151,6 +217,10 @@ pub struct AddRequest {
     paused: bool,
     queue_id: Option<i64>,
     category: Option<String>,
+    username: Option<String>,
+    password: Option<String>,
+    #[serde(default)]
+    remember_login: bool,
 }
 
 /// A queue as the window sees it. Zero as an id means a new queue.
@@ -249,14 +319,44 @@ pub async fn list_downloads(state: Managed<'_, AppState>) -> Result<Vec<Download
 pub async fn inspect_url(
     state: Managed<'_, AppState>,
     url: String,
+    username: Option<String>,
+    password: Option<String>,
 ) -> Result<FileInfoView, String> {
-    let info = state.engine.inspect(url.trim(), &[]).await.map_err(text)?;
+    let url = url.trim();
+    let login = login_from(username, password).or_else(|| state.site_login_for(url));
+    let info = state.engine.inspect(url, &[], login).await.map_err(text)?;
     Ok(FileInfoView {
         file_name: info.file_name,
         size: info.size,
         resumable: info.resumable,
         is_web_page: info.is_web_page,
     })
+}
+
+fn login_from(username: Option<String>, password: Option<String>) -> Option<Login> {
+    let username = blank_to_none(username)?;
+    Some(Login {
+        username,
+        password: password.unwrap_or_default(),
+    })
+}
+
+/// The host of a URL, which is what a remembered login applies to.
+fn host_of(url: &str) -> Option<String> {
+    url::Url::parse(url).ok()?.host_str().map(str::to_owned)
+}
+
+/// Saves a login: the password in Credential Manager, the rest in the settings.
+fn remember_site(state: &AppState, pattern: &str, login: &Login) -> Result<(), String> {
+    secrets::store(&site_key(pattern), &login.username, &login.password).map_err(text)?;
+
+    let mut settings = state.settings();
+    settings.site_logins.retain(|site| site.pattern != pattern);
+    settings.site_logins.push(SiteLogin {
+        pattern: pattern.to_owned(),
+        username: login.username.clone(),
+    });
+    settings.save(&state.settings_path).map_err(text)
 }
 
 /// Picks a category and folder for a file, from the category rules and settings.
@@ -296,6 +396,12 @@ pub async fn add_download(
         .filter(|folder| !folder.as_os_str().is_empty())
         .unwrap_or(chosen.folder);
 
+    let typed_login = login_from(request.username, request.password);
+    if let (true, Some(login), Some(host)) = (request.remember_login, &typed_login, host_of(&url)) {
+        remember_site(&state, &host, login)?;
+    }
+    let login = typed_login.or_else(|| state.site_login_for(&url));
+
     let id = state
         .engine
         .add(NewDownload {
@@ -307,6 +413,7 @@ pub async fn add_download(
             paused: request.paused,
             queue: request.queue_id.map(QueueId),
             category,
+            login,
         })
         .map_err(text)?;
 
@@ -386,7 +493,81 @@ pub async fn pause_download(state: Managed<'_, AppState>, id: i64) -> Result<(),
 
 #[tauri::command]
 pub async fn resume_download(state: Managed<'_, AppState>, id: i64) -> Result<(), String> {
+    state.attach_site_logins();
     state.engine.resume(DownloadId(id), &[]).map_err(text)
+}
+
+/// Gives a download a login and tries it again.
+#[tauri::command]
+pub async fn login_and_resume(
+    state: Managed<'_, AppState>,
+    id: i64,
+    username: String,
+    password: String,
+    remember: bool,
+) -> Result<(), String> {
+    let download = state.engine.get(DownloadId(id)).map_err(text)?;
+    let login = Login { username, password };
+
+    if remember && let Some(host) = host_of(&download.url) {
+        remember_site(&state, &host, &login)?;
+    }
+    state.engine.set_login(DownloadId(id), login);
+    state.engine.resume(DownloadId(id), &[]).map_err(text)
+}
+
+#[tauri::command]
+pub async fn save_site_login(
+    state: Managed<'_, AppState>,
+    pattern: String,
+    username: String,
+    password: String,
+) -> Result<(), String> {
+    remember_site(&state, pattern.trim(), &Login { username, password })?;
+    state.attach_site_logins();
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_site_login(
+    state: Managed<'_, AppState>,
+    pattern: String,
+) -> Result<(), String> {
+    secrets::delete(&site_key(&pattern));
+    let mut settings = state.settings();
+    settings.site_logins.retain(|site| site.pattern != pattern);
+    settings.save(&state.settings_path).map_err(text)
+}
+
+#[tauri::command]
+pub async fn set_proxy_password(
+    state: Managed<'_, AppState>,
+    password: String,
+) -> Result<(), String> {
+    let username = state.settings().proxy_username.clone();
+    secrets::store(PROXY_KEY, &username, &password).map_err(text)?;
+    let settings = state.settings().clone();
+    apply_to_engine(&state.engine, &settings).map_err(text)
+}
+
+#[tauri::command]
+pub async fn play_sound(path: String) -> Result<bool, String> {
+    Ok(scanner::play_sound(&path))
+}
+
+#[tauri::command]
+pub async fn export_data(state: Managed<'_, AppState>, path: PathBuf) -> Result<usize, String> {
+    let settings = state.settings().clone();
+    data::export_to(&path, &state.engine, &settings)
+}
+
+#[tauri::command]
+pub async fn import_data(state: Managed<'_, AppState>, path: PathBuf) -> Result<usize, String> {
+    let (imported, added) = data::import_from(&path, &state.engine)?;
+    apply_to_engine(&state.engine, &imported).map_err(text)?;
+    imported.save(&state.settings_path).map_err(text)?;
+    *state.settings() = imported;
+    Ok(added)
 }
 
 #[tauri::command]
@@ -488,8 +669,9 @@ pub async fn save_settings(
         changed.map_err(text)?;
     }
 
+    // Applied first, so a bad proxy address is refused before anything is saved.
+    apply_to_engine(&state.engine, &settings).map_err(text)?;
     settings.save(&state.settings_path).map_err(text)?;
-    apply_to_engine(&state.engine, &settings);
     *state.settings() = settings;
     Ok(())
 }

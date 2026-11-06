@@ -396,6 +396,7 @@ async fn writes_one_json_object_per_request_to_the_log_file() {
     let server = TestServer::start(Config {
         port: 0,
         log_path: Some(path.clone()),
+        ..Config::default()
     })
     .await
     .unwrap();

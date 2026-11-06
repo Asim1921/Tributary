@@ -6,6 +6,7 @@
   import ContextMenu, { type MenuItem } from './components/ContextMenu.svelte';
   import DeleteDialog from './components/DeleteDialog.svelte';
   import DownloadList from './components/DownloadList.svelte';
+  import LoginDialog from './components/LoginDialog.svelte';
   import Modal from './components/Modal.svelte';
   import OptionsDialog from './components/OptionsDialog.svelte';
   import ProgressDialog from './components/ProgressDialog.svelte';
@@ -41,6 +42,9 @@
     | { kind: 'options' }
     | { kind: 'scheduler' }
     | { kind: 'shutdown'; seconds: number }
+    | { kind: 'login'; id: number }
+    | { kind: 'scan'; file: string; problem: string }
+    | { kind: 'info'; message: string }
     | { kind: 'error'; message: string };
 
   const MAIN_QUEUE = 1;
@@ -85,6 +89,16 @@
     void api.onShutdownPending((seconds) => {
       dialog = { kind: 'shutdown', seconds };
     });
+    void api.onScanFinished(({ file, problem }) => {
+      if (problem) dialog = { kind: 'scan', file, problem };
+    });
+  });
+
+  // Asks for a login when a download needs one.
+  $effect(() => {
+    if (dialog || downloads.needLogin.length === 0) return;
+    const id = downloads.needLogin.shift();
+    if (id !== undefined && downloads.byId(id)) dialog = { kind: 'login', id };
   });
 
   // Counts down the shutdown message.
@@ -143,10 +157,35 @@
     if (failed) showError(failed.reason);
   }
 
-  async function saveSettings(next: Settings) {
+  async function saveSettings(next: Settings, proxyPassword = '') {
     try {
       await api.saveSettings(next);
+      if (proxyPassword) await api.setProxyPassword(proxyPassword);
       settings = next;
+    } catch (error) {
+      showError(error);
+    }
+  }
+
+  async function exportData() {
+    try {
+      const path = await api.pickSavePath();
+      if (!path) return;
+      const count = await api.exportData(path);
+      dialog = { kind: 'info', message: `Exported your settings and ${count} downloads.` };
+    } catch (error) {
+      showError(error);
+    }
+  }
+
+  async function importData() {
+    try {
+      const path = await api.pickFile('Tributary export', ['json']);
+      if (!path) return;
+      const added = await api.importData(path);
+      settings = await api.getSettings();
+      await downloads.refresh();
+      dialog = { kind: 'info', message: `Imported your settings and added ${added} downloads.` };
     } catch (error) {
       showError(error);
     }
@@ -328,6 +367,13 @@
         run: () => single && navigator.clipboard.writeText(single.url).catch(showError),
       },
       {
+        label: 'Enter login…',
+        disabled: single?.state !== 'failed',
+        run: () => {
+          if (single) dialog = { kind: 'login', id: single.id };
+        },
+      },
+      {
         label: 'Properties',
         disabled: !single,
         run: () => {
@@ -467,12 +513,14 @@
   <CompleteDialog
     row={completeRow}
     onopen={() => {
+      const { id } = completeRow;
       closeDialog();
-      api.openFile(completeRow.id).catch(showError);
+      api.openFile(id).catch(showError);
     }}
     onfolder={() => {
+      const { id } = completeRow;
       closeDialog();
-      api.showInFolder(completeRow.id).catch(showError);
+      api.showInFolder(id).catch(showError);
     }}
     onclose={(hideInFuture) => {
       closeDialog();
@@ -488,16 +536,21 @@
   {@const ids = dialog.ids}
   <DeleteDialog
     rows={downloads.rows.filter((row) => ids.includes(row.id))}
-    onconfirm={(deleteFiles) => deleteRows(ids, deleteFiles)}
+    onconfirm={(deleteFiles) => {
+      const chosen = [...ids];
+      void deleteRows(chosen, deleteFiles);
+    }}
     onclose={closeDialog}
   />
 {:else if dialog?.kind === 'options' && settings}
   <OptionsDialog
     {settings}
-    onsave={(next) => {
+    onsave={(next, proxyPassword) => {
       closeDialog();
-      void saveSettings(next);
+      void saveSettings(next, proxyPassword);
     }}
+    onexport={exportData}
+    onimport={importData}
     onclose={closeDialog}
   />
 {:else if dialog?.kind === 'scheduler'}
@@ -530,6 +583,34 @@
       >
         Cancel shutdown
       </button>
+    {/snippet}
+  </Modal>
+{:else if dialog?.kind === 'login'}
+  {@const row = downloads.byId(dialog.id)}
+  {#if row}
+    <LoginDialog
+      {row}
+      onsubmit={(username, password, remember) => {
+        const { id } = row;
+        closeDialog();
+        api.loginAndResume(id, username, password, remember).catch(showError);
+      }}
+      onclose={closeDialog}
+    />
+  {/if}
+{:else if dialog?.kind === 'scan'}
+  <Modal title="Virus scan warning" onclose={closeDialog}>
+    <p class="error-text">{dialog.problem}</p>
+    <p class="note selectable">{dialog.file}</p>
+    {#snippet footer()}
+      <button type="button" class="primary" onclick={closeDialog}>Close</button>
+    {/snippet}
+  </Modal>
+{:else if dialog?.kind === 'info'}
+  <Modal title="Done" onclose={closeDialog}>
+    <p>{dialog.message}</p>
+    {#snippet footer()}
+      <button type="button" class="primary" onclick={closeDialog}>Close</button>
     {/snippet}
   </Modal>
 {:else if dialog?.kind === 'error'}

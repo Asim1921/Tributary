@@ -32,7 +32,7 @@
       {/each}
     </datalist>
     {#if url.trim() && !valid}
-      <p class="note">Enter a full address starting with http:// or https://</p>
+      <p class="note">Enter a full address starting with http://, https:// or ftp://</p>
     {/if}
   </form>
 

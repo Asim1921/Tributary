@@ -59,6 +59,9 @@ export interface AddRequest {
   paused?: boolean;
   queueId?: number | null;
   category?: string | null;
+  username?: string;
+  password?: string;
+  rememberLogin?: boolean;
 }
 
 export interface EditRequest {
@@ -97,6 +100,42 @@ export interface Settings {
   quotaEnabled: boolean;
   quotaMb: number;
   quotaHours: number;
+  userAgent: string;
+  proxyChoice: ProxyChoice;
+  proxyUrl: string;
+  proxyUsername: string;
+  proxyExceptions: string;
+  ftpPassive: boolean;
+  serverRules: ServerRule[];
+  siteLogins: SiteLogin[];
+  scanEnabled: boolean;
+  scannerPath: string;
+  scannerArguments: string;
+  sounds: Sounds;
+}
+
+export type ProxyChoice = 'system' | 'direct' | 'manual';
+
+export interface ServerRule {
+  pattern: string;
+  connections: number;
+}
+
+export interface SiteLogin {
+  pattern: string;
+  username: string;
+}
+
+export interface Sounds {
+  complete: string;
+  failed: string;
+  queue: string;
+}
+
+export interface ScanResult {
+  id: number;
+  file: string;
+  problem: string;
 }
 
 export interface Category {

@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::rules::{Category, default_categories};
+use crate::scanner::{DEFAULT_ARGUMENTS, DEFAULT_SCANNER};
 
 pub const MIN_CONNECTIONS: usize = 1;
 pub const MAX_CONNECTIONS: usize = 32;
@@ -28,6 +29,38 @@ pub enum ToolbarSize {
     #[default]
     Large,
     Small,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProxyChoice {
+    #[default]
+    System,
+    Direct,
+    Manual,
+}
+
+/// How many connections to use for a particular server.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerRule {
+    pub pattern: String,
+    pub connections: usize,
+}
+
+/// A site with a saved login. The password is in Windows Credential Manager.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SiteLogin {
+    pub pattern: String,
+    pub username: String,
+}
+
+/// Sound files to play for each event. Blank means silent.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Sounds {
+    pub complete: String,
+    pub failed: String,
+    pub queue: String,
 }
 
 /// How one column of the download list is shown. The list of columns itself
@@ -65,6 +98,19 @@ pub struct Settings {
     pub quota_enabled: bool,
     pub quota_mb: u64,
     pub quota_hours: u64,
+    /// Blank uses the program's own name.
+    pub user_agent: String,
+    pub proxy_choice: ProxyChoice,
+    pub proxy_url: String,
+    pub proxy_username: String,
+    pub proxy_exceptions: String,
+    pub ftp_passive: bool,
+    pub server_rules: Vec<ServerRule>,
+    pub site_logins: Vec<SiteLogin>,
+    pub scan_enabled: bool,
+    pub scanner_path: String,
+    pub scanner_arguments: String,
+    pub sounds: Sounds,
 }
 
 impl Default for Settings {
@@ -90,6 +136,18 @@ impl Default for Settings {
             quota_enabled: false,
             quota_mb: 1024,
             quota_hours: 1,
+            user_agent: String::new(),
+            proxy_choice: ProxyChoice::default(),
+            proxy_url: String::new(),
+            proxy_username: String::new(),
+            proxy_exceptions: String::new(),
+            ftp_passive: true,
+            server_rules: Vec::new(),
+            site_logins: Vec::new(),
+            scan_enabled: false,
+            scanner_path: DEFAULT_SCANNER.to_owned(),
+            scanner_arguments: DEFAULT_ARGUMENTS.to_owned(),
+            sounds: Sounds::default(),
         }
     }
 }

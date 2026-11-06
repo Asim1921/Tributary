@@ -24,6 +24,10 @@ pub enum Error {
     QueueNotFound(QueueId),
     #[error("{0}")]
     Request(String),
+    #[error("{}", crate::remote::LOGIN_NEEDED)]
+    LoginRequired,
+    #[error("the proxy address isn't valid: {0}")]
+    InvalidProxy(String),
     #[error("the database was created by a newer version of this program")]
     NewerDatabase,
     #[error("database error: {0}")]

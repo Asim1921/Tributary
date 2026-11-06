@@ -6,14 +6,18 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+base64 = "0.22"
+bytes = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+md-5 = "0.10"
 percent-encoding = "2"
 # native-tls uses Windows' own TLS and certificate store, and needs no extra build
 # tools. HTTP/2 stays off on purpose: it shares one TCP connection, and the speed
 # gain here comes from running several.
-reqwest = { version = "0.13", default-features = false, features = ["native-tls", "system-proxy"] }
+reqwest = { version = "0.13", default-features = false, features = ["native-tls", "socks", "system-proxy"] }
 rusqlite = { version = "0.41", features = ["bundled"] }
 serde_json.workspace = true
+sha2.workspace = true
 thiserror = "2"
 tokio.workspace = true
 tokio-util = "0.7"
@@ -25,6 +29,5 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
-sha2.workspace = true
 tempfile = "3"
 testserver = { path = "../testserver" }

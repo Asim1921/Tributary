@@ -134,6 +134,7 @@ describe('isDownloadableUrl', () => {
   it('accepts web addresses', () => {
     expect(isDownloadableUrl('https://x.test/a.zip')).toBe(true);
     expect(isDownloadableUrl('  http://x.test/a.zip  ')).toBe(true);
+    expect(isDownloadableUrl('ftp://x.test/a.zip')).toBe(true);
   });
 
   it('refuses everything else', () => {

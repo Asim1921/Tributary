@@ -1,6 +1,6 @@
 //! The server: accepts connections, applies scenarios and records what happened.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{self, Write};
 use std::net::{Ipv4Addr, SocketAddr};
@@ -9,6 +9,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
+use md5::{Digest as _, Md5};
 use serde::Serialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -31,6 +34,9 @@ const LAST_MODIFIED: [&str; 2] = [
 
 const INDEX_PAGE: &str = include_str!("index.html");
 
+const DIGEST_REALM: &str = "test";
+const DIGEST_NONCE: &str = "test-nonce";
+
 /// Where to listen and where to write the request log.
 #[derive(Debug, Clone, Default)]
 pub struct Config {
@@ -38,6 +44,8 @@ pub struct Config {
     pub port: u16,
     /// Appends one JSON object per request to this file.
     pub log_path: Option<PathBuf>,
+    /// A `user:password` a client must give when using this server as a proxy.
+    pub proxy_login: Option<String>,
 }
 
 /// How a response ended.
@@ -82,6 +90,8 @@ struct Counters {
     visits: u32,
     drops: u32,
     active: u32,
+    /// Digest request counts already used, to catch replayed requests.
+    digest_counts: HashSet<u32>,
 }
 
 /// Holds one of a URL's concurrent response slots until dropped.
@@ -110,6 +120,7 @@ struct State {
     counters: Mutex<HashMap<String, Counters>>,
     records: Mutex<Vec<Record>>,
     log: Option<Mutex<File>>,
+    proxy_login: Option<String>,
 }
 
 impl State {
@@ -133,6 +144,54 @@ impl State {
             state: self,
             target,
         })
+    }
+
+    /// Checks a Digest login, written out independently of the client under test. A
+    /// count can't be used twice. Parallel requests may arrive in any order.
+    fn digest_accepted(&self, head: &RequestHead, expected: &str) -> bool {
+        let Some(value) = head.header("authorization") else {
+            return false;
+        };
+        let Some(parameters) = value.strip_prefix("Digest ") else {
+            return false;
+        };
+        let find = |wanted: &str| {
+            parameters.split(", ").find_map(|pair| {
+                let (name, value) = pair.split_once('=')?;
+                (name == wanted).then(|| value.trim_matches('"').to_owned())
+            })
+        };
+
+        let (Some(uri), Some(response), Some(count), Some(client_nonce)) =
+            (find("uri"), find("response"), find("nc"), find("cnonce"))
+        else {
+            return false;
+        };
+        let Some((user, password)) = expected.split_once(':') else {
+            return false;
+        };
+
+        let hash = |text: String| {
+            Md5::digest(text)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        };
+        let secret = hash(format!("{user}:{DIGEST_REALM}:{password}"));
+        let request = hash(format!("GET:{uri}"));
+        let correct = hash(format!(
+            "{secret}:{DIGEST_NONCE}:{count}:{client_nonce}:auth:{request}"
+        ));
+        if response != correct || uri != head.target {
+            return false;
+        }
+
+        let Ok(count) = u32::from_str_radix(&count, 16) else {
+            return false;
+        };
+        let mut counters = self.counters.lock().unwrap_or_else(PoisonError::into_inner);
+        let entry = counters.entry(head.target.clone()).or_default();
+        entry.digest_counts.insert(count)
     }
 
     /// Claims one of the scenario's drops, if any are left for this URL.
@@ -188,6 +247,7 @@ impl TestServer {
             counters: Mutex::default(),
             records: Mutex::default(),
             log,
+            proxy_login: config.proxy_login,
         });
 
         let accept_loop = tokio::spawn(accept_connections(listener, Arc::clone(&state)));
@@ -329,7 +389,22 @@ async fn respond(state: &State, stream: &mut TcpStream, head: &RequestHead) -> S
         return served;
     }
 
-    let (path, query) = head.target.split_once('?').unwrap_or((&head.target, ""));
+    // A client using this server as a proxy sends the full address.
+    let target = match head.target.strip_prefix("http://") {
+        Some(rest) => {
+            if let Some(expected) = &state.proxy_login {
+                let wanted = format!("Basic {}", STANDARD.encode(expected));
+                if head.header("proxy-authorization") != Some(wanted.as_str()) {
+                    let headers = [("Proxy-Authenticate", "Basic realm=\"proxy\"".to_owned())];
+                    return send_small(stream, head, 407, &headers, b"").await;
+                }
+            }
+            rest.find('/').map_or("/", |index| &rest[index..])
+        }
+        None => &head.target,
+    };
+
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
     match path {
         "/" => {
             let headers = [("Content-Type", "text/html; charset=utf-8".to_owned())];
@@ -373,6 +448,23 @@ async fn serve_file(
         if !cookies.split(';').any(|cookie| cookie.trim() == required) {
             return send_small(stream, head, 403, &[], b"cookie required\n").await;
         }
+    }
+
+    if let Some(expected) = &scenario.basic {
+        let wanted = format!("Basic {}", STANDARD.encode(expected));
+        if head.header("authorization") != Some(wanted.as_str()) {
+            let headers = [("WWW-Authenticate", "Basic realm=\"test\"".to_owned())];
+            return send_small(stream, head, 401, &headers, b"login required\n").await;
+        }
+    }
+
+    if let Some(expected) = &scenario.digest
+        && !state.digest_accepted(head, expected)
+    {
+        let challenge =
+            format!("Digest realm=\"{DIGEST_REALM}\", nonce=\"{DIGEST_NONCE}\", qop=\"auth\"");
+        let headers = [("WWW-Authenticate", challenge)];
+        return send_small(stream, head, 401, &headers, b"login required\n").await;
     }
 
     if let Some(status) = scenario.fail.filter(|_| visit <= scenario.fail_times) {

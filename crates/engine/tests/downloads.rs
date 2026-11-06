@@ -501,7 +501,7 @@ async fn inspecting_reports_the_file_without_downloading_it() {
 
     let info = fixture
         .engine
-        .inspect(&fixture.server.url("/file/3M.bin"), &[])
+        .inspect(&fixture.server.url("/file/3M.bin"), &[], None)
         .await
         .unwrap();
     assert_eq!(info.file_name, "3M.bin");
@@ -510,14 +510,14 @@ async fn inspecting_reports_the_file_without_downloading_it() {
 
     let single = fixture
         .engine
-        .inspect(&fixture.server.url("/file/3M.bin?ranges=0"), &[])
+        .inspect(&fixture.server.url("/file/3M.bin?ranges=0"), &[], None)
         .await
         .unwrap();
     assert!(!single.resumable);
 
     let missing = fixture
         .engine
-        .inspect(&fixture.server.url("/missing"), &[])
+        .inspect(&fixture.server.url("/missing"), &[], None)
         .await;
     assert!(matches!(missing, Err(Error::Request(reason)) if reason.contains("404")));
 }
@@ -1201,14 +1201,14 @@ async fn inspecting_a_web_page_says_so() {
 
     let page = fixture
         .engine
-        .inspect(&fixture.server.url("/"), &[])
+        .inspect(&fixture.server.url("/"), &[], None)
         .await
         .unwrap();
     assert!(page.is_web_page);
 
     let file = fixture
         .engine
-        .inspect(&fixture.server.url("/file/1K.zip"), &[])
+        .inspect(&fixture.server.url("/file/1K.zip"), &[], None)
         .await
         .unwrap();
     assert!(!file.is_web_page);
@@ -1250,7 +1250,11 @@ async fn reports_progress_and_state_changes() {
 #[tokio::test(flavor = "multi_thread")]
 async fn rejects_urls_it_cannot_download() {
     let fixture = fixture().await;
-    for url in ["not a url", "ftp://x.test/a", "file:///C:/Windows/win.ini"] {
+    for url in [
+        "not a url",
+        "gopher://x.test/a",
+        "file:///C:/Windows/win.ini",
+    ] {
         let result = fixture.engine.add(NewDownload {
             url: url.to_owned(),
             ..NewDownload::default()

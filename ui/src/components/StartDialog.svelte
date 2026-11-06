@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
 
-  import { inspectUrl, pickFolder, suggestCategory } from '../lib/api';
+  import { LOGIN_NEEDED, inspectUrl, pickFolder, suggestCategory } from '../lib/api';
   import { formatBytes } from '../lib/format';
   import type { AddRequest, Category, FileInfo, Queue } from '../lib/types';
   import Modal from './Modal.svelte';
@@ -25,6 +25,10 @@
   let description = $state('');
   let category = $state('');
   let queueId = $state(1);
+  let needsLogin = $state(false);
+  let username = $state('');
+  let password = $state('');
+  let rememberLogin = $state(false);
 
   // The check finishes after the dialog opens, and must never overwrite what's been typed.
   let nameEdited = false;
@@ -32,8 +36,10 @@
   let categoryEdited = false;
 
   async function check() {
+    checking = true;
+    problem = null;
     try {
-      const found = await inspectUrl(url);
+      const found = await inspectUrl(url, username || undefined, password || undefined);
       info = found;
       if (!nameEdited) fileName = found.fileName;
 
@@ -41,6 +47,7 @@
       if (!categoryEdited) category = suggestion.name ?? '';
       if (!folderEdited) folder = suggestion.folder;
     } catch (error) {
+      needsLogin = needsLogin || String(error) === LOGIN_NEEDED;
       problem = String(error);
     } finally {
       checking = false;
@@ -75,6 +82,9 @@
       category: category || null,
       paused: later,
       queueId: later ? queueId : null,
+      username: username || undefined,
+      password: password || undefined,
+      rememberLogin,
     });
   }
 </script>
@@ -95,6 +105,28 @@
       <span class="error-text">Couldn't check this file: {problem}</span>
     {/if}
   </div>
+
+  {#if needsLogin}
+    <div class="login">
+      <div class="pair">
+        <label class="field">
+          User name
+          <input type="text" bind:value={username} autocomplete="off" />
+        </label>
+        <label class="field">
+          Password
+          <input type="password" bind:value={password} autocomplete="off" />
+        </label>
+      </div>
+      <div class="login-actions">
+        <label class="check">
+          <input type="checkbox" bind:checked={rememberLogin} />
+          Remember for this site
+        </label>
+        <button type="button" disabled={checking || !username} onclick={check}>Try again</button>
+      </div>
+    </div>
+  {/if}
 
   {#if info?.isWebPage}
     <p class="warning" role="alert">
@@ -173,6 +205,20 @@
     color: var(--warn);
     border: 1px solid var(--warn);
     border-radius: 6px;
+  }
+
+  .login {
+    margin-bottom: 12px;
+    padding: 10px 12px 2px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+  }
+
+  .login-actions {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 8px;
   }
 
   .field-block {

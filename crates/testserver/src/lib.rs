@@ -8,8 +8,12 @@
 //! their checksums are known in advance. See [`scenario`] for the fault options.
 
 pub mod content;
+pub mod ftp;
 pub mod http;
 pub mod scenario;
 pub mod server;
+pub mod socks;
 
+pub use ftp::{FtpConfig, FtpServer};
 pub use server::{Config, Outcome, Record, TestServer};
+pub use socks::SocksProxy;

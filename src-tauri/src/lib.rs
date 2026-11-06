@@ -2,14 +2,17 @@
 
 mod after_queue;
 mod commands;
+mod data;
 mod rules;
+mod scanner;
+mod secrets;
 mod settings;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use engine::{Config, Engine, Event, QueueId};
+use engine::{Config, DownloadId, Engine, Event, QueueId, State};
 use serde::Serialize;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -19,7 +22,8 @@ use tokio::sync::broadcast::error::RecvError;
 
 use crate::after_queue::{AfterAction, SHUTDOWN_DELAY_SECONDS, WakeTimer};
 use crate::commands::{AppState, apply_to_engine, state_name};
-use crate::settings::Settings;
+use crate::scanner::ScanResult;
+use crate::settings::{Settings, Sounds};
 
 /// How often the wake timer is brought up to date.
 const WAKE_TIMER_REFRESH: Duration = Duration::from_secs(60);
@@ -116,6 +120,64 @@ fn build_tray(app: &App) -> tauri::Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScanPayload {
+    id: i64,
+    file: String,
+    /// Empty when the file is clean.
+    problem: String,
+}
+
+/// Runs the virus scanner on a finished file, if that's turned on.
+fn scan_finished_file(app: &AppHandle, id: DownloadId) {
+    let state = app.state::<AppState>();
+    let settings = state
+        .settings
+        .lock()
+        .map(|settings| settings.clone())
+        .unwrap_or_default();
+    if !settings.scan_enabled {
+        return;
+    }
+    let Some(path) = state
+        .engine
+        .get(id)
+        .ok()
+        .and_then(|download| download.final_path)
+    else {
+        return;
+    };
+
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = scanner::scan(&settings.scanner_path, &settings.scanner_arguments, &path);
+        let problem = match result {
+            ScanResult::Clean => String::new(),
+            ScanResult::Flagged(code) => format!("the scanner reported a problem (code {code})"),
+            ScanResult::Failed(reason) => format!("the scanner couldn't run: {reason}"),
+        };
+        let _ = handle.emit(
+            "scan-finished",
+            ScanPayload {
+                id: id.0,
+                file: path.to_string_lossy().into_owned(),
+                problem,
+            },
+        );
+    });
+}
+
+/// Plays the sound the user chose for an event, if any.
+fn play_event_sound(app: &AppHandle, choose: impl Fn(&Sounds) -> &str) {
+    if let Ok(settings) = app.state::<AppState>().settings.lock() {
+        let sound = choose(&settings.sounds);
+        if !sound.is_empty() {
+            scanner::play_sound(sound);
+        }
+    }
+}
+
 /// Carries out what a queue was set to do when it ends.
 fn run_after_action(app: &AppHandle, id: QueueId) {
     let state = app.state::<AppState>();
@@ -176,11 +238,20 @@ fn forward_events(app: AppHandle, engine: &Engine) {
                             state: state_name(state),
                         },
                     );
+                    match state {
+                        State::Completed => {
+                            play_event_sound(&app, |sounds| &sounds.complete);
+                            scan_finished_file(&app, id);
+                        }
+                        State::Failed => play_event_sound(&app, |sounds| &sounds.failed),
+                        State::Running | State::Paused => {}
+                    }
                 }
                 Ok(Event::Queues) => {
                     let _ = app.emit("queues-changed", ());
                 }
                 Ok(Event::QueueFinished { id }) => {
+                    play_event_sound(&app, |sounds| &sounds.queue);
                     run_after_action(&app, id);
                     let _ = app.emit("queues-changed", ());
                 }
@@ -204,7 +275,8 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
 
     let settings = Settings::load(&settings_path, &default_download_dir);
     let engine = Engine::open(&data_dir.join("downloads.db"), Config::default())?;
-    apply_to_engine(&engine, &settings);
+    // A bad saved proxy shouldn't stop the app opening. Options can correct it.
+    let _ = apply_to_engine(&engine, &settings);
     forward_events(app.handle().clone(), &engine);
 
     let scheduler = engine.clone();
@@ -216,6 +288,7 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
         settings_path,
         wake_timer: WakeTimer::new(),
     });
+    app.state::<AppState>().attach_site_logins();
     build_tray(app)?;
 
     let handle = app.handle().clone();
@@ -292,6 +365,13 @@ pub fn run() {
             commands::set_download_queue,
             commands::reorder_queue,
             commands::cancel_shutdown,
+            commands::login_and_resume,
+            commands::save_site_login,
+            commands::delete_site_login,
+            commands::set_proxy_password,
+            commands::play_sound,
+            commands::export_data,
+            commands::import_data,
         ])
         .run(tauri::generate_context!());
 
