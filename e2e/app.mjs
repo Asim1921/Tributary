@@ -27,6 +27,8 @@ import { chromium } from 'playwright-core';
 const ROOT = resolve(import.meta.dirname, '..');
 const APP = process.env.E2E_APP ?? join(ROOT, 'target', 'release', 'tributary.exe');
 const SERVER = join(ROOT, 'target', 'release', 'testserver.exe');
+const HOST = join(ROOT, 'target', 'release', 'tributary-host.exe');
+const PIPE = `\\\\.\\pipe\\tributary-e2e-${process.pid}`;
 const SERVER_PORT = 8791;
 const DEBUG_PORT = 9333;
 const BASE = `http://127.0.0.1:${SERVER_PORT}`;
@@ -108,6 +110,36 @@ async function addThroughDialogs(page, url) {
 
 const rowFor = (page, name) => page.locator('tbody tr', { hasText: name });
 
+/** Sends one message through the real host program, exactly as a browser does. */
+function askHost(message, env = { ...process.env, TRIBUTARY_PIPE: PIPE }) {
+  return new Promise((resolve, reject) => {
+    const host = spawn(HOST, [], { stdio: ['pipe', 'pipe', 'ignore'], env });
+    const chunks = [];
+
+    host.stdout.on('data', (data) => {
+      chunks.push(data);
+      const bytes = Buffer.concat(chunks);
+      if (bytes.length >= 4 && bytes.length >= 4 + bytes.readUInt32LE(0)) {
+        host.stdin.end();
+        resolve(JSON.parse(bytes.subarray(4, 4 + bytes.readUInt32LE(0)).toString()));
+      }
+    });
+    host.on('error', reject);
+
+    const body = Buffer.from(JSON.stringify(message));
+    const length = Buffer.alloc(4);
+    length.writeUInt32LE(body.length);
+    host.stdin.write(Buffer.concat([length, body]));
+  });
+}
+
+/** Runs a PowerShell clipboard command. Clipboard access needs a single-threaded host. */
+function clipboard(command) {
+  return execFileSync('pwsh', ['-NoProfile', '-STA', '-Command', command], {
+    encoding: 'utf8',
+  }).trim();
+}
+
 const RUN_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
 
 /** What Windows will run at sign-in for this app, or an empty string if nothing. */
@@ -136,16 +168,18 @@ try {
     server.on('exit', () => reject(new Error('the test server stopped')));
   });
 
-  app = spawn(APP, [], {
-    stdio: 'ignore',
-    env: {
-      ...process.env,
-      TRIBUTARY_DATA_DIR: dataDir,
-      TRIBUTARY_ALLOW_SECOND_COPY: '1',
-      WEBVIEW2_USER_DATA_FOLDER: join(dataDir, 'webview'),
-      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${DEBUG_PORT}`,
-    },
-  });
+  const appEnv = {
+    ...process.env,
+    TRIBUTARY_DATA_DIR: dataDir,
+    TRIBUTARY_PIPE: PIPE,
+    WEBVIEW2_USER_DATA_FOLDER: join(dataDir, 'webview'),
+    WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${DEBUG_PORT}`,
+  };
+  app = spawn(APP, [], { stdio: 'ignore', env: appEnv });
+
+  /** Starts the app a second time, which passes its command line to the running copy. */
+  const launch = (...args) =>
+    execFileSync(APP, args, { env: appEnv, stdio: 'ignore', timeout: 15_000 });
 
   const { connected, page } = await connect();
   browser = connected;
@@ -634,8 +668,360 @@ try {
     await page.getByRole('button', { name: 'Close' }).click();
   });
 
+  await step('the host program reports the capture settings', async () => {
+    await inOptions('Downloads', () => page.getByLabel('Ask before starting a download').check());
+
+    const reply = await askHost({ type: 'settings' });
+
+    assert.equal(reply.ok, true);
+    assert.equal(reply.enabled, true);
+    assert.ok(reply.fileTypes.includes('zip'));
+    assert.equal(reply.forceKey, 'ctrl');
+    assert.equal(reply.skipKey, 'alt');
+  });
+
+  await step('a captured download keeps its cookies, without the window ever seeing them', async () => {
+    const reply = await askHost({
+      type: 'download',
+      url: `${BASE}/file/2M.cap?require_cookie=session%3D%63aptured-cookie-7`,
+      cookies: 'session=captured-cookie-7',
+      userAgent: 'Test Browser/1.0',
+      referrer: `${BASE}/`,
+      fileName: '2M.cap',
+    });
+    assert.equal(reply.ok, true);
+
+    await page.getByRole('heading', { name: 'Download file' }).waitFor();
+    await page.getByRole('dialog').getByText('2.0 MB').waitFor();
+    assert.ok(
+      !(await page.content()).includes('captured-cookie-7'),
+      'the cookie reached the window',
+    );
+    await shot(page, '12-captured');
+
+    await page.getByRole('button', { name: 'Start download' }).click();
+    await page.getByRole('heading', { name: 'Download complete' }).waitFor();
+    await page.getByRole('button', { name: 'Close' }).click();
+    assert.equal(await sha256(join(downloadDir, '2M.cap')), expectedSha256('2M.cap'));
+
+    const database = readFileSync(join(dataDir, 'downloads.db'));
+    assert.ok(!database.includes('captured-cookie-7'), 'the cookie reached the database');
+  });
+
+  await step('declining a captured download forgets it', async () => {
+    await askHost({ type: 'download', url: `${BASE}/file/1M.declined` });
+    await page.getByRole('heading', { name: 'Download file' }).waitFor();
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    await page.getByRole('dialog').waitFor({ state: 'hidden' });
+    assert.equal(await rowFor(page, '1M.declined').count(), 0);
+  });
+
+  await step('several links can be chosen from', async () => {
+    await inOptions('Downloads', () =>
+      page.getByLabel('Show a message when a download finishes').uncheck(),
+    );
+
+    const reply = await askHost({
+      type: 'batch',
+      items: ['1M.ba', '1M.bb', '1M.bc'].map((name) => ({ url: `${BASE}/file/${name}` })),
+    });
+    assert.equal(reply.ok, true);
+
+    await page.getByRole('heading', { name: 'Download links' }).waitFor();
+    await page.getByRole('checkbox', { name: '1M.bc' }).uncheck();
+    await shot(page, '13-batch');
+    await page.getByRole('button', { name: 'Start now' }).click();
+
+    await rowFor(page, '1M.ba').getByText('Complete').waitFor();
+    await rowFor(page, '1M.bb').getByText('Complete').waitFor();
+    assert.equal(await rowFor(page, '1M.bc').count(), 0, 'the unchecked link was downloaded');
+    assert.equal(await sha256(join(downloadDir, '1M.ba')), expectedSha256('1M.ba'));
+  });
+
+  await step('the host refuses what it should', async () => {
+    for (const url of ['file:///C:/Windows/win.ini', 'javascript:alert(1)', 'not a url']) {
+      const reply = await askHost({ type: 'download', url });
+      assert.equal(reply.ok, false, `${url} was accepted`);
+    }
+    assert.equal((await askHost({ type: 'nonsense' })).ok, false);
+    assert.equal(await page.getByRole('dialog').count(), 0, 'nothing should have opened');
+  });
+
+  await step('a link dragged onto the window starts a download', async () => {
+    await page.evaluate((url) => {
+      const data = new DataTransfer();
+      data.setData('text/uri-list', url);
+      window.dispatchEvent(new DragEvent('drop', { dataTransfer: data, bubbles: true }));
+    }, `${BASE}/file/1M.dragged`);
+
+    await page.getByRole('heading', { name: 'Download file' }).waitFor();
+    await page.getByRole('dialog').getByText('1.0 MB').waitFor();
+    await page.getByRole('button', { name: 'Cancel' }).click();
+  });
+
+  await step('the drop target window works', async () => {
+    await inOptions('Browser', () => page.getByLabel('Show a small window to drop links on').check());
+
+    let target;
+    for (let attempt = 0; attempt < 50 && !target; attempt += 1) {
+      target = browser.contexts()[0].pages().find((item) => item.url().endsWith('#drop'));
+      if (!target) await sleep(100);
+    }
+    assert.ok(target, 'the drop target window never opened');
+
+    await target.getByRole('region', { name: 'Drop a link here' }).waitFor();
+    await target.evaluate((url) => {
+      const data = new DataTransfer();
+      data.setData('text/uri-list', url);
+      document
+        .querySelector('.target')
+        .dispatchEvent(new DragEvent('drop', { dataTransfer: data, bubbles: true }));
+    }, `${BASE}/file/1M.droptarget`);
+
+    await page.getByRole('heading', { name: 'Download file' }).waitFor();
+    await page.getByRole('button', { name: 'Cancel' }).click();
+
+    await inOptions('Browser', () =>
+      page.getByLabel('Show a small window to drop links on').uncheck(),
+    );
+  });
+
+  await step('a copied link is offered, and the clipboard is put back', async () => {
+    const kind = clipboard(
+      `Add-Type -AssemblyName System.Windows.Forms;
+       $c = [System.Windows.Forms.Clipboard];
+       if ($c::ContainsImage() -or $c::ContainsFileDropList()) { 'other' }
+       elseif ($c::ContainsText()) { 'text' } else { 'empty' }`,
+    );
+    if (kind === 'other') {
+      console.log('     skipped: something other than text is on the clipboard');
+      return;
+    }
+    const before = kind === 'text' ? clipboard('Get-Clipboard -Raw') : null;
+
+    try {
+      await inOptions('Browser', () =>
+        page.getByLabel('Offer to download links copied to the clipboard').check(),
+      );
+
+      clipboard(`Set-Clipboard -Value '${BASE}/file/1M.zip'`);
+      await page.getByRole('heading', { name: 'Download file' }).waitFor({ timeout: 8000 });
+      await page.getByRole('button', { name: 'Cancel' }).click();
+
+      // Ordinary text must not open anything.
+      clipboard("Set-Clipboard -Value 'just some ordinary copied words'");
+      await sleep(2500);
+      assert.equal(await page.getByRole('dialog').count(), 0);
+
+      await inOptions('Browser', () =>
+        page.getByLabel('Offer to download links copied to the clipboard').uncheck(),
+      );
+    } finally {
+      if (before === null) {
+        clipboard("Set-Clipboard -Value $null");
+      } else {
+        writeFileSync(join(dataDir, 'clipboard.txt'), before);
+        clipboard(`Get-Content -Raw -LiteralPath '${join(dataDir, 'clipboard.txt')}' | Set-Clipboard`);
+      }
+    }
+  });
+
+  await step('a second launch hands its command line to the running app', async () => {
+    await inOptions('Downloads', () =>
+      page.getByLabel('Show a message when a download finishes').uncheck(),
+    );
+
+    const folder = join(dataDir, 'from-command-line');
+    mkdirSync(folder);
+    launch('--add', `${BASE}/file/1M.cli`, '--folder', folder, '--name', 'named.bin', '--silent');
+    await rowFor(page, 'named.bin').getByText('Complete').waitFor();
+    assert.equal(await sha256(join(folder, 'named.bin')), expectedSha256('1M.cli'));
+
+    // Without --silent the user still gets to decide.
+    launch('--add', `${BASE}/file/1M.asked`);
+    await page.getByRole('heading', { name: 'Download file' }).waitFor();
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    await page.getByRole('dialog').waitFor({ state: 'hidden' });
+
+    // --later waits in the main queue until the queue is started.
+    launch('--add', `${BASE}/file/1M.queued`, '--later');
+    const queued = rowFor(page, '1M.queued');
+    await queued.waitFor();
+    await sleep(1000);
+    assert.notEqual(await queued.getAttribute('data-state'), 'completed');
+
+    launch('--start-queue');
+    await queued.getByText('Complete').waitFor();
+
+    // A bad command line is ignored rather than breaking the running app.
+    launch('--nonsense');
+    await sleep(300);
+    assert.equal(app.exitCode, null);
+  });
+
+  await step('only finished rows can be dragged out, and nothing moves without a held button', async () => {
+    const invoke = (command, args) =>
+      page.evaluate(([name, values]) => window.__TAURI_INTERNALS__.invoke(name, values), [command, args]);
+
+    const gone = rowFor(page, '1M.gone');
+    assert.equal(await gone.getAttribute('draggable'), 'true');
+
+    launch('--add', `${BASE}/file/1M.undone`, '--later');
+    const undone = rowFor(page, '1M.undone');
+    await undone.waitFor();
+    assert.equal(await undone.getAttribute('draggable'), 'false');
+
+    // Starting a drag reaches the app, which explains that the file has gone.
+    await gone.dispatchEvent('dragstart');
+    await page.getByRole('heading', { name: 'Something went wrong' }).waitFor();
+    await page.getByText('no longer there', { exact: false }).waitFor();
+    await page.getByRole('button', { name: 'Close' }).click();
+
+    await assert.rejects(invoke('drag_files', { ids: [999_999] }), /no longer there/);
+
+    // With no button held Windows would drop straight onto whatever is under the cursor,
+    // so this must return without doing anything. A hang here would mean a stuck window.
+    const rows = await invoke('list_downloads');
+    const present = rows.find(
+      (row) => row.state === 'completed' && row.finalPath && existsSync(row.finalPath),
+    );
+    assert.ok(present, 'this check needs a finished file');
+    const answered = await Promise.race([
+      invoke('drag_files', { ids: [present.id] }).then(() => 'returned'),
+      sleep(5000).then(() => 'hung'),
+    ]);
+    assert.equal(answered, 'returned');
+    assert.ok(existsSync(present.finalPath), 'the file should not have moved');
+  });
+
+  await step('the app stays open after a command line download if something else is running', async () => {
+    launch('--add', `${BASE}/file/40M.busy?rate=2M`, '--folder', downloadDir, '--silent');
+    await rowFor(page, '40M.busy').getByText('Downloading').waitFor();
+
+    const url = `${BASE}/file/1M.notlast`;
+    launch('--add', url, '--folder', downloadDir, '--silent', '--quit-when-done');
+    await rowFor(page, '1M.notlast').getByText('Complete').waitFor();
+    await sleep(1500);
+    assert.equal(app.exitCode, null, 'the app closed during another download');
+
+    await page.evaluate(() => window.__TAURI_INTERNALS__.invoke('stop_all'));
+  });
+
   await step('no script error happened anywhere in the run', async () => {
     assert.deepEqual(pageErrors, []);
+  });
+
+  await step('a file sent while the app is still starting is not lost', async () => {
+    const earlyData = join(dataDir, 'early-data');
+    mkdirSync(earlyData);
+    writeFileSync(join(earlyData, 'settings.json'), JSON.stringify({ downloadDir }));
+
+    const early = spawn(APP, ['--add', `${BASE}/file/1M.early`], {
+      stdio: 'ignore',
+      env: {
+        ...process.env,
+        TRIBUTARY_DATA_DIR: earlyData,
+        TRIBUTARY_PIPE: `${PIPE}-early`,
+        WEBVIEW2_USER_DATA_FOLDER: join(earlyData, 'webview'),
+        WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${DEBUG_PORT + 1}`,
+      },
+    });
+
+    let earlyBrowser;
+    try {
+      for (let attempt = 0; attempt < 60 && !earlyBrowser; attempt += 1) {
+        earlyBrowser = await chromium
+          .connectOverCDP(`http://127.0.0.1:${DEBUG_PORT + 1}`)
+          .catch(() => null);
+        if (!earlyBrowser) await sleep(250);
+      }
+      assert.ok(earlyBrowser, 'the second app never answered');
+
+      const earlyPage = earlyBrowser.contexts()[0].pages()[0];
+      await earlyPage.getByRole('heading', { name: 'Download file' }).waitFor({ timeout: 10_000 });
+      await earlyPage.getByRole('dialog').getByText('1.0 MB').waitFor();
+    } finally {
+      await earlyBrowser?.close().catch(() => {});
+      early.kill();
+    }
+  });
+
+  await step('the browser host starts a closed app, and the download reaches it', async () => {
+    const coldData = join(dataDir, 'cold-data');
+    const coldPort = DEBUG_PORT + 2;
+    mkdirSync(coldData);
+    writeFileSync(join(coldData, 'settings.json'), JSON.stringify({ downloadDir }));
+    const coldEnv = {
+      ...process.env,
+      TRIBUTARY_DATA_DIR: coldData,
+      TRIBUTARY_PIPE: `${PIPE}-cold`,
+      WEBVIEW2_USER_DATA_FOLDER: join(coldData, 'webview'),
+      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${coldPort}`,
+    };
+
+    let coldBrowser;
+    try {
+      // The host finds the app beside itself, as it does in a real install.
+      const reply = await askHost({ type: 'download', url: `${BASE}/file/1M.cold` }, coldEnv);
+      assert.equal(reply.ok, true, JSON.stringify(reply));
+
+      for (let attempt = 0; attempt < 60 && !coldBrowser; attempt += 1) {
+        coldBrowser = await chromium.connectOverCDP(`http://127.0.0.1:${coldPort}`).catch(() => null);
+        if (!coldBrowser) await sleep(250);
+      }
+      assert.ok(coldBrowser, 'the host never started the app');
+
+      const coldPage = coldBrowser.contexts()[0].pages()[0];
+      await coldPage.getByRole('heading', { name: 'Download file' }).waitFor({ timeout: 10_000 });
+      await coldPage.getByRole('dialog').getByText('1.0 MB').waitFor();
+    } finally {
+      await coldBrowser?.close().catch(() => {});
+      // The host started it, so this test has no handle to close it with.
+      execFileSync(
+        APP,
+        ['--add', `${BASE}/file/1M.closing`, '--silent', '--quit-when-done'],
+        { env: coldEnv, stdio: 'ignore', timeout: 15_000 },
+      );
+    }
+
+    let closed = false;
+    for (let attempt = 0; attempt < 40 && !closed; attempt += 1) {
+      closed = await fetch(`http://127.0.0.1:${coldPort}/json`).then(() => false, () => true);
+      if (!closed) await sleep(250);
+    }
+    assert.ok(closed, 'the app the host started never closed');
+  });
+
+  await step('a script can download a file with no window, and the app then closes', async () => {
+    const folder = join(dataDir, 'script-files');
+    const scriptData = join(dataDir, 'script-data');
+    mkdirSync(folder);
+    mkdirSync(scriptData);
+    writeFileSync(join(scriptData, 'settings.json'), JSON.stringify({ downloadDir: folder }));
+
+    const scripted = spawn(
+      APP,
+      ['--add', `${BASE}/file/2M.script`, '--silent', '--quit-when-done', '--minimized'],
+      {
+        stdio: 'ignore',
+        env: {
+          ...process.env,
+          TRIBUTARY_DATA_DIR: scriptData,
+          TRIBUTARY_PIPE: `${PIPE}-script`,
+          WEBVIEW2_USER_DATA_FOLDER: join(scriptData, 'webview'),
+          WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: '',
+        },
+      },
+    );
+
+    const exitCode = await Promise.race([
+      new Promise((done) => scripted.once('exit', done)),
+      sleep(30_000).then(() => 'still running'),
+    ]);
+    if (exitCode === 'still running') scripted.kill();
+
+    assert.equal(exitCode, 0);
+    assert.equal(await sha256(join(folder, '2M.script')), expectedSha256('2M.script'));
   });
 } finally {
   await browser?.close().catch(() => {});

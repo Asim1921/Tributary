@@ -13,7 +13,9 @@ crate-type = ["rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+drag = "2.1.1"
 engine = { path = "../crates/engine" }
+host = { path = "../crates/host" }
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2", features = ["tray-icon"] }
@@ -27,8 +29,14 @@ windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Media_Audio",
     "Win32_Security",
+    "Win32_Security_Authorization",
     "Win32_Security_Credentials",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Registry",
     "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 
 [dev-dependencies]

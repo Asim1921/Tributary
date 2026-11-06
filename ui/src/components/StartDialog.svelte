@@ -8,6 +8,8 @@
 
   interface Props {
     url: string;
+    captureToken?: number;
+    suggestedName?: string | null;
     defaultFolder: string;
     categories: Category[];
     queues: Queue[];
@@ -15,7 +17,8 @@
     onclose: () => void;
   }
 
-  let { url, defaultFolder, categories, queues, onsubmit, onclose }: Props = $props();
+  let { url, captureToken, suggestedName, defaultFolder, categories, queues, onsubmit, onclose }: Props =
+    $props();
 
   let info = $state<FileInfo | null>(null);
   let problem = $state<string | null>(null);
@@ -39,9 +42,14 @@
     checking = true;
     problem = null;
     try {
-      const found = await inspectUrl(url, username || undefined, password || undefined);
+      const found = await inspectUrl(
+        url,
+        username || undefined,
+        password || undefined,
+        captureToken,
+      );
       info = found;
-      if (!nameEdited) fileName = found.fileName;
+      if (!nameEdited) fileName = suggestedName || found.fileName;
 
       const suggestion = await suggestCategory(fileName || found.fileName, url);
       if (!categoryEdited) category = suggestion.name ?? '';
@@ -85,6 +93,7 @@
       username: username || undefined,
       password: password || undefined,
       rememberLogin,
+      captureToken,
     });
   }
 </script>

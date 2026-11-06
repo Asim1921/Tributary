@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
 
   import AddUrlDialog from './components/AddUrlDialog.svelte';
+  import BatchDialog from './components/BatchDialog.svelte';
   import CompleteDialog from './components/CompleteDialog.svelte';
   import ContextMenu, { type MenuItem } from './components/ContextMenu.svelte';
   import DeleteDialog from './components/DeleteDialog.svelte';
@@ -27,14 +28,28 @@
     statusEntries,
     type Filter,
   } from './lib/filters';
-  import { formatSpeed } from './lib/format';
-  import { clickRow, keepExisting, rightClickRow, type SelectionState } from './lib/selection';
+  import { droppedLink, formatSpeed } from './lib/format';
+  import {
+    clickRow,
+    dragIds,
+    keepExisting,
+    rightClickRow,
+    type SelectionState,
+  } from './lib/selection';
   import { resolveToolbar, type ToolbarAction } from './lib/toolbar';
-  import type { AddRequest, DownloadRow, EditRequest, Settings } from './lib/types';
+  import type {
+    AddRequest,
+    CaptureEvent,
+    CaptureItem,
+    DownloadRow,
+    EditRequest,
+    Settings,
+  } from './lib/types';
 
   type Dialog =
     | { kind: 'add' }
-    | { kind: 'start'; url: string }
+    | { kind: 'start'; url: string; token?: number; fileName?: string | null }
+    | { kind: 'batch'; token: number; items: CaptureItem[] }
     | { kind: 'progress'; id: number }
     | { kind: 'properties'; id: number }
     | { kind: 'complete'; id: number }
@@ -55,6 +70,8 @@
   let filter = $state<Filter>(ALL);
   let dialog = $state<Dialog | null>(null);
   let menu = $state<{ x: number; y: number } | null>(null);
+  /** Files from the browser, waiting for a free moment to ask about them. */
+  let captures = $state<CaptureEvent[]>([]);
 
   const rows = $derived(sortRows(filterRows(downloads.rows, filter), order));
   const selectedRows = $derived(rows.filter((row) => selection.selected.has(row.id)));
@@ -92,6 +109,25 @@
     void api.onScanFinished(({ file, problem }) => {
       if (problem) dialog = { kind: 'scan', file, problem };
     });
+    // Listening comes first. The app may have been started just to receive a file.
+    api
+      .onCapture((event) => captures.push(event))
+      .then(() => api.windowReady())
+      .then((missed) => captures.push(...missed))
+      .catch(showError);
+  });
+
+  // Asks about captured files one at a time, when nothing else is open.
+  $effect(() => {
+    if (dialog || captures.length === 0 || !settings) return;
+
+    const event = captures.shift();
+    const first = event?.items[0];
+    if (!event || !first) return;
+
+    dialog = event.batch
+      ? { kind: 'batch', token: event.token, items: event.items }
+      : { kind: 'start', url: first.url, token: event.token, fileName: first.fileName };
   });
 
   // Asks for a login when a download needs one.
@@ -384,6 +420,12 @@
     ];
   });
 
+  function onDrop(event: DragEvent) {
+    event.preventDefault();
+    const url = droppedLink(event.dataTransfer);
+    if (url && !dialog) submitUrl(url);
+  }
+
   function onKeyDown(event: KeyboardEvent) {
     if (dialog) return;
     const typing = event.target instanceof HTMLInputElement;
@@ -414,6 +456,8 @@
 
 <svelte:window
   onkeydown={onKeyDown}
+  ondragover={(event) => event.preventDefault()}
+  ondrop={onDrop}
   oncontextmenu={(event) => {
     if (!(event.target instanceof HTMLInputElement)) event.preventDefault();
   }}
@@ -459,6 +503,10 @@
             );
           }}
           onrowopen={openRow}
+          onrowdrag={(id) => {
+            const ids = dragIds(rows, selection.selected, id);
+            if (ids.length > 0) api.dragFiles(ids).catch(showError);
+          }}
           onrowmenu={(id, event) => {
             selection = rightClickRow(selection, id);
             menu = { x: event.clientX, y: event.clientY };
@@ -490,11 +538,36 @@
 {:else if dialog?.kind === 'start'}
   <StartDialog
     url={dialog.url}
+    captureToken={dialog.token}
+    suggestedName={dialog.fileName}
     {defaultFolder}
     categories={settings?.categories ?? []}
     queues={downloads.queues}
     onsubmit={addDownload}
-    onclose={closeDialog}
+    onclose={() => {
+      const token = dialog?.kind === 'start' ? dialog.token : undefined;
+      closeDialog();
+      if (token !== undefined) void api.discardCapture(token);
+    }}
+  />
+{:else if dialog?.kind === 'batch'}
+  <BatchDialog
+    items={dialog.items}
+    {defaultFolder}
+    queues={downloads.queues}
+    onsubmit={(urls, folder, queueId, later) => {
+      const token = dialog?.kind === 'batch' ? dialog.token : 0;
+      closeDialog();
+      api
+        .addBatch(token, urls, folder, queueId, later)
+        .then(() => downloads.refresh())
+        .catch(showError);
+    }}
+    onclose={() => {
+      const token = dialog?.kind === 'batch' ? dialog.token : 0;
+      closeDialog();
+      void api.discardCapture(token);
+    }}
   />
 {:else if progressRow}
   <ProgressDialog

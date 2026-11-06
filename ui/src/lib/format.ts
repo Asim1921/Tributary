@@ -82,6 +82,16 @@ export function formatDate(secondsSince1970: number | null): string {
   });
 }
 
+/** The link in something dragged from a browser, if there is one. */
+export function droppedLink(data: Pick<DataTransfer, 'getData'> | null): string | null {
+  const text = data?.getData('text/uri-list') || data?.getData('text/plain') || '';
+  const line = text
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .find((item) => item && !item.startsWith('#'));
+  return line && isDownloadableUrl(line) ? line : null;
+}
+
 export function isDownloadableUrl(text: string): boolean {
   try {
     const { protocol } = new URL(text.trim());

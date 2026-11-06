@@ -4,6 +4,7 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 
 import type {
   AddRequest,
+  CaptureEvent,
   CategoryChoice,
   Download,
   EditRequest,
@@ -19,8 +20,12 @@ import type {
 export const LOGIN_NEEDED = 'this site needs a login';
 
 export const listDownloads = () => invoke<Download[]>('list_downloads');
-export const inspectUrl = (url: string, username?: string, password?: string) =>
-  invoke<FileInfo>('inspect_url', { url, username, password });
+export const inspectUrl = (
+  url: string,
+  username?: string,
+  password?: string,
+  captureToken?: number,
+) => invoke<FileInfo>('inspect_url', { url, username, password, captureToken });
 export const addDownload = (request: AddRequest) => invoke<number>('add_download', { request });
 export const pauseDownload = (id: number) => invoke<void>('pause_download', { id });
 export const resumeDownload = (id: number) => invoke<void>('resume_download', { id });
@@ -31,6 +36,8 @@ export const editDownload = (id: number, edit: EditRequest) =>
   invoke<void>('edit_download', { id, edit });
 export const openFile = (id: number) => invoke<void>('open_file', { id });
 export const showInFolder = (id: number) => invoke<void>('show_in_folder', { id });
+export const dragFiles = (ids: number[]) => invoke<void>('drag_files', { ids });
+export const windowReady = () => invoke<CaptureEvent[]>('window_ready');
 export const getSettings = () => invoke<Settings>('get_settings');
 export const saveSettings = (settings: Settings) => invoke<void>('save_settings', { settings });
 export const suggestCategory = (fileName: string, url: string) =>
@@ -57,6 +64,16 @@ export const deleteSiteLogin = (pattern: string) =>
 export const setProxyPassword = (password: string) =>
   invoke<void>('set_proxy_password', { password });
 export const playSound = (path: string) => invoke<boolean>('play_sound', { path });
+export const discardCapture = (token: number) => invoke<void>('discard_capture', { token });
+export const addBatch = (
+  token: number,
+  urls: string[],
+  destDir: string,
+  queueId: number | null,
+  paused: boolean,
+) => invoke<number>('add_batch', { token, urls, destDir, queueId, paused });
+export const extensionFolder = () => invoke<string>('extension_folder');
+export const addDroppedLink = (url: string) => invoke<void>('add_dropped_link', { url });
 export const exportData = (path: string) => invoke<number>('export_data', { path });
 export const importData = (path: string) => invoke<number>('import_data', { path });
 
@@ -68,6 +85,9 @@ export const onState = (handler: (event: StateEvent) => void): Promise<UnlistenF
 
 export const onQueuesChanged = (handler: () => void): Promise<UnlistenFn> =>
   listen('queues-changed', () => handler());
+
+export const onCapture = (handler: (event: CaptureEvent) => void): Promise<UnlistenFn> =>
+  listen<CaptureEvent>('capture', (event) => handler(event.payload));
 
 export const onScanFinished = (handler: (result: ScanResult) => void): Promise<UnlistenFn> =>
   listen<ScanResult>('scan-finished', (event) => handler(event.payload));

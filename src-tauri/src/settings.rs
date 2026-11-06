@@ -111,6 +111,27 @@ pub struct Settings {
     pub scanner_path: String,
     pub scanner_arguments: String,
     pub sounds: Sounds,
+    pub capture_enabled: bool,
+    /// File extensions to take from the browser.
+    pub capture_types: Vec<String>,
+    /// Sites and addresses to leave to the browser.
+    pub capture_exclusions: Vec<String>,
+    /// `ctrl`, `alt`, `shift` or `none`.
+    pub force_key: String,
+    pub skip_key: String,
+    pub watch_clipboard: bool,
+    pub show_drop_target: bool,
+}
+
+fn default_capture_types() -> Vec<String> {
+    [
+        "7z", "aac", "apk", "avi", "bin", "bz2", "deb", "dmg", "doc", "docx", "exe", "flac", "flv",
+        "gz", "img", "iso", "m4a", "m4v", "mkv", "mov", "mp3", "mp4", "msi", "msix", "ogg", "pdf",
+        "ppt", "pptx", "rar", "rpm", "tar", "wav", "webm", "wma", "wmv", "xls", "xlsx", "xz",
+        "zip",
+    ]
+    .map(str::to_owned)
+    .to_vec()
 }
 
 impl Default for Settings {
@@ -148,6 +169,13 @@ impl Default for Settings {
             scanner_path: DEFAULT_SCANNER.to_owned(),
             scanner_arguments: DEFAULT_ARGUMENTS.to_owned(),
             sounds: Sounds::default(),
+            capture_enabled: true,
+            capture_types: default_capture_types(),
+            capture_exclusions: Vec::new(),
+            force_key: "ctrl".to_owned(),
+            skip_key: "alt".to_owned(),
+            watch_clipboard: false,
+            show_drop_target: false,
         }
     }
 }

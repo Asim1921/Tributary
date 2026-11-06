@@ -39,6 +39,19 @@ export function rightClickRow(state: SelectionState, id: number): SelectionState
   return state.selected.has(id) ? state : { selected: new Set([id]), anchor: id };
 }
 
+/**
+ * The finished files a drag from row `id` carries: the whole selection if the row is
+ * part of it, otherwise that row alone. Unfinished files have nothing to hand over yet.
+ */
+export function dragIds(
+  rows: { id: number; state: string }[],
+  selected: Set<number>,
+  id: number,
+): number[] {
+  const carried = selected.has(id) ? selected : new Set([id]);
+  return rows.filter((row) => carried.has(row.id) && row.state === 'completed').map((row) => row.id);
+}
+
 /** Drops ids that have left the list. */
 export function keepExisting(state: SelectionState, ids: number[]): SelectionState {
   const existing = new Set(ids);

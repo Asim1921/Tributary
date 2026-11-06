@@ -1,13 +1,16 @@
 //! The desktop app: connects the download engine to the window and the tray.
 
 mod after_queue;
+mod capture;
 mod commands;
 mod data;
 mod rules;
 mod scanner;
 mod secrets;
 mod settings;
+mod system;
 
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -16,17 +19,25 @@ use engine::{Config, DownloadId, Engine, Event, QueueId, State};
 use serde::Serialize;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{App, AppHandle, Emitter, Manager, WindowEvent};
+use tauri::{App, AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_autostart::MacosLauncher;
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::after_queue::{AfterAction, SHUTDOWN_DELAY_SECONDS, WakeTimer};
-use crate::commands::{AppState, apply_to_engine, state_name};
+use crate::capture::Captured;
+use crate::commands::{AddRequest, AppState, add_download_now, apply_to_engine, state_name};
 use crate::scanner::ScanResult;
 use crate::settings::{Settings, Sounds};
+use crate::system::Invocation;
 
 /// How often the wake timer is brought up to date.
 const WAKE_TIMER_REFRESH: Duration = Duration::from_secs(60);
+
+/// How often the clipboard is checked for changes.
+const CLIPBOARD_INTERVAL: Duration = Duration::from_secs(1);
+
+const HOST_FILE: &str = "tributary-host.exe";
+const DROP_TARGET_WINDOW: &str = "droptarget";
 
 /// Passed when Windows starts the app at sign-in, so it opens in the tray.
 const MINIMIZED_FLAG: &str = "--minimized";
@@ -34,10 +45,6 @@ const MAIN_WINDOW: &str = "main";
 
 /// Keeps data in another folder, so automated tests never touch real downloads.
 const DATA_DIR_VARIABLE: &str = "TRIBUTARY_DATA_DIR";
-
-/// Lets an automated test run beside the user's own copy. Only honoured together with
-/// [`DATA_DIR_VARIABLE`], because a single copy is what protects the shared database.
-const SECOND_COPY_VARIABLE: &str = "TRIBUTARY_ALLOW_SECOND_COPY";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -62,12 +69,113 @@ struct StatePayload {
     state: &'static str,
 }
 
-fn show_main_window(app: &AppHandle) {
+pub(crate) fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
     }
+}
+
+/// Shows or hides the small window links can be dropped on.
+pub(crate) fn sync_drop_target(app: &AppHandle, show: bool) {
+    match (app.get_webview_window(DROP_TARGET_WINDOW), show) {
+        (Some(window), false) => {
+            let _ = window.close();
+        }
+        (None, true) => {
+            let _ = WebviewWindowBuilder::new(
+                app,
+                DROP_TARGET_WINDOW,
+                WebviewUrl::App("index.html#drop".into()),
+            )
+            .title("Tributary drop target")
+            .inner_size(84.0, 84.0)
+            .decorations(false)
+            .resizable(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .disable_drag_drop_handler()
+            .build();
+        }
+        _ => {}
+    }
+}
+
+/// Carries out what a command line asked for. A command line arrives on the main thread,
+/// and starting a download needs the async runtime, which that thread isn't part of.
+fn handle_arguments(app: &AppHandle, arguments: &[String]) {
+    let Ok(invocation) = system::parse_arguments(arguments) else {
+        return;
+    };
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move { carry_out(&app, invocation) });
+}
+
+fn carry_out(app: &AppHandle, invocation: Invocation) {
+    let state = app.state::<AppState>();
+
+    if let Some(add) = invocation.add {
+        let file = Captured {
+            url: add.url,
+            file_name: add.name,
+            folder: add.folder,
+            ..Captured::default()
+        };
+        if add.later {
+            let _ = add_download_now(&state, AddRequest::from_captured(file).later(), Vec::new());
+        } else if add.silent {
+            let added = add_download_now(&state, AddRequest::from_captured(file), Vec::new());
+            if let (true, Ok(id)) = (add.quit_when_done, added) {
+                state.quit_after(id);
+                // A small file can finish before anything was listening for it.
+                let id = DownloadId(id);
+                if state
+                    .engine
+                    .get(id)
+                    .is_ok_and(|download| download.state == State::Completed)
+                {
+                    quit_if_asked(app, id);
+                }
+            }
+        } else {
+            let _ = capture::receive(app, vec![file], false);
+        }
+    }
+
+    if invocation.start_queue {
+        let _ = state.engine.start_queue(QueueId::MAIN);
+    }
+}
+
+/// Offers links copied to the clipboard, if that's turned on.
+fn watch_clipboard(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let mut last_sequence = system::clipboard_sequence();
+        loop {
+            tokio::time::sleep(CLIPBOARD_INTERVAL).await;
+
+            let sequence = system::clipboard_sequence();
+            if sequence == last_sequence {
+                continue;
+            }
+            last_sequence = sequence;
+
+            let settings = app.state::<AppState>().settings_snapshot();
+            if !settings.watch_clipboard {
+                continue;
+            }
+            let link = system::clipboard_text()
+                .and_then(|text| system::download_link(&text, &settings.capture_types));
+            if let Some(url) = link {
+                let file = Captured {
+                    url,
+                    ..Captured::default()
+                };
+                let _ = capture::receive(&app, vec![file], false);
+            }
+        }
+    });
 }
 
 /// Saves progress on every download before leaving.
@@ -77,6 +185,24 @@ fn quit(app: &AppHandle) {
         let _ = handle.state::<AppState>().stop_all().await;
         handle.exit(0);
     });
+}
+
+/// Closes the app once every download a command line was waiting for has finished. It
+/// stays open if it's still needed: for another download, or for a virus scan whose
+/// warning would otherwise never be seen.
+fn quit_if_asked(app: &AppHandle, id: DownloadId) {
+    let state = app.state::<AppState>();
+    if !state.finished_waiting_for(id.0) {
+        return;
+    }
+
+    let busy = state
+        .engine
+        .list()
+        .is_ok_and(|downloads| downloads.iter().any(|item| item.state == State::Running));
+    if !busy && !state.settings_snapshot().scan_enabled {
+        quit(app);
+    }
 }
 
 fn stop_all(app: &AppHandle) {
@@ -242,6 +368,7 @@ fn forward_events(app: AppHandle, engine: &Engine) {
                         State::Completed => {
                             play_event_sound(&app, |sounds| &sounds.complete);
                             scan_finished_file(&app, id);
+                            quit_if_asked(&app, id);
                         }
                         State::Failed => play_event_sound(&app, |sounds| &sounds.failed),
                         State::Running | State::Paused => {}
@@ -287,9 +414,27 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
         settings: Mutex::new(settings),
         settings_path,
         wake_timer: WakeTimer::new(),
+        pending: Mutex::default(),
+        quit_after: Mutex::default(),
     });
     app.state::<AppState>().attach_site_logins();
     build_tray(app)?;
+
+    capture::serve(app.handle().clone());
+    watch_clipboard(app.handle().clone());
+
+    // Only an installed copy registers, so a test can't redirect the real browsers.
+    if std::env::var_os(DATA_DIR_VARIABLE).is_none()
+        && let Ok(resources) = app.path().resource_dir()
+    {
+        let host = resources.join(HOST_FILE);
+        if host.exists() {
+            let _ = system::register_with_browsers(&data_dir, &host);
+        }
+    }
+
+    let show_drop_target = app.state::<AppState>().settings_snapshot().show_drop_target;
+    sync_drop_target(app.handle(), show_drop_target);
 
     let handle = app.handle().clone();
     tauri::async_runtime::spawn(async move {
@@ -299,25 +444,34 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    if !std::env::args().any(|arg| arg == MINIMIZED_FLAG) {
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if !arguments.iter().any(|arg| arg == MINIMIZED_FLAG) {
         show_main_window(app.handle());
     }
+    handle_arguments(app.handle(), &arguments);
     Ok(())
 }
 
 pub fn run() {
-    let mut builder = tauri::Builder::default();
+    let mut context = tauri::generate_context!();
 
-    let separate_copy = std::env::var_os(DATA_DIR_VARIABLE).is_some()
-        && std::env::var_os(SECOND_COPY_VARIABLE).is_some();
-    if !separate_copy {
-        // Registered first so a second launch never reaches the shared database.
-        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            show_main_window(app);
-        }));
+    // The lock that keeps to one copy follows the identifier. Each test folder gets its
+    // own, so a test runs beside the user's copy and still behaves as a single app.
+    if let Some(folder) = std::env::var_os(DATA_DIR_VARIABLE) {
+        let mut hasher = DefaultHasher::new();
+        folder.hash(&mut hasher);
+        context.config_mut().identifier = format!("app.tributary.test.{:x}", hasher.finish());
     }
 
-    let result = builder
+    let result = tauri::Builder::default()
+        // Registered first so a second launch never reaches the shared database.
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            let arguments = args.get(1..).unwrap_or_default();
+            if arguments.is_empty() {
+                show_main_window(app);
+            }
+            handle_arguments(app, arguments);
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(
@@ -354,6 +508,8 @@ pub fn run() {
             commands::edit_download,
             commands::open_file,
             commands::show_in_folder,
+            commands::drag_files,
+            commands::window_ready,
             commands::get_settings,
             commands::save_settings,
             commands::suggest_category,
@@ -372,8 +528,12 @@ pub fn run() {
             commands::play_sound,
             commands::export_data,
             commands::import_data,
+            commands::discard_capture,
+            commands::add_batch,
+            commands::extension_folder,
+            commands::add_dropped_link,
         ])
-        .run(tauri::generate_context!());
+        .run(context);
 
     if let Err(error) = result {
         eprintln!("Tributary stopped: {error}");

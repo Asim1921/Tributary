@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm run ui:dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run ui:build",
+    "beforeBuildCommand": "npm run prepare:bundle",
     "frontendDist": "../ui/dist"
   },
   "app": {
@@ -18,7 +18,8 @@
         "height": 700,
         "minWidth": 780,
         "minHeight": 460,
-        "visible": false
+        "visible": false,
+        "dragDropEnabled": false
       }
     ],
     "security": {
@@ -36,9 +37,19 @@
       "icons/128x128@2x.png",
       "icons/icon.ico"
     ],
+    "resources": {
+      "../target/release/tributary-host.exe": "tributary-host.exe",
+      "../extension/manifest.json": "extension/manifest.json",
+      "../extension/background.js": "extension/background.js",
+      "../extension/content.js": "extension/content.js",
+      "../extension/rules.js": "extension/rules.js",
+      "../extension/icons/32.png": "extension/icons/32.png",
+      "../extension/icons/128.png": "extension/icons/128.png"
+    },
     "windows": {
       "nsis": {
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "installerHooks": "nsis-hooks.nsh"
       }
     }
   }

@@ -11,6 +11,7 @@
     onsort: (column: string) => void;
     onrowclick: (id: number, event: MouseEvent) => void;
     onrowopen: (id: number) => void;
+    onrowdrag: (id: number) => void;
     onrowmenu: (id: number, event: MouseEvent) => void;
     onresize: (column: string, width: number) => void;
     onresized: () => void;
@@ -25,6 +26,7 @@
     onsort,
     onrowclick,
     onrowopen,
+    onrowdrag,
     onrowmenu,
     onresize,
     onresized,
@@ -104,6 +106,12 @@
             onrowclick(row.id, event);
           }}
           ondblclick={() => onrowopen(row.id)}
+          draggable={row.state === 'completed'}
+          ondragstart={(event) => {
+            // Windows runs the drag, because a web page can't carry real files out.
+            event.preventDefault();
+            onrowdrag(row.id);
+          }}
           oncontextmenu={(event) => {
             event.preventDefault();
             event.stopPropagation();

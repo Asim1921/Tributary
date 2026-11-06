@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   displayName,
+  droppedLink,
   formatBytes,
   formatDuration,
   formatTimeLeft,
@@ -127,6 +128,32 @@ describe('displayName', () => {
     expect(displayName({ fileName: null, url: 'https://x.test/100%' })).toBe(
       'https://x.test/100%',
     );
+  });
+});
+
+describe('droppedLink', () => {
+  const data = (values: Record<string, string>) => ({ getData: (type: string) => values[type] ?? '' });
+
+  it('prefers the link list a browser provides', () => {
+    expect(droppedLink(data({ 'text/uri-list': 'https://x.test/a.zip', 'text/plain': 'a link' }))).toBe(
+      'https://x.test/a.zip',
+    );
+  });
+
+  it('skips comment lines in a link list', () => {
+    const list = '# from a page\r\nhttps://x.test/a.zip\r\n';
+    expect(droppedLink(data({ 'text/uri-list': list }))).toBe('https://x.test/a.zip');
+  });
+
+  it('falls back to plain text', () => {
+    expect(droppedLink(data({ 'text/plain': 'https://x.test/a.zip' }))).toBe('https://x.test/a.zip');
+  });
+
+  it('ignores anything that is not a downloadable link', () => {
+    expect(droppedLink(data({ 'text/plain': 'just words' }))).toBeNull();
+    expect(droppedLink(data({ 'text/uri-list': 'file:///C:/a.zip' }))).toBeNull();
+    expect(droppedLink(data({}))).toBeNull();
+    expect(droppedLink(null)).toBeNull();
   });
 });
 

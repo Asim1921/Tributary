@@ -7,5 +7,5 @@ export default defineConfig({
   clearScreen: false,
   server: { port: 1420, strictPort: true },
   build: { outDir: 'dist', emptyOutDir: true, target: 'es2022' },
-  test: { include: ['src/**/*.test.ts'] },
+  test: { include: ['src/**/*.test.ts', '../extension/**/*.test.js'] },
 });

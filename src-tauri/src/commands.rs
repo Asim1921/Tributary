@@ -1,5 +1,6 @@
 //! What the window can ask the app to do, and the shapes it sends and receives.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -9,14 +10,16 @@ use engine::{
     NewDownload, ProxyMode, Queue, QueueId, QueueInfo, QueueKind, Quota, ServerLimit, State,
 };
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, State as Managed};
+use tauri::{AppHandle, Manager, State as Managed, Window};
 use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_opener::OpenerExt as _;
+use tokio::sync::oneshot;
 
 use crate::after_queue::{self, AfterAction, WakeTimer, seconds_until_start};
+use crate::capture::{CaptureEvent, Captured, Pending};
 use crate::rules::{match_category, site_matches};
 use crate::settings::{MAX_CONNECTIONS, MIN_CONNECTIONS, ProxyChoice, Settings, SiteLogin};
-use crate::{data, scanner, secrets};
+use crate::{data, scanner, secrets, system};
 
 const SECONDS_PER_HOUR: u64 = 3600;
 const PROXY_KEY: &str = "proxy";
@@ -31,11 +34,38 @@ pub struct AppState {
     pub settings: Mutex<Settings>,
     pub settings_path: PathBuf,
     pub wake_timer: Option<WakeTimer>,
+    pub pending: Mutex<Pending>,
+    /// Downloads a command line asked the app to close after.
+    pub quit_after: Mutex<HashSet<i64>>,
 }
 
 impl AppState {
+    pub fn quit_after(&self, id: i64) {
+        self.quit_after
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id);
+    }
+
+    /// Notes that a download finished. True if it was the last one being waited for.
+    pub fn finished_waiting_for(&self, id: i64) -> bool {
+        let mut waiting = self
+            .quit_after
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        waiting.remove(&id) && waiting.is_empty()
+    }
+
     fn settings(&self) -> MutexGuard<'_, Settings> {
         self.settings.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub fn settings_snapshot(&self) -> Settings {
+        self.settings().clone()
+    }
+
+    pub fn pending(&self) -> MutexGuard<'_, Pending> {
+        self.pending.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// The saved login for a URL, if a site rule covers it.
@@ -221,6 +251,34 @@ pub struct AddRequest {
     password: Option<String>,
     #[serde(default)]
     remember_login: bool,
+    /// Stands for a file captured from the browser, with its cookies.
+    capture_token: Option<u64>,
+}
+
+impl AddRequest {
+    /// A download that goes straight into the list.
+    pub fn from_captured(file: Captured) -> Self {
+        Self {
+            url: file.url,
+            dest_dir: file.folder,
+            file_name: file.file_name,
+            description: None,
+            paused: false,
+            queue_id: None,
+            category: None,
+            username: None,
+            password: None,
+            remember_login: false,
+            capture_token: None,
+        }
+    }
+
+    /// The same, but saved to the main queue instead of starting.
+    pub fn later(mut self) -> Self {
+        self.paused = true;
+        self.queue_id = Some(QueueId::MAIN.0);
+        self
+    }
 }
 
 /// A queue as the window sees it. Zero as an id means a new queue.
@@ -321,10 +379,16 @@ pub async fn inspect_url(
     url: String,
     username: Option<String>,
     password: Option<String>,
+    capture_token: Option<u64>,
 ) -> Result<FileInfoView, String> {
     let url = url.trim();
     let login = login_from(username, password).or_else(|| state.site_login_for(url));
-    let info = state.engine.inspect(url, &[], login).await.map_err(text)?;
+    let headers = capture_token.map_or_else(Vec::new, |token| state.pending().headers(token));
+    let info = state
+        .engine
+        .inspect(url, &headers, login)
+        .await
+        .map_err(text)?;
     Ok(FileInfoView {
         file_name: info.file_name,
         size: info.size,
@@ -384,6 +448,73 @@ pub async fn add_download(
     state: Managed<'_, AppState>,
     request: AddRequest,
 ) -> Result<i64, String> {
+    let headers = request
+        .capture_token
+        .and_then(|token| state.pending().take(token))
+        .and_then(|files| files.into_iter().next())
+        .map(|file| file.headers())
+        .unwrap_or_default();
+    add_download_now(&state, request, headers)
+}
+
+/// Forgets a captured file the user decided against.
+#[tauri::command]
+pub async fn discard_capture(state: Managed<'_, AppState>, token: u64) -> Result<(), String> {
+    state.pending().take(token);
+    Ok(())
+}
+
+/// Adds the chosen files from a capture of several.
+#[tauri::command]
+pub async fn add_batch(
+    state: Managed<'_, AppState>,
+    token: u64,
+    urls: Vec<String>,
+    dest_dir: Option<PathBuf>,
+    queue_id: Option<i64>,
+    paused: bool,
+) -> Result<usize, String> {
+    let files = state
+        .pending()
+        .take(token)
+        .ok_or("these links have already been handled")?;
+
+    let mut added = 0;
+    for file in files.into_iter().filter(|file| urls.contains(&file.url)) {
+        let headers = file.headers();
+        let mut request = AddRequest::from_captured(file);
+        request.dest_dir.clone_from(&dest_dir);
+        request.queue_id = queue_id;
+        request.paused = paused;
+        add_download_now(&state, request, headers)?;
+        added += 1;
+    }
+    Ok(added)
+}
+
+/// Where the browser extension is installed, for the setup instructions.
+#[tauri::command]
+pub async fn extension_folder(app: AppHandle) -> Result<PathBuf, String> {
+    let folder = app.path().resource_dir().map_err(text)?;
+    Ok(folder.join("extension"))
+}
+
+/// A link dropped on the drop target.
+#[tauri::command]
+pub async fn add_dropped_link(app: AppHandle, url: String) -> Result<(), String> {
+    let file = Captured {
+        url: url.trim().to_owned(),
+        ..Captured::default()
+    };
+    crate::capture::receive(&app, vec![file], false)
+}
+
+/// Adds a download from any source, using the saved rules and logins.
+pub fn add_download_now(
+    state: &AppState,
+    request: AddRequest,
+    headers: Vec<(String, String)>,
+) -> Result<i64, String> {
     let url = request.url.trim().to_owned();
     let file_name = blank_to_none(request.file_name);
 
@@ -398,7 +529,7 @@ pub async fn add_download(
 
     let typed_login = login_from(request.username, request.password);
     if let (true, Some(login), Some(host)) = (request.remember_login, &typed_login, host_of(&url)) {
-        remember_site(&state, &host, login)?;
+        remember_site(state, &host, login)?;
     }
     let login = typed_login.or_else(|| state.site_login_for(&url));
 
@@ -409,7 +540,7 @@ pub async fn add_download(
             dest_dir: dest_dir.clone(),
             file_name,
             description: blank_to_none(request.description),
-            headers: Vec::new(),
+            headers,
             paused: request.paused,
             queue: request.queue_id.map(QueueId),
             category,
@@ -646,6 +777,37 @@ pub async fn show_in_folder(
     }
 }
 
+/// The window has started listening, so it's given whatever arrived while it loaded.
+#[tauri::command]
+pub async fn window_ready(state: Managed<'_, AppState>) -> Result<Vec<CaptureEvent>, String> {
+    Ok(state.pending().window_ready())
+}
+
+/// Starts dragging finished files to another app. This takes ids rather than paths, so
+/// the window can only ever offer files that this app downloaded.
+#[tauri::command]
+pub async fn drag_files(
+    app: AppHandle,
+    window: Window,
+    state: Managed<'_, AppState>,
+    ids: Vec<i64>,
+) -> Result<(), String> {
+    let files: Vec<PathBuf> = ids
+        .into_iter()
+        .filter_map(|id| finished_file(&state, id).ok())
+        .collect();
+    if files.is_empty() {
+        return Err("the file is no longer there".to_owned());
+    }
+
+    let (finished, result) = oneshot::channel();
+    app.run_on_main_thread(move || {
+        let _ = finished.send(system::drag_out(&window, files));
+    })
+    .map_err(text)?;
+    result.await.map_err(text)?
+}
+
 #[tauri::command]
 pub async fn get_settings(state: Managed<'_, AppState>) -> Result<Settings, String> {
     Ok(state.settings().clone())
@@ -672,7 +834,9 @@ pub async fn save_settings(
     // Applied first, so a bad proxy address is refused before anything is saved.
     apply_to_engine(&state.engine, &settings).map_err(text)?;
     settings.save(&state.settings_path).map_err(text)?;
+    let show_drop_target = settings.show_drop_target;
     *state.settings() = settings;
+    crate::sync_drop_target(&app, show_drop_target);
     Ok(())
 }
 

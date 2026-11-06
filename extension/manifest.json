@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Tributary",
+  "version": "0.1.0",
+  "description": "Sends downloads to the Tributary download manager.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAou18+pwm7xEBVADR+HWiAZq+RI6BcBWHStOsnf7g606/labo5WHaIDJUyJZjkcD0KysoRFlm4Bb2CWKDX/RtPv/aWuevdNk3KYf+JR/ELZ/LmYva4YXsLo8Zw1xeTyqLEGHLbhH9gkQo+jdEOVwleNUtAROydabQ+j0IIOjxXtVx1cM7SQt2RaXZvjyFzvzTj/MEKbRspWJVkoSPz1KIunEHToPAPcePKvCvlnMdKAvQcXfNKFXCnq8pJPLwjlzjXND/zxBZziZpDGXGeoHj4E55jf9ikblTn5IdgSZ8nQYP0zl95B9Yl2aTpIBTiuXyF6S6DpGLtgq8OVdGPlUiTQIDAQAB",
+  "permissions": ["contextMenus", "cookies", "downloads", "nativeMessaging", "storage"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "icons": { "32": "icons/32.png", "128": "icons/128.png" }
+}

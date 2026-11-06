@@ -6,10 +6,12 @@
   "scripts": {
     "ui:dev": "vite --config ui/vite.config.ts",
     "ui:build": "vite build --config ui/vite.config.ts",
+    "prepare:bundle": "npm run ui:build && cargo build --release -p host",
     "tauri": "tauri",
     "check": "svelte-check --tsconfig ui/tsconfig.json",
     "test": "vitest run --config ui/vite.config.ts",
-    "e2e": "node e2e/app.mjs"
+    "e2e": "node e2e/app.mjs",
+    "e2e:browser": "node e2e/browser.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.4",

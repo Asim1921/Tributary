@@ -62,6 +62,7 @@ export interface AddRequest {
   username?: string;
   password?: string;
   rememberLogin?: boolean;
+  captureToken?: number;
 }
 
 export interface EditRequest {
@@ -112,6 +113,24 @@ export interface Settings {
   scannerPath: string;
   scannerArguments: string;
   sounds: Sounds;
+  captureEnabled: boolean;
+  captureTypes: string[];
+  captureExclusions: string[];
+  forceKey: string;
+  skipKey: string;
+  watchClipboard: boolean;
+  showDropTarget: boolean;
+}
+
+export interface CaptureItem {
+  url: string;
+  fileName: string | null;
+}
+
+export interface CaptureEvent {
+  token: number;
+  items: CaptureItem[];
+  batch: boolean;
 }
 
 export type ProxyChoice = 'system' | 'direct' | 'manual';

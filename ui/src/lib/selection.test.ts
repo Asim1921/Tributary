@@ -1,6 +1,31 @@
 import { describe, expect, it } from 'vitest';
 
-import { clickRow, keepExisting, rightClickRow, type SelectionState } from './selection';
+import { clickRow, dragIds, keepExisting, rightClickRow, type SelectionState } from './selection';
+
+describe('dragIds', () => {
+  const rows = [
+    { id: 1, state: 'completed' },
+    { id: 2, state: 'downloading' },
+    { id: 3, state: 'completed' },
+    { id: 4, state: 'completed' },
+  ];
+
+  it('carries the whole selection when the row is part of it', () => {
+    expect(dragIds(rows, new Set([1, 3]), 3)).toEqual([1, 3]);
+  });
+
+  it('carries only the row when it is outside the selection', () => {
+    expect(dragIds(rows, new Set([1, 3]), 4)).toEqual([4]);
+  });
+
+  it('leaves out files that have not finished', () => {
+    expect(dragIds(rows, new Set([1, 2]), 1)).toEqual([1]);
+  });
+
+  it('carries nothing from an unfinished row', () => {
+    expect(dragIds(rows, new Set(), 2)).toEqual([]);
+  });
+});
 
 const order = [10, 20, 30, 40];
 const none: SelectionState = { selected: new Set(), anchor: null };

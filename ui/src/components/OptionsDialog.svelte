@@ -3,6 +3,7 @@
 
   import {
     deleteSiteLogin,
+    extensionFolder,
     pickFile,
     pickFolder,
     playSound,
@@ -26,6 +27,7 @@
   type Tab =
     | 'general'
     | 'downloads'
+    | 'browser'
     | 'connection'
     | 'proxy'
     | 'logins'
@@ -37,6 +39,7 @@
   const TABS: { id: Tab; label: string }[] = [
     { id: 'general', label: 'General' },
     { id: 'downloads', label: 'Downloads' },
+    { id: 'browser', label: 'Browser' },
     { id: 'connection', label: 'Connection' },
     { id: 'proxy', label: 'Proxy' },
     { id: 'logins', label: 'Logins' },
@@ -76,6 +79,20 @@
   let proxyPassword = $state('');
   let newSite = $state({ pattern: '', username: '', password: '' });
   let loginProblem = $state('');
+  let extensionPath = $state('');
+
+  $effect(() => {
+    if (tab === 'browser' && !extensionPath) {
+      void extensionFolder().then((path) => (extensionPath = path));
+    }
+  });
+
+  const KEYS = [
+    { value: 'ctrl', label: 'Ctrl' },
+    { value: 'alt', label: 'Alt' },
+    { value: 'shift', label: 'Shift' },
+    { value: 'none', label: 'None' },
+  ];
 
   const SOUND_EVENTS = [
     { key: 'complete', label: 'Download finished' },
@@ -239,6 +256,62 @@
       >
         Clear address history
       </button>
+    {:else if tab === 'browser'}
+      <label class="check">
+        <input type="checkbox" bind:checked={draft.captureEnabled} />
+        Take over downloads from the browser
+      </label>
+      <label class="field">
+        File types to take over, separated by commas
+        <textarea
+          rows="3"
+          value={draft.captureTypes.join(', ')}
+          onchange={(event) => (draft.captureTypes = splitList(event.currentTarget.value))}
+        ></textarea>
+      </label>
+      <label class="field">
+        Sites and addresses to leave to the browser, separated by commas
+        <input
+          type="text"
+          value={draft.captureExclusions.join(', ')}
+          placeholder="*.example.com"
+          onchange={(event) => (draft.captureExclusions = splitList(event.currentTarget.value))}
+        />
+      </label>
+      <div class="pair">
+        <label class="field">
+          Hold to always take over
+          <select bind:value={draft.forceKey}>
+            {#each KEYS as key (key.value)}
+              <option value={key.value}>{key.label}</option>
+            {/each}
+          </select>
+        </label>
+        <label class="field">
+          Hold to leave to the browser
+          <select bind:value={draft.skipKey}>
+            {#each KEYS as key (key.value)}
+              <option value={key.value}>{key.label}</option>
+            {/each}
+          </select>
+        </label>
+      </div>
+      <label class="check">
+        <input type="checkbox" bind:checked={draft.watchClipboard} />
+        Offer to download links copied to the clipboard
+      </label>
+      <label class="check">
+        <input type="checkbox" bind:checked={draft.showDropTarget} />
+        Show a small window to drop links on
+      </label>
+
+      <p class="heading">Setting up your browser</p>
+      <ol class="steps">
+        <li>Open <strong>chrome://extensions</strong>, or <strong>edge://extensions</strong> in Edge.</li>
+        <li>Turn on <strong>Developer mode</strong>.</li>
+        <li>Choose <strong>Load unpacked</strong> and select this folder:</li>
+      </ol>
+      <p class="selectable path">{extensionPath}</p>
     {:else if tab === 'connection'}
       <label class="check">
         <input type="checkbox" bind:checked={draft.speedLimitEnabled} />
@@ -526,6 +599,19 @@
   .heading {
     margin: 10px 0 6px;
     font-weight: 600;
+  }
+
+  .steps {
+    margin: 0 0 6px;
+    padding-left: 20px;
+  }
+
+  .path {
+    padding: 6px 8px;
+    background: var(--surface-2);
+    border-radius: 6px;
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 12px;
   }
 
   .rule {
