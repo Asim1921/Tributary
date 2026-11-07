@@ -587,7 +587,20 @@ impl Engine {
     pub fn add(&self, new: NewDownload) -> Result<DownloadId, Error> {
         let mut url = parse_url(&new.url)?;
         // A password in the address must not reach the database.
-        let login = take_url_login(&mut url).or(new.login);
+        let mut login = take_url_login(&mut url).or(new.login);
+
+        // A part inherits the login of the playlist it was listed in.
+        let parts = new.parts.map(|mut parts| {
+            for part in &mut parts {
+                if let Ok(mut address) = Url::parse(&part.url)
+                    && let Some(found) = take_url_login(&mut address)
+                {
+                    login.get_or_insert(found);
+                    part.url = address.into();
+                }
+            }
+            parts
+        });
 
         let (secret, saved): (Vec<_>, Vec<_>) = new
             .headers
@@ -605,7 +618,7 @@ impl Engine {
             &saved,
         )?;
 
-        if let Some(parts) = &new.parts {
+        if let Some(parts) = &parts {
             self.inner.store.set_stream_parts(id, parts)?;
         }
         if !secret.is_empty() {

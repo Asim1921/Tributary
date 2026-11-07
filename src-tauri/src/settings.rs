@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::rules::{Category, default_categories};
 use crate::scanner::{DEFAULT_ARGUMENTS, DEFAULT_SCANNER};
+use url::Url;
 
 pub const MIN_CONNECTIONS: usize = 1;
 pub const MAX_CONNECTIONS: usize = 32;
@@ -226,10 +227,25 @@ impl Settings {
 
     /// Puts a URL at the front of the history, without repeats.
     pub fn remember_url(&mut self, url: &str) {
-        self.url_history.retain(|existing| existing != url);
-        self.url_history.insert(0, url.to_owned());
+        let url = without_login(url);
+        self.url_history.retain(|existing| *existing != url);
+        self.url_history.insert(0, url);
         self.url_history.truncate(URL_HISTORY_LIMIT);
     }
+}
+
+/// An address with any `user:password@` taken out, because this file is plain text.
+fn without_login(url: &str) -> String {
+    let Ok(mut parsed) = Url::parse(url) else {
+        return url.to_owned();
+    };
+    if parsed.username().is_empty() && parsed.password().is_none() {
+        return url.to_owned();
+    }
+
+    let _ = parsed.set_username("");
+    let _ = parsed.set_password(None);
+    parsed.into()
 }
 
 #[cfg(test)]
@@ -348,6 +364,15 @@ mod tests {
 
         fs::write(&path, r#"{ "connections": 9999 }"#).unwrap();
         assert_eq!(load(&path).connections, MAX_CONNECTIONS);
+    }
+
+    #[test]
+    fn a_password_in_an_address_never_reaches_the_history() {
+        let mut settings = load(Path::new("no-such-file.json"));
+
+        settings.remember_url("https://alice:hunter2@x.test/a.zip?b=1");
+
+        assert_eq!(settings.url_history, ["https://x.test/a.zip?b=1"]);
     }
 
     #[test]

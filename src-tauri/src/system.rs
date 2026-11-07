@@ -11,8 +11,10 @@ use std::slice;
 
 use drag::{DragItem, Image, Options};
 use serde_json::json;
-use tauri::Window;
+use tauri::{WebviewWindow, Window};
 use url::Url;
+use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings4;
+use windows_core::Interface as _;
 use windows_sys::Win32::Foundation::{ERROR_SUCCESS, HANDLE};
 use windows_sys::Win32::System::DataExchange::{
     CloseClipboard, GetClipboardData, GetClipboardSequenceNumber, OpenClipboard,
@@ -39,6 +41,27 @@ const BROWSER_KEYS: [&str; 3] = [
     r"Software\Microsoft\Edge\NativeMessagingHosts",
     r"Software\BraveSoftware\Brave-Browser\NativeMessagingHosts",
 ];
+
+/// Stops the browser engine remembering what's typed into the window. It would otherwise
+/// keep it in a plain file of its own, and an address can hold a password. It ignores
+/// `autocomplete="off"`, so this has to be done here. All the windows share this setting,
+/// and a new one resets it, so every window has to be given this when it's created.
+pub fn stop_remembering_typed_text(window: &WebviewWindow) {
+    let _ = window.with_webview(|webview| {
+        // SAFETY: plain calls on a live webview, made on the thread that owns it.
+        let _ = unsafe {
+            webview
+                .controller()
+                .CoreWebView2()
+                .and_then(|core| core.Settings())
+                .and_then(|settings| settings.cast::<ICoreWebView2Settings4>())
+                .and_then(|settings| {
+                    settings.SetIsGeneralAutofillEnabled(false)?;
+                    settings.SetIsPasswordAutosaveEnabled(false)
+                })
+        };
+    });
+}
 
 /// Whether the main mouse button is down, allowing for the buttons being swapped.
 fn main_button_held() -> bool {

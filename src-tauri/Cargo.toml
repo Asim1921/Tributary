@@ -28,6 +28,8 @@ tauri-plugin-single-instance = "2"
 tokio.workspace = true
 tokio-util = "0.7"
 url = "2"
+webview2-com = "0.39"
+windows-core = "0.62"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Media_Audio",

@@ -172,11 +172,18 @@ impl Project {
     pub fn check_address(address: &str) -> Result<(), String> {
         let url = Url::parse(address.trim())
             .map_err(|_| "the starting address isn't valid".to_owned())?;
-        if matches!(url.scheme(), "http" | "https") {
-            Ok(())
-        } else {
-            Err("the starting address has to be a web address".to_owned())
+        if !matches!(url.scheme(), "http" | "https") {
+            return Err("the starting address has to be a web address".to_owned());
         }
+
+        // Projects are saved as plain text, and a repeating one needs its login again
+        // later, so it can't simply be held in memory as a download's is.
+        if !url.username().is_empty() || url.password().is_some() {
+            return Err(
+                "logins can't go in the address. Add the site in Options, under Logins".to_owned(),
+            );
+        }
+        Ok(())
     }
 
     /// Explains what's wrong with a project, if anything.
@@ -434,6 +441,15 @@ mod tests {
             })
             .contains("size")
         );
+    }
+
+    #[test]
+    fn a_login_in_the_starting_address_is_refused_because_projects_are_saved_as_text() {
+        let problem = Project::check_address("https://alice:hunter2@x.test/").unwrap_err();
+        assert!(problem.contains("Options"), "{problem}");
+
+        assert!(Project::check_address("https://alice@x.test/").is_err());
+        assert!(Project::check_address("https://x.test/").is_ok());
     }
 
     #[test]

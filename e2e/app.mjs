@@ -1417,6 +1417,151 @@ try {
     await page.evaluate(() => window.__TAURI_INTERNALS__.invoke('stop_all'));
   });
 
+  await step('the everyday controls do what they say', async () => {
+    const saved = () => JSON.parse(readFileSync(join(dataDir, 'settings.json'), 'utf8'));
+    const toolbar = page.getByRole('toolbar');
+    const buttonNames = () =>
+      toolbar
+        .getByRole('button')
+        .evaluateAll((buttons) => buttons.map((button) => button.getAttribute('aria-label')));
+    const headings = async () =>
+      (await page.locator('thead th').allTextContents()).map((text) => text.replace(/[▲▼]/g, '').trim());
+
+    // Stop all stops what's running, and leaves it in the list.
+    await addThroughDialogs(page, `${BASE}/file/40M.stopall?rate=1M`);
+    const running = rowFor(page, '40M.stopall');
+    await running.getByText('Downloading').waitFor();
+    await toolbar.getByRole('button', { name: 'Stop all' }).click();
+    await running.getByText(/^Stopped/).waitFor();
+
+    // A hidden button can come back, and buttons can move.
+    const before = await buttonNames();
+    await inOptions('Toolbar', async () => {
+      await page.getByRole('checkbox', { name: 'Clear finished' }).check();
+      const options = page.getByRole('dialog').getByRole('listitem').filter({ hasText: 'Options' });
+      await options.getByRole('button', { name: 'Move up' }).click();
+    });
+    await toolbar.getByRole('button', { name: 'Clear finished' }).waitFor();
+    const after = await buttonNames();
+    assert.ok(
+      after.indexOf('Options') < after.indexOf('Grabber'),
+      `Options should have moved up: ${before} became ${after}`,
+    );
+
+    // The buttons can be made small, and go back again.
+    await inOptions('Toolbar', () => page.getByLabel('Button size').selectOption('small'));
+    await page.locator('.toolbar.small').waitFor();
+    await inOptions('Toolbar', () => page.getByLabel('Button size').selectOption('large'));
+    await page.locator('.toolbar.small').waitFor({ state: 'detached' });
+
+    // Columns can be moved.
+    const columnsBefore = await headings();
+    await inOptions('Columns', async () => {
+      const size = page.getByRole('dialog').getByRole('listitem').filter({ hasText: 'Size' });
+      await size.getByRole('button', { name: 'Move down' }).click();
+    });
+    await page.waitForFunction(
+      (old) => [...document.querySelectorAll('thead th')].map((cell) => cell.textContent).join() !== old,
+      (await page.locator('thead th').allTextContents()).join(),
+      { timeout: 3000 },
+    ).catch(() => {});
+    const columnsAfter = await headings();
+    assert.ok(
+      columnsAfter.indexOf('Size') > columnsBefore.indexOf('Size'),
+      `Size should have moved: ${columnsBefore} became ${columnsAfter}`,
+    );
+
+    // Columns can be dragged wider, and that's remembered.
+    const heading = page.locator('thead th', { hasText: 'Size' });
+    const savedWidth = () => saved().columns.find((column) => column.id === 'size').width;
+    const widthBefore = (await heading.boundingBox()).width;
+    const storedBefore = savedWidth();
+    const handle = await heading.locator('.resize').boundingBox();
+    const y = handle.y + handle.height / 2;
+    await page.mouse.move(handle.x + handle.width / 2, y);
+    await page.mouse.down();
+    // A fractional position, as a real mouse gives on a scaled display.
+    await page.mouse.move(handle.x + 70.4, y + 0.3, { steps: 5 });
+    await page.mouse.up();
+    await sleep(500);
+    const widthAfter = (await heading.boundingBox()).width;
+    assert.ok(widthAfter > widthBefore + 40, `went from ${widthBefore} to ${widthAfter}`);
+    // The table stretches to fill the window, so what's on screen isn't what's stored.
+    assert.ok(savedWidth() > storedBefore + 40, `stored ${storedBefore}, then ${savedWidth()}`);
+
+    // Clear finished takes finished rows off the list, and leaves their files alone.
+    await toolbar.getByRole('button', { name: 'Clear finished' }).click();
+    await rowFor(page, 'chosen.ts').waitFor({ state: 'detached' });
+    await running.waitFor();
+    assert.ok(existsSync(join(downloadDir, 'chosen.ts')), 'the file should still be there');
+
+    // The last folder used can be offered next time.
+    const lastFolder = join(grabDir, 'last-folder');
+    await inOptions('Downloads', () => page.getByLabel('Offer the last folder used').check());
+    await page.getByRole('button', { name: 'Add URL' }).first().click();
+    await page.getByLabel('Address').fill(`${BASE}/file/1M.first`);
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await page.getByRole('button', { name: 'Start download' }).waitFor();
+    await page.getByLabel('Folder').fill(lastFolder);
+    await page.getByRole('button', { name: 'Start download' }).click();
+    await rowFor(page, '1M.first').getByText('Complete').waitFor();
+
+    await page.getByRole('button', { name: 'Add URL' }).first().click();
+    await page.getByLabel('Address').fill(`${BASE}/file/1M.second`);
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await page.getByRole('dialog').getByText('1.0 MB').waitFor();
+    assert.equal(await page.getByLabel('Folder').inputValue(), lastFolder);
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    await page.getByRole('dialog').waitFor({ state: 'hidden' });
+    await inOptions('Downloads', () => page.getByLabel('Offer the last folder used').uncheck());
+
+    // The address history can be cleared.
+    assert.ok(saved().urlHistory.length > 0);
+    await inOptions('Downloads', () =>
+      page.getByRole('button', { name: 'Clear address history' }).click(),
+    );
+    assert.deepEqual(saved().urlHistory, []);
+    await page.getByRole('button', { name: 'Add URL' }).first().click();
+    assert.equal(await page.locator('#url-history option').count(), 0);
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    await page.getByRole('dialog').waitFor({ state: 'hidden' });
+  });
+
+  await step('no password or cookie reaches any file the app wrote', async () => {
+    // One more secret, this time in the address itself.
+    const withLogin = BASE.replace('http://', 'http://alice:url-secret-9@');
+    await addThroughDialogs(page, `${withLogin}/file/1M.urlpass`);
+    await rowFor(page, '1M.urlpass').getByText('Complete').waitFor();
+    await sleep(700);
+
+    const walk = (folder) =>
+      readdirSync(folder, { withFileTypes: true }).flatMap((entry) => {
+        const path = join(folder, entry.name);
+        return entry.isDirectory() ? walk(path) : [path];
+      });
+
+    const secrets = ['hunter2', 'saved-pass', 'captured-cookie-7', 'visitor=yes', 'url-secret-9'];
+    const files = walk(dataDir);
+    let read = 0;
+
+    for (const file of files) {
+      let text;
+      try {
+        text = readFileSync(file, 'latin1');
+      } catch {
+        continue; // A file the browser engine holds locked.
+      }
+      read += 1;
+      for (const secret of secrets) {
+        assert.ok(!text.includes(secret), `${secret} reached ${file}`);
+      }
+    }
+
+    assert.ok(read > 20, `only ${read} files could be read`);
+    assert.ok(files.some((file) => file.endsWith('settings.json')));
+    assert.ok(files.some((file) => file.endsWith('downloads.db')));
+  });
+
   await step('no script error happened anywhere in the run', async () => {
     assert.deepEqual(pageErrors, []);
   });

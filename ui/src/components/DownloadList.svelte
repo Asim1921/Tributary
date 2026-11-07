@@ -45,7 +45,9 @@
 
     handle.setPointerCapture(event.pointerId);
     const move = (moved: PointerEvent) => {
-      onresize(column.id, Math.max(MIN_COLUMN_WIDTH, startWidth + moved.clientX - startX));
+      // Positions are fractional on a scaled display, but widths are saved as whole numbers.
+      const width = Math.round(startWidth + moved.clientX - startX);
+      onresize(column.id, Math.max(MIN_COLUMN_WIDTH, width));
     };
     const finish = () => {
       handle.removeEventListener('pointermove', move);

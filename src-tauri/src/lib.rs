@@ -87,7 +87,7 @@ pub(crate) fn sync_drop_target(app: &AppHandle, show: bool) {
             let _ = window.close();
         }
         (None, true) => {
-            let _ = WebviewWindowBuilder::new(
+            let built = WebviewWindowBuilder::new(
                 app,
                 DROP_TARGET_WINDOW,
                 WebviewUrl::App("index.html#drop".into()),
@@ -100,6 +100,11 @@ pub(crate) fn sync_drop_target(app: &AppHandle, show: bool) {
             .skip_taskbar(true)
             .disable_drag_drop_handler()
             .build();
+
+            // A new window turns remembering back on for the whole app.
+            if let Ok(window) = built {
+                system::stop_remembering_typed_text(&window);
+            }
         }
         _ => {}
     }
@@ -454,6 +459,10 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
             tokio::time::sleep(WAKE_TIMER_REFRESH).await;
         }
     });
+
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+        system::stop_remembering_typed_text(&window);
+    }
 
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     if !arguments.iter().any(|arg| arg == MINIMIZED_FLAG) {

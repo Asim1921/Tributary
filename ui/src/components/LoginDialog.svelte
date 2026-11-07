@@ -25,7 +25,7 @@
   <p><strong>{displayName(row)}</strong> needs a user name and password.</p>
   <p class="note selectable">{row.url}</p>
 
-  <form id="download-login" onsubmit={submit}>
+  <form id="download-login" autocomplete="off" onsubmit={submit}>
     <label class="field">
       User name
       <!-- svelte-ignore a11y_autofocus -->

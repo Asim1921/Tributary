@@ -696,3 +696,37 @@ async fn a_server_that_stays_down_is_reported_when_reading_a_page() {
 
     assert!(fixture.engine.fetch_page(&url, &[], None).await.is_err());
 }
+
+/// Everything the database has written, including its journal.
+fn database_text(fixture: &Fixture) -> String {
+    let mut text = String::new();
+    for entry in fs::read_dir(fixture.folder.path()).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_file() {
+            text.push_str(&String::from_utf8_lossy(&fs::read(path).unwrap()));
+        }
+    }
+    text
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_password_in_a_parts_address_is_used_but_never_saved() {
+    let fixture = fixture().await;
+    let mut parts = fixture.parts("/media/low.m3u8?basic=alice%3Ahunter2").await;
+    for part in &mut parts {
+        part.url = part.url.replace("http://", "http://alice:hunter2@");
+    }
+
+    let saved = fixture.save(parts).await;
+
+    assert_saved_track(&saved, "low");
+    let stored = database_text(&fixture);
+    assert!(
+        !stored.contains("alice:hunter2"),
+        "a login reached the database"
+    );
+    assert!(
+        stored.contains("basic=alice"),
+        "the parts should be there to search"
+    );
+}

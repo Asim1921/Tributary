@@ -20,11 +20,18 @@
 </script>
 
 <Modal title="Add URL" {onclose}>
-  <form id="add-url" onsubmit={submit}>
+  <form id="add-url" autocomplete="off" onsubmit={submit}>
     <label class="field">
       Address
       <!-- svelte-ignore a11y_autofocus -->
-      <input type="url" list="url-history" bind:value={url} placeholder="https://" autofocus />
+      <input
+        type="url"
+        list="url-history"
+        bind:value={url}
+        placeholder="https://"
+        autocomplete="off"
+        autofocus
+      />
     </label>
     <datalist id="url-history">
       {#each history as item (item)}
