@@ -79,7 +79,8 @@ cargo test --workspace      # engine, parsers, grabber and app
 npm test                    # interface and extension logic
 npm run check               # types
 npm run e2e                 # drives the real app
-npm run e2e:browser         # drives the real extension in Microsoft Edge
+npm run e2e:browser         # drives the real extension in Google Chrome
+npm run e2e:edge            # the same in Microsoft Edge
 ```
 
 The end-to-end tests use their own data folders, so they run beside a copy you already have open. Set `E2E_SKIP_TIMED=1` to skip the step that waits for a real scheduled queue.

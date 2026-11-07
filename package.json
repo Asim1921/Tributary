@@ -11,7 +11,8 @@
     "check": "svelte-check --tsconfig ui/tsconfig.json",
     "test": "vitest run --config ui/vite.config.ts",
     "e2e": "node e2e/app.mjs",
-    "e2e:browser": "node e2e/browser.mjs"
+    "e2e:browser": "node e2e/browser.mjs chrome",
+    "e2e:edge": "node e2e/browser.mjs edge"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.4",

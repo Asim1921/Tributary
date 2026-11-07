@@ -551,7 +551,7 @@ pub async fn add_batch(
 #[tauri::command]
 pub async fn extension_folder(app: AppHandle) -> Result<PathBuf, String> {
     let folder = app.path().resource_dir().map_err(text)?;
-    Ok(folder.join("extension"))
+    Ok(system::plain_path(&folder.join("extension")))
 }
 
 /// A link dropped on the drop target.

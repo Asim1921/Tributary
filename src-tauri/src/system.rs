@@ -216,11 +216,22 @@ pub fn parse_arguments(arguments: &[String]) -> Result<Invocation, String> {
     Ok(invocation)
 }
 
+/// Takes the `\\?\` off a path. Windows puts it on some paths it hands back, but not
+/// everything accepts it: browsers start their host through `cmd.exe`, and it would be
+/// baffling in a folder someone is told to pick.
+pub fn plain_path(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with(r"UNC\") => PathBuf::from(rest),
+        _ => path.to_owned(),
+    }
+}
+
 fn host_manifest(host_path: &Path) -> String {
     json!({
         "name": HOST_NAME,
         "description": "Tributary download manager",
-        "path": host_path,
+        "path": plain_path(host_path),
         "type": "stdio",
         "allowed_origins": [format!("chrome-extension://{EXTENSION_ID}/")],
     })
@@ -363,6 +374,29 @@ mod tests {
     fn bad_command_lines_are_refused() {
         assert!(parse_arguments(&arguments(&["--add"])).is_err());
         assert!(parse_arguments(&arguments(&["--nonsense"])).is_err());
+    }
+
+    #[test]
+    fn the_long_path_prefix_is_taken_off() {
+        assert_eq!(
+            plain_path(Path::new(r"\\?\C:\Users\me\host.exe")),
+            Path::new(r"C:\Users\me\host.exe")
+        );
+        assert_eq!(plain_path(Path::new(r"C:\a.exe")), Path::new(r"C:\a.exe"));
+    }
+
+    #[test]
+    fn a_network_path_keeps_its_prefix_because_it_would_mean_something_else_without_it() {
+        let path = Path::new(r"\\?\UNC\server\share\a.exe");
+        assert_eq!(plain_path(path), path);
+    }
+
+    #[test]
+    fn the_host_manifest_gives_browsers_a_path_they_can_start() {
+        let text = host_manifest(Path::new(r"\\?\C:\Program\tributary-host.exe"));
+        let manifest: serde_json::Value = serde_json::from_str(&text).unwrap();
+
+        assert_eq!(manifest["path"], r"C:\Program\tributary-host.exe");
     }
 
     #[test]

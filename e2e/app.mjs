@@ -736,6 +736,10 @@ try {
     assert.equal(reply.forceKey, 'ctrl');
     assert.equal(reply.skipKey, 'alt');
     assert.equal(reply.videoPanel, true);
+
+    // This is shown to be picked in the browser, so it has to be an ordinary path.
+    const folder = await page.evaluate(() => window.__TAURI_INTERNALS__.invoke('extension_folder'));
+    assert.ok(!folder.startsWith('\\\\?'), folder);
   });
 
   await step('a captured download keeps its cookies, without the window ever seeing them', async () => {
