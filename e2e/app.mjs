@@ -19,8 +19,9 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { pathToFileURL } from 'node:url';
 
 import { chromium } from 'playwright-core';
 
@@ -38,6 +39,7 @@ const SCREENSHOTS = process.env.E2E_SCREENSHOTS;
 const dataDir = mkdtempSync(join(tmpdir(), 'tributary-e2e-data-'));
 const downloadDir = mkdtempSync(join(tmpdir(), 'tributary-e2e-files-'));
 const videoDir = mkdtempSync(join(tmpdir(), 'tributary-e2e-video-'));
+const grabDir = mkdtempSync(join(tmpdir(), 'tributary-e2e-grab-'));
 
 const results = [];
 const pageErrors = [];
@@ -1083,6 +1085,252 @@ try {
     assert.equal(await sha256(join(downloadDir, 'interrupted.ts')), trackSha256('high'));
   });
 
+  /** Goes through the grabber's wizard and starts exploring. */
+  async function startProject({ template, folder, delay = 100, exclude = '*/trap/*', repeat }) {
+    await page.getByRole('toolbar').getByRole('button', { name: 'Grabber' }).click();
+    await page.getByRole('heading', { name: 'Site grabber' }).waitFor();
+    await page.getByRole('button', { name: 'New project' }).click();
+
+    await page.getByLabel('Starting address').fill(`${BASE}/site/`);
+    await page.getByRole('radio', { name: template }).check();
+    await page.getByRole('button', { name: 'Next' }).click();
+
+    await page.getByLabel('How many links deep').fill('6');
+    await page.getByLabel('Most pages to read').fill('30');
+    await page.getByLabel('Wait between pages').fill(String(delay));
+    await page.getByLabel('Never read pages matching').fill(exclude);
+    await page.getByRole('button', { name: 'Next' }).click();
+
+    await page.getByLabel('Save into').fill(folder);
+    await page.getByRole('button', { name: 'Next' }).click();
+
+    if (repeat) await page.getByLabel('Run this project again by itself').check();
+    await page.getByRole('button', { name: 'Start exploring' }).click();
+  }
+
+  async function closeGrabber() {
+    await page.getByRole('button', { name: 'Back to projects' }).click();
+    await page.getByRole('button', { name: 'Close' }).click();
+    await page.getByRole('dialog').waitFor({ state: 'hidden' });
+  }
+
+  const finished = () => page.getByRole('status').getByText('Finished').waitFor({ timeout: 30_000 });
+
+  await step('the grabber explores a site and offers what it found', async () => {
+    const folder = join(grabDir, 'documents');
+    await startProject({ template: 'Documents', folder });
+    await finished();
+    await shot(page, '13-grabber');
+
+    const files = page.getByRole('list', { name: 'Files found' });
+    await files.getByText('report.pdf', { exact: false }).first().waitFor();
+    assert.equal(await files.getByText('via-base.pdf').count(), 1, 'found through a base tag');
+    assert.equal(await files.getByText('deep-report.pdf').count(), 1, 'found four levels down');
+    assert.equal(await files.getByText('data.zip').count(), 0, 'not a document');
+    assert.equal(await files.getByText('hidden.zip').count(), 0, 'robots.txt keeps this out');
+    await page.getByText('left alone for robots.txt', { exact: false }).waitFor();
+
+    // Only what's picked gets saved.
+    await files.getByLabel('deep-report.pdf').uncheck();
+    await files.getByLabel('notes.txt').uncheck();
+    await files.getByLabel('via-base.pdf').uncheck();
+    await page.getByRole('button', { name: 'Download selected' }).click();
+    await page.getByText('Added 1 file', { exact: false }).waitFor();
+    await closeGrabber();
+
+    await rowFor(page, 'report.pdf').getByText('Complete').waitFor();
+    assert.equal(
+      await sha256(join(folder, 'report.pdf')),
+      execFileSync(SERVER, ['sha256', '60K.pdf', '50008'], { encoding: 'utf8' }).trim(),
+    );
+    assert.ok(!existsSync(join(folder, 'notes.txt')));
+  });
+
+  await step('a project can be reopened, and download all fetches only what is left', async () => {
+    await page.getByRole('toolbar').getByRole('button', { name: 'Grabber' }).click();
+    await page.getByRole('button', { name: 'Open' }).first().click();
+
+    const files = page.getByRole('list', { name: 'Files found' });
+    await files.getByText('report.pdf', { exact: false }).first().waitFor();
+    assert.equal(await files.getByLabel('report.pdf').first().isDisabled(), true, 'already saved');
+
+    await page.getByRole('button', { name: 'Download all' }).click();
+    await page.getByText('Added 3 files', { exact: false }).waitFor();
+    await closeGrabber();
+
+    const folder = join(grabDir, 'documents');
+    await rowFor(page, 'notes.txt').getByText('Complete').waitFor();
+    await rowFor(page, 'deep-report.pdf').getByText('Complete').waitFor();
+    assert.ok(!existsSync(join(folder, 'report (1).pdf')), 'nothing was saved twice');
+  });
+
+  await step('exploring can be stopped and carried on later', async () => {
+    await startProject({ template: 'All files', folder: join(grabDir, 'stopped'), delay: 400 });
+    await page.getByRole('status').getByText('Exploring').waitFor();
+    await sleep(1000);
+    await page.getByRole('dialog').getByRole('button', { name: 'Stop', exact: true }).click();
+
+    const carryOn = page.getByRole('button', { name: 'Continue exploring' });
+    await carryOn.waitFor({ timeout: 8000 });
+    const partly = await page.getByRole('status').first().textContent();
+
+    await page.getByRole('button', { name: 'Back to projects' }).click();
+    await page.getByRole('button', { name: 'Open' }).last().click();
+    await carryOn.click();
+    await finished();
+
+    const pages = (text) => Number(/(\d+) pages read/.exec(text)[1]);
+    const whole = await page.getByRole('status').first().textContent();
+    assert.ok(pages(whole) > pages(partly), `${partly} then ${whole}`);
+    await closeGrabber();
+  });
+
+  await step('a mistake in a project is explained', async () => {
+    await page.getByRole('toolbar').getByRole('button', { name: 'Grabber' }).click();
+    await page.getByRole('button', { name: 'New project' }).click();
+    await page.getByLabel('Starting address').fill('not an address');
+    await page.getByRole('button', { name: 'Next' }).click();
+
+    // It's caught straight away, on the step where the mistake can be put right.
+    await page.getByRole('alert').getByText('address', { exact: false }).waitFor();
+    assert.equal(await page.getByLabel('Starting address').count(), 1);
+
+    await page.getByLabel('Starting address').fill(`${BASE}/site/`);
+    await page.getByRole('button', { name: 'Next' }).click();
+    await page.getByLabel('Project name').fill('');
+    await page.getByRole('button', { name: 'Next' }).click();
+    await page.getByRole('button', { name: 'Next' }).click();
+    await page.getByRole('button', { name: 'Start exploring' }).click();
+    await page.getByRole('alert').getByText('needs a name', { exact: false }).waitFor();
+
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    await page.getByRole('button', { name: 'Close' }).click();
+    await page.getByRole('dialog').waitFor({ state: 'hidden' });
+  });
+
+  await step('a whole site saved offline opens with the network turned off', async () => {
+    const folder = join(grabDir, 'offline');
+    await startProject({ template: 'Whole site', folder });
+    await finished();
+    await closeGrabber();
+
+    const home = join(folder, `127.0.0.1_${SERVER_PORT}`, 'site', 'index.html');
+    const logo = join(dirname(home), 'images', 'logo.png');
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline && !existsSync(logo)) await sleep(100);
+    assert.ok(existsSync(home), 'the first page was not saved');
+    assert.ok(existsSync(logo), 'the picture was not saved');
+    await sleep(800);
+
+    // A separate private Edge, with no connection at all.
+    const edge = await chromium.launch({ channel: 'msedge', headless: true });
+    try {
+      const context = await edge.newContext({ offline: true });
+      const reader = await context.newPage();
+      const visited = [];
+      reader.on('request', (request) => visited.push(request.url()));
+
+      await reader.goto(pathToFileURL(home).href);
+      assert.equal(await reader.title(), 'Home');
+
+      await reader.getByRole('link', { name: 'About' }).click();
+      await reader.waitForURL('**/about.html');
+      assert.equal(await reader.title(), 'About');
+
+      await reader.getByRole('link', { name: 'Deeper' }).click();
+      await reader.waitForURL('**/deep/one.html');
+      await reader.getByRole('link', { name: 'Two' }).click();
+      await reader.waitForURL('**/deep/two.html');
+      assert.equal(await reader.title(), 'Two');
+
+      const live = visited.filter((url) => !url.startsWith('file:'));
+      assert.deepEqual(live, [], 'the saved site reached for the network');
+    } finally {
+      await edge.close();
+    }
+  });
+
+  await step('a repeating project runs by itself and saves only what is new', async () => {
+    const scheduleData = join(dataDir, 'schedule-data');
+    const folder = join(grabDir, 'scheduled');
+    mkdirSync(scheduleData);
+    mkdirSync(folder);
+    writeFileSync(join(scheduleData, 'settings.json'), JSON.stringify({ downloadDir: folder }));
+
+    const projectsFile = join(scheduleData, 'projects.json');
+    writeFileSync(
+      projectsFile,
+      JSON.stringify({
+        projects: [
+          {
+            id: 1,
+            name: 'Scheduled',
+            startUrl: `${BASE}/site/`,
+            fileTypes: ['pdf'],
+            excludePages: ['*/trap/*'],
+            maxDepth: 6,
+            delayMs: 100,
+            folder,
+            repeatHours: 1,
+            nextRun: 1,
+          },
+        ],
+      }),
+    );
+
+    const runApp = () =>
+      spawn(APP, ['--minimized'], {
+        stdio: 'ignore',
+        env: {
+          ...process.env,
+          TRIBUTARY_DATA_DIR: scheduleData,
+          TRIBUTARY_PIPE: `${PIPE}-schedule`,
+          WEBVIEW2_USER_DATA_FOLDER: join(scheduleData, 'webview'),
+          WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: '',
+        },
+      });
+
+    const project = () => JSON.parse(readFileSync(projectsFile, 'utf8')).projects[0];
+    const waitUntil = async (check, what) => {
+      const deadline = Date.now() + 25_000;
+      while (Date.now() < deadline) {
+        if (check()) return;
+        await sleep(150);
+      }
+      throw new Error(`never happened: ${what}`);
+    };
+
+    const first = runApp();
+    try {
+      const pdfs = ['report.pdf', 'via-base.pdf', 'deep-report.pdf'];
+      await waitUntil(
+        () => pdfs.every((name) => existsSync(join(folder, name))),
+        'the scheduled run saved the files',
+      );
+      await waitUntil(() => project().savedFiles?.length === 3, 'the files were recorded');
+    } finally {
+      first.kill();
+    }
+    await sleep(800);
+
+    const ran = project();
+    assert.ok(ran.nextRun > Date.now() / 1000, 'the next run should be in the future');
+    assert.ok(ran.lastRun > 1);
+
+    // Make it due again. Everything on the site is already saved, so nothing should repeat.
+    writeFileSync(projectsFile, JSON.stringify({ projects: [{ ...ran, nextRun: 1, crawl: null }] }));
+    const second = runApp();
+    try {
+      await waitUntil(() => project().crawl?.finished === true, 'the second run finished');
+      await sleep(1000);
+    } finally {
+      second.kill();
+    }
+
+    const saved = readdirSync(folder).filter((name) => name.endsWith('.pdf')).sort();
+    assert.deepEqual(saved, ['deep-report.pdf', 'report.pdf', 'via-base.pdf']);
+  });
+
   await step('a second launch hands its command line to the running app', async () => {
     await inOptions('Downloads', () =>
       page.getByLabel('Show a message when a download finishes').uncheck(),
@@ -1301,6 +1549,7 @@ try {
   rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
   rmSync(downloadDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
   rmSync(videoDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
+  rmSync(grabDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
 
   const passed = results.filter((result) => result.passed).length;
   console.log(`\n${passed} of ${results.length} steps passed`);

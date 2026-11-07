@@ -8,6 +8,7 @@ mod rules;
 mod scanner;
 mod secrets;
 mod settings;
+mod site_grabber;
 mod system;
 mod video;
 
@@ -29,6 +30,7 @@ use crate::capture::Captured;
 use crate::commands::{AddRequest, AppState, add_download_now, apply_to_engine, state_name};
 use crate::scanner::ScanResult;
 use crate::settings::{Settings, Sounds};
+use crate::site_grabber::Grabber;
 use crate::system::Invocation;
 
 /// How often the wake timer is brought up to date.
@@ -423,12 +425,14 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
         quit_after: Mutex::default(),
         video_choices: Mutex::default(),
         joining: Mutex::default(),
+        grabber: Grabber::open(data_dir.join("projects.json")),
     });
     app.state::<AppState>().attach_site_logins();
     build_tray(app)?;
 
     capture::serve(app.handle().clone());
     watch_clipboard(app.handle().clone());
+    site_grabber::watch_schedule(app.handle().clone());
 
     // Only an installed copy registers, so a test can't redirect the real browsers.
     if std::env::var_os(DATA_DIR_VARIABLE).is_none()
@@ -519,6 +523,14 @@ pub fn run() {
             commands::window_ready,
             video::inspect_video,
             video::add_video,
+            site_grabber::list_projects,
+            site_grabber::new_project,
+            site_grabber::save_project,
+            site_grabber::delete_project,
+            site_grabber::start_exploring,
+            site_grabber::stop_exploring,
+            site_grabber::project_files,
+            site_grabber::download_project_files,
             commands::get_settings,
             commands::save_settings,
             commands::suggest_category,

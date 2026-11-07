@@ -557,3 +557,54 @@ async fn without_a_folder_nothing_is_served_as_a_real_file() {
     let server = start().await;
     assert_eq!(send(&server, "GET", "/static/x.ts", &[]).await.status, 404);
 }
+
+#[tokio::test]
+async fn the_website_serves_pages_files_and_its_rules() {
+    let server = start().await;
+
+    let home = send(&server, "GET", "/site/", &[]).await;
+    assert_eq!(home.status, 200);
+    assert!(
+        home.header("content-type")
+            .unwrap()
+            .starts_with("text/html")
+    );
+
+    let style = send(&server, "GET", "/site/style.css", &[]).await;
+    assert_eq!(style.header("content-type"), Some("text/css"));
+
+    let rules = send(&server, "GET", "/robots.txt", &[]).await;
+    assert!(
+        String::from_utf8(rules.body)
+            .unwrap()
+            .contains("/site/private/")
+    );
+
+    assert_eq!(
+        send(&server, "GET", "/site/broken.html", &[]).await.status,
+        404
+    );
+}
+
+#[tokio::test]
+async fn the_websites_files_have_their_published_content() {
+    let server = start().await;
+
+    for file in testserver::website::FILES {
+        let reply = send(&server, "GET", &format!("/site/{}", file.path), &[]).await;
+        let mut expected = vec![0; file.size_kib as usize * 1024];
+        content::fill(file.seed, 0, &mut expected);
+
+        assert_eq!(reply.status, 200, "{}", file.path);
+        assert_eq!(reply.body, expected, "{}", file.path);
+    }
+}
+
+#[tokio::test]
+async fn a_moved_page_redirects() {
+    let server = start().await;
+    let reply = send(&server, "GET", "/site/moved.html", &[]).await;
+
+    assert_eq!(reply.status, 302);
+    assert_eq!(reply.header("location"), Some("/site/about.html"));
+}

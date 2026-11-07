@@ -20,7 +20,7 @@ use tokio::task::{JoinHandle, JoinSet};
 use crate::content;
 use crate::http::{RangeRequest, RequestHead, parse_range, reason};
 use crate::scenario::{Scenario, with_redirects};
-use crate::streams;
+use crate::{streams, website};
 
 const MAX_HEAD_BYTES: usize = 64 << 10;
 const MAX_CHUNK_BYTES: u64 = 64 << 10;
@@ -423,6 +423,10 @@ async fn respond(state: &State, stream: &mut TcpStream, head: &RequestHead) -> S
             ];
             send_small(stream, head, 302, &headers, b"").await
         }
+        "/robots.txt" => {
+            let headers = [("Content-Type", "text/plain".to_owned())];
+            send_small(stream, head, 200, &headers, website::ROBOTS.as_bytes()).await
+        }
         "/video" => {
             let headers = [("Content-Type", "text/html; charset=utf-8".to_owned())];
             send_small(stream, head, 200, &headers, VIDEO_PAGE.as_bytes()).await
@@ -437,6 +441,9 @@ async fn respond(state: &State, stream: &mut TcpStream, head: &RequestHead) -> S
             if let Some(name) = path.strip_prefix("/static/") {
                 return serve_static(state, stream, head, name).await;
             }
+            if let Some(site_path) = path.strip_prefix("/site/") {
+                return serve_site(state, stream, head, site_path).await;
+            }
             let rendered = path
                 .strip_prefix("/media/")
                 .and_then(|name| streams::render(name, query));
@@ -449,6 +456,25 @@ async fn respond(state: &State, stream: &mut TcpStream, head: &RequestHead) -> S
             }
         }
     }
+}
+
+async fn serve_site(
+    state: &State,
+    stream: &mut TcpStream,
+    head: &RequestHead,
+    path: &str,
+) -> Served {
+    if let Some((content_type, text)) = website::page(path) {
+        let headers = [("Content-Type", content_type.to_owned())];
+        return send_small(stream, head, 200, &headers, text.as_bytes()).await;
+    }
+    if let Some((name, query)) = website::generated(path) {
+        return serve_file(state, stream, head, &name, &query).await;
+    }
+    if let Some(location) = website::redirect(path) {
+        return send_small(stream, head, 302, &[("Location", location.to_owned())], b"").await;
+    }
+    send_small(stream, head, 404, &[], b"not found\n").await
 }
 
 /// The content type of a real file, going by its extension.

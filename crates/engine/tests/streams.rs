@@ -627,3 +627,72 @@ async fn a_missing_playlist_says_so() {
         .unwrap_err();
     assert!(error.contains("404"), "{error}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_web_page_is_read_with_its_type() {
+    let fixture = fixture().await;
+    let url = fixture.server.url("/site/about.html");
+
+    let page = fixture.engine.fetch_page(&url, &[], None).await.unwrap();
+
+    assert!(page.found);
+    assert!(page.content_type.unwrap().starts_with("text/html"));
+    assert!(page.text.unwrap().contains("About this site"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reading_a_page_follows_redirects_and_says_where_it_ended_up() {
+    let fixture = fixture().await;
+    let url = fixture.server.url("/site/moved.html");
+
+    let page = fixture.engine.fetch_page(&url, &[], None).await.unwrap();
+
+    assert!(page.url.ends_with("/site/about.html"), "{}", page.url);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_large_file_is_not_read_when_looking_for_a_page() {
+    let fixture = fixture().await;
+    let url = fixture.server.url("/file/200M.zip");
+
+    let started = Instant::now();
+    let page = fixture.engine.fetch_page(&url, &[], None).await.unwrap();
+
+    assert!(page.found);
+    assert_eq!(page.text, None);
+    assert!(started.elapsed() < Duration::from_secs(2));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_missing_page_is_an_answer_rather_than_a_failure() {
+    let fixture = fixture().await;
+    let url = fixture.server.url("/site/broken.html");
+
+    let page = fixture.engine.fetch_page(&url, &[], None).await.unwrap();
+
+    assert!(!page.found);
+    assert_eq!(page.text, None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_busy_server_is_tried_again_when_reading_a_page() {
+    let fixture = fixture().await;
+    let url = fixture
+        .server
+        .url("/file/1K.txt?fail=503&fail_times=2&run=page");
+
+    let page = fixture.engine.fetch_page(&url, &[], None).await.unwrap();
+
+    assert!(page.found);
+    assert!(page.text.is_some());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_server_that_stays_down_is_reported_when_reading_a_page() {
+    let fixture = fixture().await;
+    let url = fixture
+        .server
+        .url("/file/1K.txt?fail=503&fail_times=99&run=down");
+
+    assert!(fixture.engine.fetch_page(&url, &[], None).await.is_err());
+}

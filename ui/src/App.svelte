@@ -7,6 +7,7 @@
   import ContextMenu, { type MenuItem } from './components/ContextMenu.svelte';
   import DeleteDialog from './components/DeleteDialog.svelte';
   import DownloadList from './components/DownloadList.svelte';
+  import GrabberDialog from './components/GrabberDialog.svelte';
   import LoginDialog from './components/LoginDialog.svelte';
   import Modal from './components/Modal.svelte';
   import OptionsDialog from './components/OptionsDialog.svelte';
@@ -59,6 +60,7 @@
     | { kind: 'delete'; ids: number[] }
     | { kind: 'options' }
     | { kind: 'scheduler' }
+    | { kind: 'grabber' }
     | { kind: 'shutdown'; seconds: number }
     | { kind: 'login'; id: number }
     | { kind: 'scan'; file: string; problem: string }
@@ -325,6 +327,9 @@
         break;
       case 'scheduler':
         dialog = { kind: 'scheduler' };
+        break;
+      case 'grabber':
+        dialog = { kind: 'grabber' };
         break;
       case 'startQueue':
         if (targetQueue) api.startQueue(targetQueue.id).catch(showError);
@@ -661,6 +666,8 @@
     onimport={importData}
     onclose={closeDialog}
   />
+{:else if dialog?.kind === 'grabber'}
+  <GrabberDialog onerror={showError} onclose={closeDialog} />
 {:else if dialog?.kind === 'scheduler'}
   <SchedulerDialog
     queues={downloads.queues}

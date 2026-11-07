@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use media::Part;
 use percent_encoding::percent_decode_str;
-use reqwest::header::{ACCEPT_ENCODING, HeaderMap, HeaderName, HeaderValue};
+use reqwest::header::{ACCEPT_ENCODING, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Client, NoProxy, Proxy, Response, Url, redirect};
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
@@ -174,6 +174,18 @@ pub struct FileInfo {
     /// The address leads to a web page rather than a file.
     pub is_web_page: bool,
     pub content_type: Option<String>,
+}
+
+/// What a server gave for a web page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchedPage {
+    /// Where it really came from, after any redirects.
+    pub url: String,
+    /// False if the server said there's no such page.
+    pub found: bool,
+    pub content_type: Option<String>,
+    /// Empty if it wasn't text.
+    pub text: Option<String>,
 }
 
 /// A queue and how it's doing right now.
@@ -637,6 +649,32 @@ impl Engine {
         headers: &[(String, String)],
         login: Option<Login>,
     ) -> Result<String, String> {
+        self.request(url, headers, login, read_text).await
+    }
+
+    /// Reads a web page. A body that isn't text is left unread, so a large file costs
+    /// nothing here. An answer such as 404 is a result, not an error.
+    pub async fn fetch_page(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+        login: Option<Login>,
+    ) -> Result<FetchedPage, String> {
+        self.request(url, headers, login, read_page).await
+    }
+
+    /// Makes a request, retrying temporary failures and logging in if asked to.
+    async fn request<T, R, F>(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+        login: Option<Login>,
+        read: R,
+    ) -> Result<T, String>
+    where
+        R: Fn(Response) -> F,
+        F: Future<Output = Result<T, Problem>>,
+    {
         let headers = to_header_map(headers).map_err(|error| error.to_string())?;
         let client = self.inner.client();
         let policy = self.inner.config.retry;
@@ -647,7 +685,7 @@ impl Engine {
             let request = client.get(url).headers(headers.clone());
             let request = remote::authorize(request, auth.as_deref(), url);
             let outcome = match request.send().await {
-                Ok(response) => read_text(response).await,
+                Ok(response) => read(response).await,
                 Err(error) => Err(Problem::from_request(error)),
             };
 
@@ -791,12 +829,7 @@ impl Engine {
     }
 }
 
-async fn read_text(mut response: Response) -> Result<String, Problem> {
-    let status = response.status();
-    if !status.is_success() {
-        return Err(Problem::from_status(status, response.headers()));
-    }
-
+async fn read_body(response: &mut Response) -> Result<String, Problem> {
     let mut data = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(Problem::from_request)? {
         data.extend_from_slice(&chunk);
@@ -805,6 +838,52 @@ async fn read_text(mut response: Response) -> Result<String, Problem> {
         }
     }
     Ok(String::from_utf8_lossy(&data).into_owned())
+}
+
+async fn read_text(mut response: Response) -> Result<String, Problem> {
+    let status = response.status();
+    if !status.is_success() {
+        return Err(Problem::from_status(status, response.headers()));
+    }
+    read_body(&mut response).await
+}
+
+fn is_text(content_type: Option<&str>) -> bool {
+    content_type.is_none_or(|kind| {
+        let kind = kind.to_ascii_lowercase();
+        kind.starts_with("text/") || kind.contains("xhtml") || kind.contains("xml")
+    })
+}
+
+async fn read_page(mut response: Response) -> Result<FetchedPage, Problem> {
+    let status = response.status();
+    let url = response.url().to_string();
+    let content_type = remote::text(response.headers(), CONTENT_TYPE);
+
+    if !status.is_success() {
+        // Only what might go better next time is a failure. The rest is just an answer.
+        return match Problem::from_status(status, response.headers()) {
+            Problem::Fatal(_) => Ok(FetchedPage {
+                url,
+                found: false,
+                content_type,
+                text: None,
+            }),
+            problem => Err(problem),
+        };
+    }
+
+    let text = if is_text(content_type.as_deref()) {
+        Some(read_body(&mut response).await?)
+    } else {
+        None
+    };
+    Ok(FetchedPage {
+        url,
+        found: true,
+        content_type,
+        text,
+    })
 }
 
 fn build_client(config: &Config, network: &NetworkOptions) -> Result<Client, Error> {

@@ -20,6 +20,7 @@ use crate::after_queue::{self, AfterAction, WakeTimer, seconds_until_start};
 use crate::capture::{CaptureEvent, Captured, Pending};
 use crate::rules::{match_category, site_matches};
 use crate::settings::{MAX_CONNECTIONS, MIN_CONNECTIONS, ProxyChoice, Settings, SiteLogin};
+use crate::site_grabber::Grabber;
 use crate::{data, scanner, secrets, system};
 
 const SECONDS_PER_HOUR: u64 = 3600;
@@ -42,6 +43,7 @@ pub struct AppState {
     pub video_choices: Mutex<Vec<Quality>>,
     /// Videos having their picture and sound joined.
     pub joining: Mutex<HashSet<i64>>,
+    pub grabber: Grabber,
 }
 
 impl AppState {

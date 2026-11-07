@@ -131,6 +131,54 @@ export interface CaptureItem {
   video: boolean;
 }
 
+export interface GrabberProject {
+  id: number;
+  name: string;
+  startUrl: string;
+  template: string;
+  maxDepth: number;
+  maxPages: number;
+  scope: 'site' | 'folder';
+  filesAnywhere: boolean;
+  delayMs: number;
+  includePages: string[];
+  excludePages: string[];
+  fileTypes: string[];
+  excludeFiles: string[];
+  minSize: number | null;
+  maxSize: number | null;
+  folder: string;
+  keepFolders: boolean;
+  offline: boolean;
+  repeatHours: number | null;
+  nextRun: number | null;
+  lastRun: number | null;
+}
+
+export interface ProjectView extends GrabberProject {
+  pagesRead: number;
+  filesFound: number;
+  explored: boolean;
+  running: boolean;
+}
+
+export interface GrabberProgress {
+  id: number;
+  pagesRead: number;
+  pagesFailed: number;
+  pagesRefused: number;
+  pagesWaiting: number;
+  filesFound: number;
+  finished: boolean;
+}
+
+export interface GrabberFile {
+  url: string;
+  from: string;
+  size: number | null;
+  saved: boolean;
+}
+
 export interface VideoChoice {
   label: string;
   width: number | null;

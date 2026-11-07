@@ -10,7 +10,11 @@ import type {
   Download,
   EditRequest,
   FileInfo,
+  GrabberFile,
+  GrabberProgress,
+  GrabberProject,
   ProgressEvent,
+  ProjectView,
   Queue,
   ScanResult,
   Settings,
@@ -43,6 +47,17 @@ export const windowReady = () => invoke<CaptureEvent[]>('window_ready');
 export const inspectVideo = (url: string, fileName?: string, captureToken?: number) =>
   invoke<VideoDetails>('inspect_video', { url, fileName, captureToken });
 export const addVideo = (request: AddVideoRequest) => invoke<void>('add_video', { request });
+export const listProjects = () => invoke<ProjectView[]>('list_projects');
+export const newProject = (template: string, startUrl: string) =>
+  invoke<GrabberProject>('new_project', { template, startUrl });
+export const saveProject = (project: GrabberProject) =>
+  invoke<number>('save_project', { project });
+export const deleteProject = (id: number) => invoke<void>('delete_project', { id });
+export const startExploring = (id: number) => invoke<void>('start_exploring', { id });
+export const stopExploring = (id: number) => invoke<void>('stop_exploring', { id });
+export const projectFiles = (id: number) => invoke<GrabberFile[]>('project_files', { id });
+export const downloadProjectFiles = (id: number, urls: string[]) =>
+  invoke<number>('download_project_files', { id, urls });
 export const getSettings = () => invoke<Settings>('get_settings');
 export const saveSettings = (settings: Settings) => invoke<void>('save_settings', { settings });
 export const suggestCategory = (fileName: string, url: string) =>
@@ -90,6 +105,14 @@ export const onState = (handler: (event: StateEvent) => void): Promise<UnlistenF
 
 export const onQueuesChanged = (handler: () => void): Promise<UnlistenFn> =>
   listen('queues-changed', () => handler());
+
+export const onGrabberProgress = (
+  handler: (event: GrabberProgress) => void,
+): Promise<UnlistenFn> =>
+  listen<GrabberProgress>('grabber-progress', (event) => handler(event.payload));
+
+export const onGrabberFinished = (handler: (id: number) => void): Promise<UnlistenFn> =>
+  listen<number>('grabber-finished', (event) => handler(event.payload));
 
 export const onVideoProblem = (handler: (problem: string) => void): Promise<UnlistenFn> =>
   listen<string>('video-problem', (event) => handler(event.payload));

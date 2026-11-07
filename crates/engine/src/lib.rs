@@ -21,8 +21,8 @@ mod wildcard;
 
 pub use auth::Login;
 pub use engine::{
-    Config, DownloadEdit, Engine, Event, FileInfo, ManualProxy, NetworkOptions, NewDownload,
-    ProxyMode, QueueInfo, ServerLimit,
+    Config, DownloadEdit, Engine, Event, FetchedPage, FileInfo, ManualProxy, NetworkOptions,
+    NewDownload, ProxyMode, QueueInfo, ServerLimit,
 };
 pub use error::Error;
 pub use limits::Quota;

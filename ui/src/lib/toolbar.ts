@@ -12,6 +12,7 @@ export const ICONS = {
   scheduler: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7v5.5l3.5 2"/>',
   startQueue: '<path d="M4 6h7M4 12h7M4 18h7"/><path d="M14 7.5v9l6-4.5z"/>',
   stopQueue: '<path d="M4 6h7M4 12h7M4 18h7"/><path d="M14.5 8h5v8h-5z"/>',
+  grabber: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5M8.5 11h5M11 8.5v5"/>',
 } as const;
 
 export type IconName = keyof typeof ICONS;
@@ -26,6 +27,7 @@ export type ToolbarAction =
   | 'scheduler'
   | 'startQueue'
   | 'stopQueue'
+  | 'grabber'
   | 'options';
 
 export interface ToolbarButton {
@@ -44,6 +46,7 @@ export const TOOLBAR_BUTTONS: ToolbarButton[] = [
   { id: 'scheduler', label: 'Scheduler', icon: 'scheduler' },
   { id: 'startQueue', label: 'Start queue', icon: 'startQueue' },
   { id: 'stopQueue', label: 'Stop queue', icon: 'stopQueue' },
+  { id: 'grabber', label: 'Grabber', icon: 'grabber' },
   { id: 'options', label: 'Options', icon: 'options' },
 ];
 
