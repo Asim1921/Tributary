@@ -10,7 +10,11 @@ import {
   extensionOf,
   headerValue,
   isExcluded,
+  isWorthPanel,
   keepDocument,
+  MIN_PLAYER_HEIGHT,
+  MIN_PLAYER_WIDTH,
+  pageDownload,
   mediaKind,
   mediaLabel,
   responseLength,
@@ -146,6 +150,57 @@ describe('a page opening', () => {
     const url = 'https://x.test/same.mp4';
     const list = addMedia([find(url, 'old')], find(url, 'new'));
     expect(keepDocument(list, 'new')).toEqual([find(url, 'new')]);
+  });
+});
+
+describe('isWorthPanel', () => {
+  it('wants a real player', () => {
+    expect(isWorthPanel({ width: 640, height: 360 })).toBe(true);
+    expect(isWorthPanel({ width: MIN_PLAYER_WIDTH, height: MIN_PLAYER_HEIGHT })).toBe(true);
+  });
+
+  it('leaves thumbnails and previews alone', () => {
+    expect(isWorthPanel({ width: MIN_PLAYER_WIDTH - 1, height: 360 })).toBe(false);
+    expect(isWorthPanel({ width: 640, height: MIN_PLAYER_HEIGHT - 1 })).toBe(false);
+    expect(isWorthPanel({ width: 0, height: 0 })).toBe(false);
+  });
+
+  it('leaves a hidden player alone', () => {
+    expect(isWorthPanel({ width: 640, height: 360, hidden: true })).toBe(false);
+    expect(isWorthPanel(null)).toBe(false);
+  });
+});
+
+describe('pageDownload', () => {
+  const page = { url: 'https://www.youtube.com/watch?v=abc', title: ' A film ', userAgent: 'Agent' };
+
+  it('describes the page as a page, with its title', () => {
+    expect(pageDownload(page)).toEqual({
+      type: 'download',
+      url: page.url,
+      referrer: page.url,
+      userAgent: 'Agent',
+      fileName: 'A film',
+      video: true,
+      page: true,
+    });
+  });
+
+  it('never carries a cookie, whatever else it is given', () => {
+    const message = pageDownload({ ...page, cookies: 'session=secret' });
+    expect(JSON.stringify(message)).not.toContain('secret');
+    expect(Object.keys(message)).not.toContain('cookies');
+  });
+
+  it('leaves the name out when the page has no title', () => {
+    expect(pageDownload({ ...page, title: '   ' }).fileName).toBeUndefined();
+    expect(pageDownload({ ...page, title: undefined }).fileName).toBeUndefined();
+  });
+
+  it('only describes web pages', () => {
+    for (const url of ['file:///C:/a.html', 'ftp://x.test/a', 'about:blank', 'chrome://extensions', 'javascript:alert(1)', 'not a url']) {
+      expect(pageDownload({ ...page, url }), url).toBe(null);
+    }
   });
 });
 

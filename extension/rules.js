@@ -8,6 +8,10 @@ export const MIN_MEDIA_BYTES = 256 * 1024;
 
 const MAX_MEDIA_ITEMS = 20;
 
+/** A player smaller than this is a thumbnail or a preview, not worth a panel. */
+export const MIN_PLAYER_WIDTH = 320;
+export const MIN_PLAYER_HEIGHT = 180;
+
 const SCHEMES = ['http:', 'https:', 'ftp:'];
 
 /** The last part of a path, which may use either kind of slash. */
@@ -174,6 +178,32 @@ export function mediaLabel(item) {
 
 /** Where a tab's list of finds is kept. */
 export const mediaKey = (tabId) => `media-${tabId}`;
+
+/** Whether a player is big and showing enough to put a panel beside. */
+export function isWorthPanel(box) {
+  return Boolean(
+    box && box.width >= MIN_PLAYER_WIDTH && box.height >= MIN_PLAYER_HEIGHT && !box.hidden,
+  );
+}
+
+/**
+ * What to tell the app about a page with a player and no stream the extension could see.
+ * There is deliberately no cookie in it: the app reads the page without the browser's
+ * logins, and never passes them to another server. Returns null for anything but a web page.
+ */
+export function pageDownload({ url, title, userAgent }) {
+  if (!hasCapturableScheme(url) || new URL(url).protocol === 'ftp:') return null;
+
+  return {
+    type: 'download',
+    url,
+    referrer: url,
+    userAgent,
+    fileName: (title ?? '').trim() || undefined,
+    video: true,
+    page: true,
+  };
+}
 
 /** Turns the browser's cookie list into a `Cookie` header. */
 export function cookieHeader(cookies) {

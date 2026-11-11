@@ -63,6 +63,8 @@ const results = [];
 let appPage;
 
 async function step(name, run) {
+  // E2E_SKIP=<pattern> leaves out matching steps, for narrowing down a problem.
+  if (process.env.E2E_SKIP && new RegExp(process.env.E2E_SKIP).test(name)) return;
   const started = Date.now();
   try {
     await run();
@@ -244,10 +246,13 @@ class DevTools {
   }
 }
 
-/** Where the panel is, once the extension has shown it. */
-async function waitForPanel(tools) {
+/**
+ * Where the panel is, once the extension has shown it. A panel of finds `media` can be
+ * told from the one that hands the whole `page` over.
+ */
+async function waitForPanel(tools, kind = 'media') {
   const find = `(() => {
-    const panel = document.querySelector('[data-tributary-panel]');
+    const panel = document.querySelector('[data-tributary-panel="${kind}"]');
     if (!panel) return null;
     const box = panel.getBoundingClientRect();
     return { x: box.left, y: box.top, width: box.width, height: box.height };
@@ -377,7 +382,8 @@ try {
 
   writeFileSync(
     join(dataDir, 'settings.json'),
-    JSON.stringify({ downloadDir: appFolder, showCompleteDialog: false }),
+    // No yt-dlp is chosen, so it's never run here and never looked for on this computer.
+    JSON.stringify({ downloadDir: appFolder, showCompleteDialog: false, ytdlpPath: 'C:\\no\\such\\yt-dlp.exe' }),
   );
 
   mkdirSync(join(profile, 'Default'), { recursive: true });
@@ -534,7 +540,36 @@ try {
     await appPage.getByRole('dialog').waitFor({ state: 'hidden' });
   });
 
+  await step('a player fed by script gets a panel that hands over the whole page', async () => {
+    await pageTools.open(`${BASE}/video-script`);
+
+    const box = await waitForPanel(pageTools, 'page');
+    assert.ok(box.width > 0 && box.height > 0, 'the panel has no size');
+    assert.equal(
+      await pageTools.evaluate(`document.querySelector('[data-tributary-panel="media"]')`),
+      null,
+      'nothing was found directly, so there are no finds to list',
+    );
+
+    await pageTools.clickAt(box.x + 30, box.y + 14);
+    await appPage.getByRole('heading', { name: 'Save video' }).waitFor();
+    await appPage.getByText(`${BASE}/video-script`).waitFor();
+
+    // This app has no yt-dlp, so it offers to get it rather than guessing.
+    await appPage.getByRole('button', { name: 'Install yt-dlp' }).waitFor();
+    await appPage.getByRole('button', { name: 'Close' }).click();
+    await appPage.getByRole('dialog').waitFor({ state: 'hidden' });
+  });
+
+  await step('a page with no player gets no panel', async () => {
+    await pageTools.open(`${BASE}/`);
+    await sleep(2500);
+    assert.equal(await pageTools.evaluate(`document.querySelector('[data-tributary-panel]')`), null);
+  });
+
   await step('a script on the page cannot press the panel', async () => {
+    await pageTools.open(`${BASE}/video`);
+    await waitForPanel(pageTools);
     await pageTools.evaluate(`document.querySelector('[data-tributary-panel]').click()`);
     await sleep(600);
     assert.equal(await appPage.getByRole('dialog').count(), 0);
@@ -654,17 +689,32 @@ try {
         (item) => item.type === 'service_worker' && item.url.includes(EXTENSION_ID),
       );
 
-    // Browsers stop an idle extension after about 30 seconds.
-    const deadline = Date.now() + 70_000;
-    while (Date.now() < deadline && (await isAwake())) await sleep(1000);
+    const workerTarget = async () =>
+      (await devToolsTargets(BROWSER_DEBUG_PORT)).find(
+        (item) => item.type === 'service_worker' && item.url.includes(EXTENSION_ID),
+      );
+
+    // A browser stops an idle extension by itself, but how long that takes varies between
+    // versions, and some builds now keep it for good while a window is open. So it's stopped
+    // here, the way the browser would, and only if that doesn't work is its own timer awaited.
+    const target = await workerTarget();
+    if (target) {
+      await fetch(`http://127.0.0.1:${BROWSER_DEBUG_PORT}/json/close/${target.id}`).catch(() => {});
+    }
+    for (let attempt = 0; attempt < 20 && (await isAwake()); attempt += 1) await sleep(500);
+
+    if (await isAwake()) {
+      const deadline = Date.now() + 70_000;
+      while (Date.now() < deadline && (await isAwake())) await sleep(1000);
+    }
     const awake = await isAwake();
     // Edge can keep an extension awake while its window shows. That does no harm, but it
-    // leaves nothing to wake up. Chrome sleeps reliably, so there this has to happen.
+    // leaves nothing to wake up.
     if (awake && process.argv[2] === 'edge') {
       console.log('     skipped: Edge kept the extension awake');
       return;
     }
-    assert.equal(awake, false, 'the extension never went to sleep');
+    assert.equal(awake, false, 'the extension could not be put to sleep');
 
     await pageTools.open(`${BASE}/`);
     await pageTools.click('Name from server');

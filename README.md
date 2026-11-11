@@ -41,10 +41,11 @@ If Tributary is already running, these go to the running copy.
 
 ## Video
 
-The extension shows a panel over video players, and lists what it finds in its toolbar popup. Any HLS (`.m3u8`) or DASH (`.mpd`) address also works in **Add URL**.
+The extension shows a panel in the corner of any video player on a page, and lists what it finds in its toolbar popup. Any HLS (`.m3u8`) or DASH (`.mpd`) address also works in **Add URL**, and so does the address of a page with a video on it.
 
-- **Protected and live videos are refused.** Any stream that declares encryption or DRM won't be saved.
-- **Sites that feed their player by script aren't detected**, which includes YouTube. The panel won't appear there.
+- **YouTube and sites like it** feed their player by script, so there is no file to see. For those, the panel's **Download this video** button gives the page to [yt-dlp](https://github.com/yt-dlp/yt-dlp), a free open-source tool, which finds the video's qualities. Tributary then downloads the one you pick, usually the highest, itself. The first time, the video dialog offers to install yt-dlp for you. It's downloaded from yt-dlp's own releases and checked against their published checksum, and **Options > Video** can update it.
+- **Terms of use:** saving video from a site may go against that site's terms, and YouTube's forbid it. That's your decision to make. Tributary says so in the dialog.
+- **Protected, live, paid and login-only videos are refused.** Anything that declares encryption or DRM won't be saved, and neither will members-only or private videos. yt-dlp is never given your cookies or logins.
 - **Some videos keep picture and sound apart.** With [ffmpeg](https://ffmpeg.org) installed they're joined into one file. Without it they stay as two. Set its location under **Options**, **Video**, if it isn't found automatically.
 
 ## Site grabber

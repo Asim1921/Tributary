@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Script video test page</title>
+<style>
+  body { font: 16px/1.6 system-ui, sans-serif; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; }
+  video { display: block; width: 100%; aspect-ratio: 16 / 9; background: #222; }
+</style>
+</head>
+<body>
+<h1>Script video test page</h1>
+<p>The player is fed by script from a blob, as many large sites do, so no address for the
+video ever appears in a request an extension can see.</p>
+<video id="player" controls></video>
+<script>
+  fetch('/file/1M.bin?seed=77')
+    .then((reply) => reply.blob())
+    .then((blob) => {
+      document.getElementById('player').src = URL.createObjectURL(blob);
+    });
+</script>
+</body>
+</html>

@@ -116,6 +116,7 @@ export interface Settings {
   sounds: Sounds;
   captureEnabled: boolean;
   ffmpegPath: string;
+  ytdlpPath: string;
   videoPanel: boolean;
   captureTypes: string[];
   captureExclusions: string[];
@@ -129,6 +130,7 @@ export interface CaptureItem {
   url: string;
   fileName: string | null;
   video: boolean;
+  page: boolean;
 }
 
 export interface GrabberProject {

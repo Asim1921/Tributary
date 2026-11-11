@@ -126,6 +126,8 @@ pub struct Settings {
     pub ffmpeg_path: String,
     /// Whether the extension shows its panel over video players.
     pub video_panel: bool,
+    /// Where yt-dlp is. Empty means the copy Tributary installed, then the `PATH`.
+    pub ytdlp_path: String,
 }
 
 fn default_capture_types() -> Vec<String> {
@@ -183,6 +185,7 @@ impl Default for Settings {
             show_drop_target: false,
             ffmpeg_path: String::new(),
             video_panel: true,
+            ytdlp_path: String::new(),
         }
     }
 }

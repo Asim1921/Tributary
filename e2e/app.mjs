@@ -15,6 +15,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  statSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -40,6 +41,8 @@ const dataDir = mkdtempSync(join(tmpdir(), 'tributary-e2e-data-'));
 const downloadDir = mkdtempSync(join(tmpdir(), 'tributary-e2e-files-'));
 const videoDir = mkdtempSync(join(tmpdir(), 'tributary-e2e-video-'));
 const grabDir = mkdtempSync(join(tmpdir(), 'tributary-e2e-grab-'));
+// Kept outside the app's data folder, because the request log holds the test cookies.
+const serverLog = join(grabDir, 'server.jsonl');
 
 const results = [];
 const pageErrors = [];
@@ -49,6 +52,9 @@ let app;
 let browser;
 
 async function step(name, run) {
+  // E2E_ONLY=<pattern> runs just the steps whose names match, for chasing one problem.
+  if (process.env.E2E_ONLY && !new RegExp(process.env.E2E_ONLY).test(name)) return;
+
   const started = Date.now();
   try {
     await run();
@@ -212,9 +218,12 @@ try {
   assert.ok(existsSync(SERVER), `the test server isn't built: ${SERVER}`);
 
   // Set before the app starts, so a test can never write to the real Downloads folder.
-  writeFileSync(join(dataDir, 'settings.json'), JSON.stringify({ downloadDir }));
+  writeFileSync(
+    join(dataDir, 'settings.json'),
+    JSON.stringify({ downloadDir, ...(process.env.E2E_ONLY ? { showCompleteDialog: false } : {}) }),
+  );
 
-  server = spawn(SERVER, ['--port', String(SERVER_PORT), '--files', videoDir], {
+  server = spawn(SERVER, ['--port', String(SERVER_PORT), '--files', videoDir, '--log', serverLog], {
     stdio: ['ignore', 'pipe', 'ignore'],
   });
   const ftpBase = await new Promise((resolve, reject) => {
@@ -1333,6 +1342,104 @@ try {
 
     const saved = readdirSync(folder).filter((name) => name.endsWith('.pdf')).sort();
     assert.deepEqual(saved, ['deep-report.pdf', 'report.pdf', 'via-base.pdf']);
+  });
+
+  // A stand-in for yt-dlp, so these steps need no network and are strict about how it's run.
+  const fakeYtdlp = join(grabDir, 'fake-ytdlp.cmd');
+  const fakeScript = join(import.meta.dirname, 'fake-ytdlp.mjs');
+  writeFileSync(fakeYtdlp, `@node "${fakeScript}" %*\r\n`);
+  const fakeLog = join(import.meta.dirname, 'fake-ytdlp.log');
+  rmSync(fakeLog, { force: true });
+  const serverSaw = () =>
+    existsSync(serverLog)
+      ? readFileSync(serverLog, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))
+      : [];
+
+  /** Gets to the video dialog for a page, the way Add URL does. */
+  async function lookForVideo(query = '') {
+    await page.getByRole('button', { name: 'Add URL' }).first().click();
+    await page.getByLabel('Address').fill(`${BASE}/video${query}`);
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await page.getByRole('button', { name: 'Look for a video on this page' }).click();
+    await page.getByRole('heading', { name: 'Save video' }).waitFor();
+  }
+
+  await step('a page whose video is hidden from downloading is read through yt-dlp, joined and played', async () => {
+    makeVideo('-map', '0:v', 'pic.mp4');
+    makeVideo('-map', '1:a', 'snd.m4a');
+    await inOptions('Video', () => page.getByLabel('yt-dlp program').fill(fakeYtdlp));
+
+    await lookForVideo();
+    await page.getByRole('radio', { name: '240p' }).waitFor();
+    assert.equal(await page.getByRole('radio').count(), 1, 'only the plain file is offered, not the stream');
+    await page.getByText('go against that site', { exact: false }).waitFor();
+    await page.getByText('joined into one file', { exact: false }).first().waitFor();
+    assert.equal(await page.getByLabel('Save as').inputValue(), 'Fake film: part 1?', "the site's own title");
+    await shot(page, '14-page-video');
+    await saveVideo('Fake film');
+
+    // Done means one file with picture and sound in it, and no separate sound file. Neither
+    // file exists at first, so the end state is the only sign that can be trusted.
+    const joined = join(downloadDir, 'Fake film.mp4');
+    const joinedUp = () => {
+      if (existsSync(join(downloadDir, 'Fake film.audio.m4a'))) return false;
+      try {
+        return probe(joined).kinds.join() === 'audio,video';
+      } catch {
+        return false; // Not finished arriving yet.
+      }
+    };
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline && !joinedUp()) await sleep(100);
+    assert.ok(joinedUp(), 'picture and sound never ended up in one file');
+
+    await rowFor(page, 'Fake film.mp4').getByText('Complete').waitFor();
+    assert.equal(await page.locator('tbody tr', { hasText: 'Fake film.audio.m4a' }).count(), 0);
+    assertRealVideo(joined);
+
+    // What the server was sent: the safe headers only, and never a cookie.
+    const fetched = serverSaw().filter((entry) => entry.target.startsWith('/static/pic.mp4'));
+    assert.ok(fetched.length > 0, 'the picture was never fetched');
+    for (const entry of fetched) {
+      const names = entry.headers.map(([name]) => name.toLowerCase());
+      assert.ok(!names.includes('cookie'), 'a cookie went to the video server');
+      assert.ok(!names.includes('authorization'), 'a login went to the video server');
+      assert.equal(entry.headers.find(([name]) => name.toLowerCase() === 'user-agent')[1], 'FakeAgent/1');
+    }
+    assert.ok(readFileSync(fakeLog, 'utf8').includes('/video'), 'yt-dlp was never run');
+  });
+
+  await step('protected, live and login-only pages are refused, and nothing is saved', async () => {
+    const before = await page.locator('tbody tr').count();
+
+    for (const [query, words] of [
+      ['?case=drm', 'protected'],
+      ['?case=live', 'live stream'],
+      ['?case=private', 'login or a paid account'],
+      ['?case=broken', "couldn't read this page"],
+    ]) {
+      await lookForVideo(query);
+      await page.getByRole('alert').getByText(words, { exact: false }).waitFor();
+      assert.equal(await page.getByRole('button', { name: 'Start download' }).count(), 0, `${query} can be started`);
+      await page.getByRole('button', { name: 'Close' }).click();
+      await page.getByRole('dialog').waitFor({ state: 'hidden' });
+    }
+    assert.equal(await page.locator('tbody tr').count(), before);
+  });
+
+  await step('without yt-dlp the dialog offers to install it, and runs nothing', async () => {
+    await inOptions('Video', () => page.getByLabel('yt-dlp program').fill('C:\\no\\such\\yt-dlp.exe'));
+    const before = readFileSync(fakeLog, 'utf8');
+
+    await lookForVideo();
+    await page.getByRole('button', { name: 'Install yt-dlp' }).waitFor();
+    await page.getByText('checked against their published checksum', { exact: false }).waitFor();
+    assert.equal(await page.getByRole('button', { name: 'Start download' }).count(), 0);
+    await page.getByRole('button', { name: 'Close' }).click();
+    await page.getByRole('dialog').waitFor({ state: 'hidden' });
+
+    assert.equal(readFileSync(fakeLog, 'utf8'), before, 'something ran with no program chosen');
+    await inOptions('Video', () => page.getByLabel('yt-dlp program').fill(''));
   });
 
   await step('a second launch hands its command line to the running app', async () => {

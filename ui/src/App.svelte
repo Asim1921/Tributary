@@ -53,7 +53,7 @@
     | { kind: 'add' }
     | { kind: 'start'; url: string; token?: number; fileName?: string | null }
     | { kind: 'batch'; token: number; items: CaptureItem[] }
-    | { kind: 'video'; url: string; token?: number; fileName?: string | null }
+    | { kind: 'video'; url: string; token?: number; fileName?: string | null; page?: boolean }
     | { kind: 'progress'; id: number }
     | { kind: 'properties'; id: number }
     | { kind: 'complete'; id: number }
@@ -135,7 +135,13 @@
       dialog = { kind: 'batch', token: event.token, items: event.items };
     } else {
       const kind = first.video ? 'video' : 'start';
-      dialog = { kind, url: first.url, token: event.token, fileName: first.fileName };
+      dialog = {
+        kind,
+        url: first.url,
+        token: event.token,
+        fileName: first.fileName,
+        page: first.page,
+      };
     }
   });
 
@@ -568,8 +574,8 @@
     categories={settings?.categories ?? []}
     queues={downloads.queues}
     onsubmit={addDownload}
-    onstream={() => {
-      if (dialog?.kind === 'start') dialog = { ...dialog, kind: 'video' };
+    onstream={(page) => {
+      if (dialog?.kind === 'start') dialog = { ...dialog, kind: 'video', page };
     }}
     onclose={() => {
       const token = dialog?.kind === 'start' ? dialog.token : undefined;
@@ -582,6 +588,7 @@
     url={dialog.url}
     captureToken={dialog.token}
     suggestedName={dialog.fileName}
+    page={dialog.page}
     {defaultFolder}
     onsubmit={addVideo}
     onclose={() => {

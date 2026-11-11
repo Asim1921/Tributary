@@ -4,6 +4,7 @@
   import {
     deleteSiteLogin,
     extensionFolder,
+    installYtdlp,
     pickFile,
     pickFolder,
     playSound,
@@ -130,6 +131,27 @@
   async function browseScanner() {
     const chosen = await pickFile('Program', ['exe']);
     if (chosen) draft.scannerPath = chosen;
+  }
+
+  let installingYtdlp = $state(false);
+  let ytdlpMessage = $state<string | null>(null);
+
+  async function installTool() {
+    installingYtdlp = true;
+    ytdlpMessage = null;
+    try {
+      await installYtdlp();
+      ytdlpMessage = 'yt-dlp is installed and up to date.';
+    } catch (error) {
+      ytdlpMessage = String(error);
+    } finally {
+      installingYtdlp = false;
+    }
+  }
+
+  async function browseYtdlp() {
+    const chosen = await pickFile('Program', ['exe']);
+    if (chosen) draft.ytdlpPath = chosen;
   }
 
   async function browseFfmpeg() {
@@ -336,6 +358,26 @@
           <button type="button" onclick={browseFfmpeg}>Browse…</button>
         </div>
       </div>
+      <div class="block">
+        <label class="field" for="options-ytdlp">yt-dlp program</label>
+        <div class="folder-row">
+          <input
+            id="options-ytdlp"
+            type="text"
+            bind:value={draft.ytdlpPath}
+            placeholder="The copy Tributary installs, or one on your PATH"
+          />
+          <button type="button" onclick={browseYtdlp}>Browse…</button>
+          <button type="button" disabled={installingYtdlp} onclick={installTool}>
+            {installingYtdlp ? 'Installing…' : 'Install or update'}
+          </button>
+        </div>
+        {#if ytdlpMessage}<p class="note" role="status">{ytdlpMessage}</p>{/if}
+      </div>
+      <p class="note">
+        yt-dlp finds the video on sites like YouTube, where it's fed to the player by script. It
+        is only used for the video panel and Add URL on such pages, and never sees your cookies.
+      </p>
       <p class="note">
         Some videos keep their picture and sound apart. With ffmpeg they're joined into one file.
         Without it, they stay as two files. Protected and live videos can't be saved.

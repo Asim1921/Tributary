@@ -9,6 +9,7 @@
 
 mod dash;
 mod hls;
+pub mod ytdlp;
 
 use std::future::Future;
 
@@ -29,6 +30,10 @@ pub enum Error {
     Protected,
     #[error("this is a live stream, so it can't be saved as a file")]
     Live,
+    #[error(
+        "this video needs a login or a paid account, which Tributary doesn't use for video sites"
+    )]
+    LoginRequired,
     #[error("this address isn't a video stream")]
     NotAStream,
     #[error("the stream couldn't be read: {0}")]
@@ -78,6 +83,9 @@ pub struct Quality {
     pub video: Track,
     /// Set when the sound is separate from the picture.
     pub audio: Option<Track>,
+    /// The request headers to send, when the source says exactly which. `None` leaves it
+    /// to whatever the browser sent.
+    pub headers: Option<Vec<(String, String)>>,
 }
 
 impl Quality {
@@ -267,6 +275,7 @@ mod tests {
                 seconds: 10.0,
             },
             audio: None,
+            headers: None,
         };
 
         assert_eq!(quality.estimated_bytes(), Some(10_000_000));

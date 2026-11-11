@@ -14,8 +14,9 @@
     categories: Category[];
     queues: Queue[];
     onsubmit: (request: AddRequest) => void;
-    /** The address turned out to be a stream, which has a dialog of its own. */
-    onstream: () => void;
+    /** The address is a stream, or a page that may hold a video. Both have a dialog of
+     * their own. */
+    onstream: (page?: boolean) => void;
     onclose: () => void;
   }
 
@@ -60,7 +61,7 @@
         captureToken,
       );
       if (found.isStream) {
-        onstream();
+        onstream(false);
         return;
       }
 
@@ -157,6 +158,9 @@
     <p class="warning" role="alert">
       This address is a web page, not a file. Saving it keeps the page's text only, not any video
       or file shown on it.
+    </p>
+    <p>
+      <button type="button" onclick={() => onstream(true)}>Look for a video on this page</button>
     </p>
   {/if}
 

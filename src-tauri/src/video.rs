@@ -9,6 +9,7 @@ use std::fs;
 use std::os::windows::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use engine::{Download, DownloadId, Engine, Login, State};
 use media::{Quality, Track};
@@ -18,6 +19,7 @@ use url::Url;
 
 use crate::capture::Captured;
 use crate::commands::{AddRequest, AppState, add_download_now};
+use crate::ytdlp;
 
 const FFMPEG_FILE: &str = "ffmpeg.exe";
 const DEFAULT_NAME: &str = "video";
@@ -112,6 +114,25 @@ fn suggested_name(title: Option<&str>, url: &str) -> String {
     }
 }
 
+/// What a page or stream offers, and what to call it.
+struct Offer {
+    qualities: Vec<Quality>,
+    title: Option<String>,
+}
+
+/// Reads a web page's video through yt-dlp. No headers or logins go with it, so a cookie
+/// the browser held can never reach it.
+async fn read_page(state: &AppState, url: &str) -> Result<Offer, String> {
+    let program = ytdlp::program_for(state).ok_or_else(|| ytdlp::MISSING.to_owned())?;
+    let page = ytdlp::inspect(&program, url)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(Offer {
+        qualities: page.qualities,
+        title: page.title,
+    })
+}
+
 async fn read_qualities(
     engine: &Engine,
     url: &str,
@@ -180,25 +201,37 @@ pub async fn inspect_video(
     url: String,
     file_name: Option<String>,
     capture_token: Option<u64>,
+    page: Option<bool>,
 ) -> Result<VideoDetails, String> {
     let url = url.trim();
-    let headers = capture_token.map_or_else(Vec::new, |token| state.pending().headers(token));
-    let login = state.site_login_for(url);
 
-    let qualities = read_qualities(&state.engine, url, &headers, login).await?;
-    let choices = qualities.iter().map(VideoChoice::from).collect();
-    *state.video_choices() = qualities;
+    let offer = if page == Some(true) {
+        read_page(&state, url).await?
+    } else {
+        let headers = capture_token.map_or_else(Vec::new, |token| state.pending().headers(token));
+        let login = state.site_login_for(url);
+        Offer {
+            qualities: read_qualities(&state.engine, url, &headers, login).await?,
+            title: None,
+        }
+    };
 
+    let choices = offer.qualities.iter().map(VideoChoice::from).collect();
+    *state.video_choices() = offer.qualities;
+
+    // The site's own title beats the tab's, which has the site's name tacked on.
+    let named = offer.title.as_deref().or(file_name.as_deref());
     Ok(VideoDetails {
         choices,
         can_join: ffmpeg_for(&state).is_some(),
-        suggested_name: suggested_name(file_name.as_deref(), url),
+        suggested_name: suggested_name(named, url),
     })
 }
 
 /// Saves the chosen quality.
 #[tauri::command]
 pub async fn add_video(
+    app: AppHandle,
     state: Managed<'_, AppState>,
     request: AddVideoRequest,
 ) -> Result<(), String> {
@@ -208,12 +241,15 @@ pub async fn add_video(
         .cloned()
         .ok_or("that quality is no longer available")?;
 
-    let headers = request
+    let captured = request
         .capture_token
         .and_then(|token| state.pending().take(token))
         .and_then(|files| files.into_iter().next())
         .map(|file| file.headers())
         .unwrap_or_default();
+    // A source that names its own headers gets exactly those. What the browser held,
+    // cookies included, belongs to the page and never goes to another server.
+    let headers = quality.headers.clone().unwrap_or(captured);
 
     let to = Destination {
         url: request.url.trim(),
@@ -222,7 +258,17 @@ pub async fn add_video(
         later: request.later,
         headers: &headers,
     };
-    save_quality(&state, &quality, &to).map(drop)
+    let ids = save_quality(&state, &quality, &to)?;
+    join_finished(&app, &ids);
+    Ok(())
+}
+
+/// Joins picture and sound that already finished. A small video's two files can both be
+/// done before they're recorded as belonging together, so completion alone would miss it.
+fn join_finished(app: &AppHandle, ids: &[i64]) {
+    for id in ids {
+        join_if_ready(app, DownloadId(*id));
+    }
 }
 
 /// Saves the best quality with no questions, for a command line asking for silence.
@@ -231,17 +277,36 @@ pub async fn add_best(app: AppHandle, file: Captured, later: bool, quit_when_don
     let headers = file.headers();
     let login = state.site_login_for(&file.url);
 
-    let saved = match read_qualities(&state.engine, &file.url, &headers, login).await {
-        Ok(qualities) => {
-            let name = suggested_name(file.file_name.as_deref(), &file.url);
+    let read = if file.page {
+        read_page(&state, &file.url).await
+    } else {
+        read_qualities(&state.engine, &file.url, &headers, login)
+            .await
+            .map(|qualities| Offer {
+                qualities,
+                title: None,
+            })
+    };
+
+    let saved = match read {
+        Ok(offer) => {
+            let name = suggested_name(
+                offer.title.as_deref().or(file.file_name.as_deref()),
+                &file.url,
+            );
+            let own = offer
+                .qualities
+                .first()
+                .and_then(|best| best.headers.clone());
             let to = Destination {
                 url: &file.url,
                 name: &name,
                 folder: file.folder.clone(),
                 later,
-                headers: &headers,
+                headers: own.as_deref().unwrap_or(&headers),
             };
-            qualities
+            offer
+                .qualities
                 .first()
                 .ok_or_else(|| "the stream lists nothing to save".to_owned())
                 .and_then(|best| save_quality(&state, best, &to))
@@ -250,8 +315,12 @@ pub async fn add_best(app: AppHandle, file: Captured, later: bool, quit_when_don
     };
 
     match saved {
-        Ok(ids) if quit_when_done => ids.into_iter().for_each(|id| state.quit_after(id)),
-        Ok(_) => {}
+        Ok(ids) => {
+            if quit_when_done {
+                ids.iter().for_each(|id| state.quit_after(*id));
+            }
+            join_finished(&app, &ids);
+        }
         Err(problem) => {
             let _ = app.emit("video-problem", problem);
         }
@@ -260,7 +329,36 @@ pub async fn add_best(app: AppHandle, file: Captured, later: bool, quit_when_don
 
 /// Joins picture and sound without re-encoding, then replaces the picture file with the
 /// result and removes the sound file. Returns the new size. On failure both files stay.
-fn join_files(ffmpeg: &Path, video: &Path, audio: &Path) -> Result<u64, String> {
+/// How the joining went. The video is joined whatever happens to the sound file.
+#[derive(Debug)]
+struct Joined {
+    size: u64,
+    /// Set when the sound file couldn't be deleted afterwards.
+    leftover: Option<String>,
+}
+
+/// How long a file that was just read may stay locked, as it can be while a virus scanner
+/// looks at it.
+const DELETE_ATTEMPTS: u32 = 30;
+const DELETE_WAIT: Duration = Duration::from_millis(100);
+
+/// Deletes a file, trying again for a moment if something else still has it open.
+fn remove_patiently(path: &Path, attempts: u32, wait: Duration) -> Result<(), String> {
+    let mut last = String::new();
+    for attempt in 0..attempts.max(1) {
+        match fs::remove_file(path) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => last = error.to_string(),
+        }
+        if attempt + 1 < attempts {
+            std::thread::sleep(wait);
+        }
+    }
+    Err(last)
+}
+
+fn join_files(ffmpeg: &Path, video: &Path, audio: &Path) -> Result<Joined, String> {
     let extension = video
         .extension()
         .unwrap_or_default()
@@ -292,8 +390,8 @@ fn join_files(ffmpeg: &Path, video: &Path, audio: &Path) -> Result<u64, String> 
         .map_err(|error| format!("the joined file can't be read: {error}"))?
         .len();
     fs::rename(&output, video).map_err(|error| format!("could not save the file: {error}"))?;
-    let _ = fs::remove_file(audio);
-    Ok(size)
+    let leftover = remove_patiently(audio, DELETE_ATTEMPTS, DELETE_WAIT).err();
+    Ok(Joined { size, leftover })
 }
 
 /// Both halves of a video, once both have finished. The picture is added first, so it
@@ -339,10 +437,19 @@ pub fn join_if_ready(app: &AppHandle, id: DownloadId) {
 
         let state = handle.state::<AppState>();
         let finished = match joined {
-            Ok(size) => {
-                let replaced = state.engine.file_replaced(video.id, size);
+            Ok(joined) => {
+                let replaced = state.engine.file_replaced(video.id, joined.size);
                 let removed = state.engine.remove(audio.id, false).await;
-                replaced.and(removed).map_err(|error| error.to_string())
+                replaced
+                    .and(removed)
+                    .map_err(|error| error.to_string())
+                    // The video is fine, but the user should know a file was left behind.
+                    .and_then(|()| match joined.leftover {
+                        Some(reason) => Err(format!(
+                            "The video is joined, but the separate sound file couldn't be deleted: {reason}"
+                        )),
+                        None => Ok(()),
+                    })
             }
             Err(problem) => Err(problem),
         };
@@ -418,6 +525,60 @@ mod tests {
 
         assert_eq!(fs::read(&video).unwrap(), b"picture");
         assert_eq!(fs::read(&audio).unwrap(), b"sound");
+    }
+
+    #[test]
+    fn a_file_still_open_elsewhere_is_deleted_once_it_is_let_go() {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("sound.m4a");
+        fs::write(&path, b"sound").unwrap();
+
+        // Nothing else may delete or share it while this handle is open.
+        let holder = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&path)
+            .unwrap();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(250));
+            drop(holder);
+        });
+
+        let removed = remove_patiently(&path, 50, Duration::from_millis(20));
+        release.join().unwrap();
+
+        assert_eq!(removed, Ok(()));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_file_that_stays_locked_is_reported_rather_than_ignored() {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("sound.m4a");
+        fs::write(&path, b"sound").unwrap();
+        let _holder = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&path)
+            .unwrap();
+
+        let removed = remove_patiently(&path, 3, Duration::from_millis(10));
+
+        assert!(removed.is_err());
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn a_file_that_is_already_gone_counts_as_deleted() {
+        let folder = tempfile::tempdir().unwrap();
+        assert_eq!(
+            remove_patiently(&folder.path().join("none"), 3, Duration::from_millis(1)),
+            Ok(())
+        );
     }
 
     #[test]

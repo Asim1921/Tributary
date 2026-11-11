@@ -34,6 +34,26 @@ describe('the installer', () => {
   });
 });
 
+describe('the content script', () => {
+  // It can't import rules.js, so it holds its own copy of the smallest player size.
+  it('uses the same smallest player size as the rules', async () => {
+    const { MIN_PLAYER_HEIGHT, MIN_PLAYER_WIDTH } = await import('./rules.js');
+    const script = readFileSync(join(FOLDER, 'content.js'), 'utf8');
+
+    expect(script).toContain(`const MIN_PLAYER_WIDTH = ${MIN_PLAYER_WIDTH};`);
+    expect(script).toContain(`const MIN_PLAYER_HEIGHT = ${MIN_PLAYER_HEIGHT};`);
+  });
+
+  it('only ever sends a page for a trusted click', () => {
+    const script = readFileSync(join(FOLDER, 'content.js'), 'utf8');
+    const sends = script.indexOf("type: 'save-page'");
+    const before = script.slice(Math.max(0, sends - 260), sends);
+
+    expect(sends).toBeGreaterThan(-1);
+    expect(before).toContain('event.isTrusted');
+  });
+});
+
 describe('the manifest', () => {
   const manifest = JSON.parse(readFileSync(join(FOLDER, 'manifest.json'), 'utf8'));
 

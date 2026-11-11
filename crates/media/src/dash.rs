@@ -464,6 +464,7 @@ pub(crate) fn read(url: &str, xml: &str) -> Result<Vec<Quality>, Error> {
                 bandwidth: item.bandwidth,
                 video: item.track.clone(),
                 audio: None,
+                headers: None,
             })
             .collect());
     }
@@ -477,6 +478,7 @@ pub(crate) fn read(url: &str, xml: &str) -> Result<Vec<Quality>, Error> {
             bandwidth: item.bandwidth,
             video: item.track.clone(),
             audio: audio.clone(),
+            headers: None,
         })
         .collect())
 }

@@ -35,6 +35,7 @@ const LAST_MODIFIED: [&str; 2] = [
 
 const INDEX_PAGE: &str = include_str!("index.html");
 const VIDEO_PAGE: &str = include_str!("video.html");
+const SCRIPT_VIDEO_PAGE: &str = include_str!("script-video.html");
 
 const DIGEST_REALM: &str = "test";
 const DIGEST_NONCE: &str = "test-nonce";
@@ -426,6 +427,10 @@ async fn respond(state: &State, stream: &mut TcpStream, head: &RequestHead) -> S
         "/robots.txt" => {
             let headers = [("Content-Type", "text/plain".to_owned())];
             send_small(stream, head, 200, &headers, website::ROBOTS.as_bytes()).await
+        }
+        "/video-script" => {
+            let headers = [("Content-Type", "text/html; charset=utf-8".to_owned())];
+            send_small(stream, head, 200, &headers, SCRIPT_VIDEO_PAGE.as_bytes()).await
         }
         "/video" => {
             let headers = [("Content-Type", "text/html; charset=utf-8".to_owned())];

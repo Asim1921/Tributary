@@ -187,6 +187,7 @@ where
             bandwidth,
             video,
             audio,
+            headers: None,
         });
     }
     Ok(qualities)
@@ -213,6 +214,7 @@ where
             bandwidth: None,
             video: track(&base, &playlist, false)?,
             audio: None,
+            headers: None,
         }]),
     }
 }

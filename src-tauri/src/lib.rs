@@ -11,6 +11,7 @@ mod settings;
 mod site_grabber;
 mod system;
 mod video;
+mod ytdlp;
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
@@ -532,6 +533,7 @@ pub fn run() {
             commands::window_ready,
             video::inspect_video,
             video::add_video,
+            ytdlp::install_ytdlp,
             site_grabber::list_projects,
             site_grabber::new_project,
             site_grabber::save_project,

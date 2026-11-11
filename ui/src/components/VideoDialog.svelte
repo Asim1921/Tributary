@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
 
-  import { inspectVideo, pickFolder, suggestCategory } from '../lib/api';
+  import { YTDLP_MISSING, inspectVideo, installYtdlp, pickFolder, suggestCategory } from '../lib/api';
   import { describeVideoChoice } from '../lib/format';
   import type { AddVideoRequest, VideoDetails } from '../lib/types';
   import Modal from './Modal.svelte';
@@ -10,18 +10,23 @@
     url: string;
     captureToken?: number;
     suggestedName?: string | null;
+    /** The address is a web page with a player on it, not the video itself. */
+    page?: boolean;
     defaultFolder: string;
     onsubmit: (request: AddVideoRequest) => void;
     onclose: () => void;
   }
 
-  let { url, captureToken, suggestedName, defaultFolder, onsubmit, onclose }: Props = $props();
+  let { url, captureToken, suggestedName, page, defaultFolder, onsubmit, onclose }: Props =
+    $props();
 
   let details = $state<VideoDetails | null>(null);
   let problem = $state<string | null>(null);
   let chosen = $state(0);
   let name = $state('');
   let folder = $state(untrack(() => defaultFolder));
+  let installing = $state(false);
+  let installProblem = $state<string | null>(null);
 
   // The check finishes after the dialog opens, and must never overwrite what's been typed.
   let nameEdited = false;
@@ -30,8 +35,9 @@
   const choice = $derived(details?.choices[chosen]);
 
   async function check() {
+    problem = null;
     try {
-      const found = await inspectVideo(url, suggestedName ?? undefined, captureToken);
+      const found = await inspectVideo(url, suggestedName ?? undefined, captureToken, page);
       details = found;
       if (!nameEdited) name = found.suggestedName;
 
@@ -46,6 +52,19 @@
   $effect(() => {
     untrack(() => void check());
   });
+
+  async function install() {
+    installing = true;
+    installProblem = null;
+    try {
+      await installYtdlp();
+      await check();
+    } catch (error) {
+      installProblem = String(error);
+    } finally {
+      installing = false;
+    }
+  }
 
   async function browse() {
     const picked = await pickFolder(folder);
@@ -63,7 +82,19 @@
 <Modal title="Save video" wide {onclose}>
   <p class="selectable note">{url}</p>
 
-  {#if problem}
+  {#if problem === YTDLP_MISSING}
+    <p class="refused" role="alert">
+      This site hides its video from ordinary downloading. Tributary can use yt-dlp, a free
+      open-source tool, to find it. It will be downloaded from yt-dlp's own releases and checked
+      against their published checksum.
+    </p>
+    {#if installProblem}<p class="error-text" role="alert">{installProblem}</p>{/if}
+    <p>
+      <button type="button" class="primary" disabled={installing} onclick={install}>
+        {installing ? 'Installing…' : 'Install yt-dlp'}
+      </button>
+    </p>
+  {:else if problem}
     <p class="refused" role="alert">{problem}</p>
   {:else if !details}
     <p>Reading the video…</p>
@@ -78,6 +109,13 @@
         </label>
       {/each}
     </fieldset>
+
+    {#if page}
+      <p class="note">
+        Saving video from a site may go against that site's terms. Protected, paid and
+        login-only videos are refused.
+      </p>
+    {/if}
 
     {#if choice?.separateAudio}
       <p class="note">

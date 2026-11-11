@@ -25,6 +25,9 @@ import type {
 /** What the app says when a server wants a login it doesn't have. */
 export const LOGIN_NEEDED = 'this site needs a login';
 
+/** What the app says when a site needs yt-dlp and it isn't installed. */
+export const YTDLP_MISSING = 'yt-dlp is needed for this site';
+
 export const listDownloads = () => invoke<Download[]>('list_downloads');
 export const inspectUrl = (
   url: string,
@@ -44,8 +47,13 @@ export const openFile = (id: number) => invoke<void>('open_file', { id });
 export const showInFolder = (id: number) => invoke<void>('show_in_folder', { id });
 export const dragFiles = (ids: number[]) => invoke<void>('drag_files', { ids });
 export const windowReady = () => invoke<CaptureEvent[]>('window_ready');
-export const inspectVideo = (url: string, fileName?: string, captureToken?: number) =>
-  invoke<VideoDetails>('inspect_video', { url, fileName, captureToken });
+export const inspectVideo = (
+  url: string,
+  fileName?: string,
+  captureToken?: number,
+  page?: boolean,
+) => invoke<VideoDetails>('inspect_video', { url, fileName, captureToken, page });
+export const installYtdlp = () => invoke<string>('install_ytdlp');
 export const addVideo = (request: AddVideoRequest) => invoke<void>('add_video', { request });
 export const listProjects = () => invoke<ProjectView[]>('list_projects');
 export const newProject = (template: string, startUrl: string) =>

@@ -45,6 +45,9 @@ pub struct Captured {
     /// The extension spotted this as a stream, which an address doesn't always show.
     #[serde(default)]
     pub video: bool,
+    /// The address is a web page with a video player on it, rather than the video itself.
+    #[serde(default)]
+    pub page: bool,
     /// Only set from the command line.
     #[serde(skip)]
     pub folder: Option<PathBuf>,
@@ -52,11 +55,14 @@ pub struct Captured {
 
 impl Captured {
     pub fn is_valid(&self) -> bool {
-        Url::parse(&self.url).is_ok_and(|url| matches!(url.scheme(), "http" | "https" | "ftp"))
+        // A page is only ever read by yt-dlp, which has no use for anything but the web.
+        Url::parse(&self.url).is_ok_and(|url| {
+            matches!(url.scheme(), "http" | "https") || (!self.page && url.scheme() == "ftp")
+        })
     }
 
     pub fn is_stream(&self) -> bool {
-        self.video || media::is_stream(&self.url, None)
+        self.video || self.page || media::is_stream(&self.url, None)
     }
 
     /// The request headers a server may expect, because the browser would have sent them.
@@ -144,6 +150,7 @@ pub struct CaptureItem {
     url: String,
     file_name: Option<String>,
     video: bool,
+    page: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -182,6 +189,7 @@ pub fn receive(app: &AppHandle, files: Vec<Captured>, batch: bool) -> Result<(),
             url: file.url.clone(),
             file_name: file.file_name.clone(),
             video: file.is_stream(),
+            page: file.page,
         })
         .collect();
 
@@ -396,6 +404,19 @@ mod tests {
             ..file("https://x.test/play")
         };
         assert!(spotted.is_stream());
+    }
+
+    #[test]
+    fn a_page_is_a_stream_for_the_dialog_but_only_on_the_web() {
+        let page = |url: &str| Captured {
+            page: true,
+            ..file(url)
+        };
+
+        assert!(page("https://x.test/watch?v=1").is_stream());
+        assert!(page("https://x.test/watch?v=1").is_valid());
+        assert!(!page("ftp://x.test/watch").is_valid());
+        assert!(!page("file:///C:/Windows/win.ini").is_valid());
     }
 
     #[test]

@@ -10,6 +10,7 @@ import {
   mediaKey,
   mediaKind,
   mediaLabel,
+  pageDownload,
   responseLength,
   shouldCapture,
   usableLinks,
@@ -123,6 +124,8 @@ chrome.runtime.onMessage.addListener((message, sender) => {
     lastClick = { ctrl: message.ctrl, alt: message.alt, shift: message.shift, at: Date.now() };
   } else if (message?.type === 'save-media') {
     void saveMedia(message.tabId ?? sender.tab?.id, message.index);
+  } else if (message?.type === 'save-page') {
+    void savePage(message, sender);
   } else if (message?.type === 'page-start' && sender.tab) {
     void updateMedia(sender.tab.id, (items) => keepDocument(items, sender.documentId)).catch(
       () => {},
@@ -187,6 +190,20 @@ chrome.webRequest.onHeadersReceived.addListener(
 chrome.tabs.onRemoved.addListener((tabId) => {
   void chrome.storage.session.remove(mediaKey(tabId));
 });
+
+/**
+ * Offers a page with a video player on it. The address is the one of the frame the player
+ * is in, as the browser reports it, and only a trusted click in the panel sends this.
+ */
+async function savePage(message, sender) {
+  if (!sender.tab) return;
+  const found = pageDownload({
+    url: sender.url ?? message.url,
+    title: message.title ?? sender.tab.title,
+    userAgent: navigator.userAgent,
+  });
+  if (found) await ask(found).catch(() => {});
+}
 
 /** Offers a find to the app, which asks the user what to do with it. */
 async function saveMedia(tabId, index) {
