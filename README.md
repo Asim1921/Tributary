@@ -16,6 +16,8 @@ Chrome and Edge don't allow outside installs, so this is a one-time step per bro
 
 Turn off any other download manager's extension, because both would try to take the same downloads.
 
+**After updating Tributary, reload the extension.** Open `chrome://extensions` and press the circular arrow on Tributary's card. Chrome often keeps running in the background after its windows are closed, still holding the old extension in memory, so new features such as the YouTube button won't appear until it's reloaded.
+
 Hold **Ctrl** while clicking to force a download into Tributary, or **Alt** to leave it with the browser. Both keys can be changed in Options.
 
 ## Command line
