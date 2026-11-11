@@ -472,7 +472,7 @@ pub(crate) fn read(url: &str, xml: &str) -> Result<Vec<Quality>, Error> {
     Ok(videos
         .into_iter()
         .map(|item| Quality {
-            label: video_label(item.height, item.bandwidth),
+            label: video_label(item.width, item.height, item.bandwidth),
             width: item.width,
             height: item.height,
             bandwidth: item.bandwidth,
@@ -616,6 +616,19 @@ mod tests {
         assert_eq!(video.parts.len(), 2);
         assert!(video.parts[1].url.ends_with("two-1.m4s"));
         assert_eq!(video.seconds, 8.0);
+    }
+
+    #[test]
+    fn a_widescreen_picture_is_named_by_how_sharp_it_is() {
+        let xml = r#"<MPD type="static" mediaPresentationDuration="PT4S"><Period>
+            <AdaptationSet contentType="video">
+              <Representation id="a" bandwidth="1" width="3840" height="1608"><BaseURL>a.mp4</BaseURL></Representation>
+              <Representation id="b" bandwidth="1" width="1280" height="536"><BaseURL>b.mp4</BaseURL></Representation>
+            </AdaptationSet></Period></MPD>"#;
+        let qualities = read("https://x.test/m.mpd", xml).unwrap();
+
+        let labels: Vec<&str> = qualities.iter().map(|item| item.label.as_str()).collect();
+        assert_eq!(labels, ["2160p", "720p"]);
     }
 
     #[test]

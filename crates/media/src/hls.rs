@@ -180,7 +180,11 @@ where
             label: if audio_only {
                 audio_label(bandwidth)
             } else {
-                video_label(height, bandwidth)
+                video_label(
+                    variant.resolution.as_ref().map(|size| size.width),
+                    height,
+                    bandwidth,
+                )
             },
             width: variant.resolution.as_ref().map(|size| size.width),
             height,

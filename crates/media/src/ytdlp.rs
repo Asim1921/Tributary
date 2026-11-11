@@ -50,6 +50,8 @@ struct Candidate<'a> {
     extension: &'a str,
     height: u64,
     width: Option<u64>,
+    /// The height it's known by, such as 2160 for a widescreen film at 3840×2026.
+    class: u64,
     fps: u64,
     hdr: bool,
     bitrate: f64,
@@ -77,12 +79,15 @@ fn candidate(format: &Value) -> Option<Candidate<'_>> {
         return None;
     }
 
+    let height = number(format, "height").unwrap_or(0.0) as u64;
+    let width = number(format, "width").map(|width| width as u64);
     Some(Candidate {
         kind,
         url,
         extension: text(format, "ext").unwrap_or("mp4"),
-        height: number(format, "height").unwrap_or(0.0) as u64,
-        width: number(format, "width").map(|width| width as u64),
+        height,
+        width,
+        class: crate::picture_class(width, Some(height)).unwrap_or(0),
         fps: number(format, "fps").unwrap_or(0.0) as u64,
         hdr: text(format, "dynamic_range").is_some_and(|range| range != "SDR"),
         bitrate: number(format, "tbr").unwrap_or(0.0),
@@ -147,7 +152,11 @@ fn track(item: &Candidate, seconds: f64, extension: &str) -> Track {
 }
 
 fn label(item: &Candidate) -> String {
-    let mut label = video_label(Some(item.height).filter(|height| *height > 0), None);
+    let mut label = video_label(
+        item.width,
+        Some(item.height).filter(|height| *height > 0),
+        None,
+    );
     if item.fps > 30 {
         label.push_str(&item.fps.to_string());
     }
@@ -212,17 +221,17 @@ pub fn parse(json: &str) -> Result<Page, Error> {
         .filter(|item| item.kind != Kind::Audio)
         .collect();
 
-    // One format for each height, frame rate and range, keeping the best-playing one.
+    // One format for each sharpness, frame rate and range, keeping the best-playing one.
     pictures.sort_by(|left, right| {
-        (left.height, left.fps > 30, left.hdr)
-            .cmp(&(right.height, right.fps > 30, right.hdr))
+        (left.class, left.fps > 30, left.hdr)
+            .cmp(&(right.class, right.fps > 30, right.hdr))
             .then(compatibility(right).cmp(&compatibility(left)))
             .then(left.bitrate.total_cmp(&right.bitrate))
     });
     pictures.reverse();
     let mut seen = Vec::new();
     pictures.retain(|item| {
-        let key = (item.height, item.fps > 30, item.hdr);
+        let key = (item.class, item.fps > 30, item.hdr);
         // A format with sound already in it only stands in when nothing separate exists.
         if seen.contains(&key) {
             return false;
@@ -379,6 +388,42 @@ mod tests {
             sound("a-m4a", "m4a", 128.0),
             sound("a-webm", "webm", 160.0),
         ]
+    }
+
+    #[test]
+    fn a_widescreen_video_is_named_as_the_site_names_it() {
+        // Formats as yt-dlp reported them for a real widescreen YouTube video.
+        let sized = |id: &str, width: u64, height: u64, codec: &str, extension: &str| {
+            json!({
+                "format_id": id, "url": format!("https://v.test/{id}"), "protocol": "https",
+                "ext": extension, "vcodec": codec, "acodec": "none", "width": width,
+                "height": height, "tbr": width as f64, "fps": 25,
+            })
+        };
+        let formats = vec![
+            sized("313", 3840, 2026, "vp9", "webm"),
+            sized("271", 2560, 1350, "vp9", "webm"),
+            sized("137", 1920, 1012, "avc1.640028", "mp4"),
+            sized("248", 1920, 1012, "vp9", "webm"),
+            sized("136", 1280, 676, "avc1.4d401f", "mp4"),
+            sized("135", 854, 450, "avc1.4d401e", "mp4"),
+            sound("140", "m4a", 128.0),
+        ];
+
+        let found = parse(&page(formats)).unwrap();
+        let labels: Vec<&str> = found
+            .qualities
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect();
+        assert_eq!(labels, ["2160p", "1440p", "1080p", "720p", "480p"]);
+        // Two formats of the same sharpness are one choice, the one that plays everywhere.
+        assert_eq!(found.qualities[2].video.parts[0].url, "https://v.test/137");
+        assert_eq!(
+            found.qualities[2].height,
+            Some(1012),
+            "the real size is kept as it is"
+        );
     }
 
     #[test]

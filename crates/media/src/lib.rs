@@ -180,9 +180,23 @@ fn joined_extension(url: &str, fragmented: bool, audio: bool) -> String {
     }
 }
 
-fn video_label(height: Option<u64>, bandwidth: Option<u64>) -> String {
-    match (height, bandwidth) {
-        (Some(height), _) => format!("{height}p"),
+/// The name a picture's sharpness goes by, as video sites give it: the height it would have
+/// at 16:9. A film cropped to 3840×2026 is "2160p" and an upright 1080×1920 one is "1080p",
+/// because that's how sharp they are, though neither is that many pixels tall.
+fn picture_class(width: Option<u64>, height: Option<u64>) -> Option<u64> {
+    let height = height.filter(|height| *height > 0)?;
+    let Some(width) = width.filter(|width| *width > 0) else {
+        return Some(height);
+    };
+    let (short, long) = (width.min(height), width.max(height));
+    // The long side's 16:9 height, rounded to the nearest pixel.
+    let sixteen_nine = long.saturating_mul(9).saturating_add(8) / 16;
+    Some(short.max(sixteen_nine))
+}
+
+fn video_label(width: Option<u64>, height: Option<u64>, bandwidth: Option<u64>) -> String {
+    match (picture_class(width, height), bandwidth) {
+        (Some(class), _) => format!("{class}p"),
         (None, Some(bandwidth)) => format!("{:.1} Mbps", bandwidth as f64 / 1_000_000.0),
         (None, None) => "Video".to_owned(),
     }
@@ -198,6 +212,87 @@ fn audio_label(bandwidth: Option<u64>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pictures_are_named_by_how_sharp_they_are_not_their_height() {
+        // Sizes two real YouTube videos came in, and the names YouTube gives them.
+        for (width, height, name) in [
+            (256, 138, "144p"),
+            (426, 230, "240p"),
+            (640, 346, "360p"),
+            (854, 462, "480p"),
+            (1280, 692, "720p"),
+            (256, 136, "144p"),
+            (426, 224, "240p"),
+            (640, 338, "360p"),
+            (854, 450, "480p"),
+            (1280, 676, "720p"),
+            (1920, 1012, "1080p"),
+            (2560, 1350, "1440p"),
+            (3840, 2026, "2160p"),
+        ] {
+            assert_eq!(
+                video_label(Some(width), Some(height), None),
+                name,
+                "{width}x{height}"
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_upright_square_and_older_shapes_keep_their_usual_names() {
+        for (width, height, name) in [
+            (1920, 1080, "1080p"),
+            (1280, 720, "720p"),
+            (1080, 1920, "1080p"),
+            (720, 1280, "720p"),
+            (1080, 1080, "1080p"),
+            (640, 480, "480p"),
+            (1440, 1080, "1080p"),
+            (1920, 800, "1080p"),
+        ] {
+            assert_eq!(
+                video_label(Some(width), Some(height), None),
+                name,
+                "{width}x{height}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_picture_with_a_missing_or_odd_size_still_gets_a_name() {
+        assert_eq!(video_label(None, Some(720), None), "720p");
+        assert_eq!(video_label(Some(0), Some(720), None), "720p");
+        assert_eq!(video_label(Some(1280), None, Some(2_500_000)), "2.5 Mbps");
+        assert_eq!(video_label(Some(1280), Some(0), None), "Video");
+        // Nothing a source says can make this overflow.
+        assert!(video_label(Some(u64::MAX), Some(u64::MAX), None).ends_with('p'));
+    }
+
+    #[tokio::test]
+    async fn a_widescreen_stream_is_named_by_how_sharp_it_is() {
+        let master =
+            "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x800\nwide.m3u8\n";
+        let media = "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4.0,\na.ts\n#EXT-X-ENDLIST\n";
+        let fetch = |url: String| async move {
+            Ok::<_, String>(
+                if url.ends_with("master.m3u8") {
+                    master
+                } else {
+                    media
+                }
+                .to_owned(),
+            )
+        };
+
+        let qualities = discover("https://x.test/master.m3u8", fetch).await.unwrap();
+        assert_eq!(qualities[0].label, "1080p");
+        assert_eq!(
+            qualities[0].height,
+            Some(800),
+            "the real size is kept as it is"
+        );
+    }
 
     #[test]
     fn recognises_streams_by_address_or_type() {
