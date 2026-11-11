@@ -94,7 +94,6 @@ fn arguments(url: &Url) -> Vec<String> {
         "--ignore-config",
         "--no-playlist",
         "--no-warnings",
-        "--no-call-home",
         "--dump-single-json",
         "--socket-timeout",
         "20",
@@ -263,6 +262,8 @@ mod tests {
         assert!(!all.to_ascii_lowercase().contains("cookie"));
         assert!(!all.contains("--exec"));
         assert!(all.contains("--no-playlist"));
+        // yt-dlp has said this one will stop working.
+        assert!(!all.contains("--no-call-home"));
     }
 
     #[test]

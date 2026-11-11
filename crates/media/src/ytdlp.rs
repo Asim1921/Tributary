@@ -293,11 +293,18 @@ pub fn parse(json: &str) -> Result<Page, Error> {
 }
 
 /// Turns yt-dlp's complaint into something to show.
+/// What to say when YouTube wants to check that this computer isn't a bot.
+pub const BOT_CHECK: &str = "YouTube wants to check this computer isn't a bot, which it does for a while after a lot of videos in a short time. Try again in a few minutes";
+
 pub fn explain_failure(stderr: &str) -> Error {
     let lower = stderr.to_ascii_lowercase();
     let says = |words: &[&str]| words.iter().any(|word| lower.contains(word));
 
-    if says(&["drm"]) {
+    if says(&["not a bot", "not a robot"]) {
+        // YouTube asks this of a computer that has fetched a lot in a short time. It says
+        // "sign in", but the video itself needs no account, so it mustn't read as one that does.
+        Error::Fetch(BOT_CHECK.into())
+    } else if says(&["drm"]) {
         Error::Protected
     } else if says(&["live event", "is live", "premieres in", "will begin in"]) {
         Error::Live
@@ -612,8 +619,16 @@ mod tests {
     fn complaints_are_explained() {
         let error = |text: &str| explain_failure(text);
 
+        // A check on the computer, not a video that needs an account. YouTube writes it with
+        // a curly apostrophe.
+        for check in [
+            "ERROR: [youtube] x: Sign in to confirm you're not a bot",
+            "ERROR: [youtube] pBzadnf1Z4M: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication.",
+        ] {
+            assert_eq!(error(check), Error::Fetch(BOT_CHECK.into()), "{check}");
+        }
         assert_eq!(
-            error("ERROR: [youtube] x: Sign in to confirm you're not a bot"),
+            error("ERROR: Sign in to confirm your age"),
             Error::LoginRequired
         );
         assert_eq!(
