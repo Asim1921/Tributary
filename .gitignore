@@ -4,3 +4,6 @@ node_modules/
 dist/
 *.part
 *.jsonl
+
+# Written by the end-to-end tests
+e2e/fake-ytdlp.log

@@ -1,6 +1,0 @@
-http://127.0.0.1:8791/video
-http://127.0.0.1:8791/video?case=drm
-http://127.0.0.1:8791/video?case=live
-http://127.0.0.1:8791/video?case=private
-http://127.0.0.1:8791/video?case=playlist
-http://127.0.0.1:8791/video?case=broken
