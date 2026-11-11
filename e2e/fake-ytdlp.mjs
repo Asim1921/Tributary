@@ -6,6 +6,7 @@
 //   drm       a video with a protected format
 //   live      a live stream
 //   private   a video that needs an account
+//   playlist  an address that names a list and no one video, like a playlist's own page
 //   broken    a complaint nobody planned for
 
 import { appendFileSync } from 'node:fs';
@@ -77,6 +78,9 @@ switch (page.searchParams.get('case')) {
     break;
   case 'live':
     console.log(JSON.stringify({ title: 'Live', is_live: true, live_status: 'is_live', formats: [picture, sound] }));
+    break;
+  case 'playlist':
+    console.log(JSON.stringify({ _type: 'playlist', id: 'PLtest', title: 'A list', entries: [] }));
     break;
   case 'private':
     fail('[youtube] x: Private video. Sign in if you\'ve been granted access to this video');

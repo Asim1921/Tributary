@@ -47,6 +47,7 @@ The extension shows a panel in the corner of any video player on a page, and lis
 
 - **YouTube and sites like it** feed their player by script, so there is no file to see. For those, the panel's **Download this video** button gives the page to [yt-dlp](https://github.com/yt-dlp/yt-dlp), a free open-source tool, which finds the video's qualities. Tributary then downloads the one you pick, usually the highest, itself. The first time, the video dialog offers to install yt-dlp for you. It's downloaded from yt-dlp's own releases and checked against their published checksum, and **Options > Video** can update it.
 - **Terms of use:** saving video from a site may go against that site's terms, and YouTube's forbid it. That's your decision to make. Tributary says so in the dialog.
+- **Videos in a playlist** download one at a time: open the video and use the button beside its player. The button also works in YouTube's miniplayer and on the previews that play on its home page. A playlist's own page isn't downloaded as a whole.
 - **Protected, live, paid and login-only videos are refused.** Anything that declares encryption or DRM won't be saved, and neither will members-only or private videos. yt-dlp is never given your cookies or logins.
 - **Some videos keep picture and sound apart.** With [ffmpeg](https://ffmpeg.org) installed they're joined into one file. Without it they stay as two. Set its location under **Options**, **Video**, if it isn't found automatically.
 

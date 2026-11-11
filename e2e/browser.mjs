@@ -561,6 +561,64 @@ try {
     await appPage.getByRole('dialog').waitFor({ state: 'hidden' });
   });
 
+  /** Presses the page panel's button, and returns the address the app was handed. */
+  async function addressHandedOver() {
+    const box = await waitForPanel(pageTools, 'page');
+    await pageTools.clickAt(box.x + 30, box.y + 14);
+    await appPage.getByRole('heading', { name: 'Save video' }).waitFor();
+    const address = (await appPage.getByRole('dialog').locator('p.selectable.note').first().textContent()).trim();
+    await appPage.getByRole('button', { name: 'Close' }).click();
+    await appPage.getByRole('dialog').waitFor({ state: 'hidden' });
+    return address;
+  }
+
+  // Sites like YouTube change page without reloading: open a playlist, click a video in it,
+  // and the tab shows the video while the browser still reports the playlist it opened on.
+  await step('a page that moved on without reloading hands over where it is now', async () => {
+    await pageTools.open(`${BASE}/video-script`);
+    await waitForPanel(pageTools, 'page');
+
+    await pageTools.evaluate(`history.pushState({}, '', '/video-script?watch=second&list=mine')`);
+    // The panel is redrawn for the new address on its next look.
+    await sleep(2000);
+
+    assert.equal(await addressHandedOver(), `${BASE}/video-script?watch=second&list=mine`);
+  });
+
+  // A preview that plays in a feed, like YouTube's on hover, belongs to the link around it.
+  // YouTube takes the preview away as soon as the pointer leaves it, which it does to reach
+  // the panel, so this page does the same.
+  await step('a preview inside a link hands over the page it links to, even once it has gone', async () => {
+    await pageTools.open(`${BASE}/`);
+    await pageTools.evaluate(`(() => {
+      const link = document.createElement('a');
+      link.href = '/video-script?watch=previewed';
+      const video = document.createElement('video');
+      video.style.cssText = 'display:block;width:480px;height:270px;background:#222';
+      link.append(video);
+      link.addEventListener('mouseleave', () => video.remove());
+      document.body.prepend(link);
+    })()`);
+    const preview = await pageTools.evaluate(
+      `(() => { const box = document.querySelector('video').getBoundingClientRect(); return { x: box.left + 100, y: box.top + 200 }; })()`,
+    );
+    await pageTools.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...preview, modifiers: 0 });
+
+    const box = await waitForPanel(pageTools, 'page');
+    await pageTools.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: box.x + 30, y: box.y + 14, modifiers: 0 });
+    assert.equal(await pageTools.evaluate(`document.querySelectorAll('video').length`), 0, 'the preview should be gone');
+
+    // Longer than the panel takes to notice the player has gone, as a person's click might be.
+    await sleep(2500);
+    assert.ok(await pageTools.evaluate(`Boolean(document.querySelector('[data-tributary-panel]'))`), 'the panel left from under the pointer');
+
+    assert.equal(await addressHandedOver(), `${BASE}/video-script?watch=previewed`);
+
+    // Once the pointer moves away, a panel with no player goes too.
+    await pageTools.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 5, y: 5, modifiers: 0 });
+    await pageTools.waitFor(`!document.querySelector('[data-tributary-panel]')`, 5000);
+  });
+
   await step('a page with no player gets no panel', async () => {
     await pageTools.open(`${BASE}/`);
     await sleep(2500);
@@ -697,6 +755,10 @@ try {
     // A browser stops an idle extension by itself, but how long that takes varies between
     // versions, and some builds now keep it for good while a window is open. So it's stopped
     // here, the way the browser would, and only if that doesn't work is its own timer awaited.
+    // A page still loading video would wake it straight back up, so nothing is left open.
+    await pageTools.open('about:blank');
+    await sleep(1000);
+
     const target = await workerTarget();
     if (target) {
       await fetch(`http://127.0.0.1:${BROWSER_DEBUG_PORT}/json/close/${target.id}`).catch(() => {});

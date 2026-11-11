@@ -11,6 +11,7 @@ import {
   mediaKind,
   mediaLabel,
   pageDownload,
+  videoPageAddress,
   responseLength,
   shouldCapture,
   usableLinks,
@@ -192,16 +193,23 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 /**
- * Offers a page with a video player on it. The address is the one of the frame the player
- * is in, as the browser reports it, and only a trusted click in the panel sends this.
+ * Offers the video a player is showing. Only a trusted click in the panel sends this.
+ *
+ * The address comes from the content script, not from `sender.url`: the browser keeps the
+ * address a frame loaded with, so on YouTube, after opening a playlist or the home page and
+ * clicking a video, it still names the list. That list is what the app used to be given.
  */
 async function savePage(message, sender) {
   if (!sender.tab) return;
-  const found = pageDownload({
-    url: sender.url ?? message.url,
-    title: message.title ?? sender.tab.title,
-    userAgent: navigator.userAgent,
+  const page = message.page;
+  const player = message.player ?? {};
+  const url = videoPageAddress({
+    page,
+    named: player.named,
+    watching: player.watching,
+    link: player.link,
   });
+  const found = url && pageDownload({ url, page, title: message.title, userAgent: navigator.userAgent });
   if (found) await ask(found).catch(() => {});
 }
 

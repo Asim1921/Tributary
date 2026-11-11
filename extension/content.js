@@ -86,6 +86,52 @@ function placePanel() {
 }
 
 /** Whether there's a player here worth a panel, with real room and actually showing. */
+/**
+ * What a player shows about the video in it, for working out that video's own address.
+ * Sites like YouTube change page without reloading, so the address bar can show a list, or
+ * the home page, while a video plays.
+ */
+function describePlayer(video) {
+  if (!video) return {};
+  const main = video.closest('#movie_player');
+  return {
+    // YouTube's players name their video in a title link. It's empty in the main one.
+    named: video.closest('.html5-video-player')?.querySelector('a.ytp-title-link')?.href || undefined,
+    // The main player keeps playing in a corner when the page moves on, and the watch page
+    // behind it keeps the id of what's playing.
+    watching: main
+      ? (document.querySelector('ytd-watch-flexy')?.getAttribute('video-id') ?? undefined)
+      : undefined,
+    // A preview in a feed sits inside a link to its own page.
+    link: video.closest('a[href]')?.href || undefined,
+  };
+}
+
+const saysWhich = (facts) => Boolean(facts.named || facts.watching || facts.link);
+
+/**
+ * What the player beside the panel said about its video while it played. A preview, like
+ * YouTube's on the home page, is taken away as soon as the pointer leaves it for the panel,
+ * so by the time the button is pressed there may be nothing left to ask.
+ */
+let lastPlayer = { facts: {}, page: '', at: 0 };
+
+function rememberPlayer() {
+  const facts = describePlayer(largestVideo());
+  if (saysWhich(facts)) lastPlayer = { facts, page: location.href, at: Date.now() };
+}
+
+/** What the player says now, or what it said a moment ago if it has just been taken away. */
+function currentPlayer() {
+  const facts = describePlayer(largestVideo());
+  if (saysWhich(facts)) return facts;
+  const recent = lastPlayer.page === location.href && Date.now() - lastPlayer.at < 60_000;
+  return recent ? lastPlayer.facts : facts;
+}
+
+/** The panel stays while the pointer is on it, even if the preview it belongs to has gone. */
+let pointerOnPanel = false;
+
 function playerWorthPanel() {
   const video = largestVideo();
   if (!video) return false;
@@ -111,6 +157,13 @@ function showPanel(labels) {
   panel = document.createElement('div');
   panel.setAttribute('data-tributary-panel', entries ? 'media' : 'page');
   panel.style.cssText = 'all: initial; position: fixed; z-index: 2147483647;';
+  pointerOnPanel = false;
+  panel.addEventListener('pointerenter', () => {
+    pointerOnPanel = true;
+  });
+  panel.addEventListener('pointerleave', () => {
+    pointerOnPanel = false;
+  });
 
   // Closed, so the page can't reach in and press anything.
   const shadow = panel.attachShadow({ mode: 'closed' });
@@ -138,8 +191,9 @@ function showPanel(labels) {
       if (!event.isTrusted) return;
       void chrome.runtime.sendMessage({
         type: 'save-page',
-        url: location.href,
+        page: location.href,
         title: document.title,
+        player: currentPlayer(),
       });
     });
     box.append(button);
@@ -154,6 +208,7 @@ function showPanel(labels) {
     panelHidden = true;
     panel?.remove();
     panel = null;
+    pointerOnPanel = false;
   });
   box.append(hide);
 
@@ -193,12 +248,18 @@ function refreshPanel() {
     panelHidden = false;
   }
 
+  // Left alone while it's about to be pressed, because a preview stops as the pointer moves
+  // off it onto the panel.
+  if (pointerOnPanel && panel?.isConnected) return;
+
   if (panelEnabled && playerWorthPanel()) {
+    rememberPlayer();
     showPanel(found);
   } else if (panel) {
     panel.remove();
     panel = null;
     shownFor = '';
+    pointerOnPanel = false;
   }
 }
 

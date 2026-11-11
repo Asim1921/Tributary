@@ -162,10 +162,11 @@ pub fn parse(json: &str) -> Result<Page, Error> {
     let page: Value = serde_json::from_str(json)
         .map_err(|_| Error::Invalid("yt-dlp's answer isn't readable".into()))?;
 
+    // A video's own address gives one video even when it's part of a playlist, because
+    // yt-dlp is run with `--no-playlist`. A list comes back only for an address that names
+    // no video at all, like a playlist's own page or a site's home page.
     if text(&page, "_type") == Some("playlist") {
-        return Err(Error::Invalid(
-            "this address is a playlist, not one video".into(),
-        ));
+        return Err(Error::Playlist);
     }
     let live = matches!(text(&page, "live_status"), Some("is_live" | "is_upcoming"))
         || page.get("is_live").and_then(Value::as_bool) == Some(true);
@@ -563,9 +564,27 @@ mod tests {
     }
 
     #[test]
-    fn a_playlist_is_not_one_video() {
-        let text = json!({ "_type": "playlist", "entries": [] }).to_string();
-        assert!(matches!(parse(&text), Err(Error::Invalid(_))));
+    fn an_address_that_names_only_a_list_is_explained() {
+        // What yt-dlp gives for a playlist's own page, or YouTube's home page.
+        let text = json!({ "_type": "playlist", "id": "recommended", "entries": [] }).to_string();
+
+        let problem = parse(&text).unwrap_err();
+        assert_eq!(problem, Error::Playlist);
+        assert!(problem.to_string().contains("button beside its player"));
+    }
+
+    #[test]
+    fn a_video_that_belongs_to_a_playlist_is_one_video() {
+        // A watch address with `list=` gives the one video, saying which list it's from.
+        let mut video: Value = serde_json::from_str(&page(standard())).unwrap();
+        video["_type"] = json!("video");
+        video["playlist_id"] = json!("PLD8ifvNZtu-c");
+        video["playlist_index"] = json!(2);
+        video["webpage_url"] = json!("https://www.youtube.com/watch?v=2Kqrs38vHfQ");
+
+        let found = parse(&video.to_string()).unwrap();
+        assert_eq!(found.qualities[0].label, "2160p");
+        assert_eq!(found.title.as_deref(), Some("A film"));
     }
 
     #[test]

@@ -15,6 +15,7 @@ import {
   MIN_PLAYER_HEIGHT,
   MIN_PLAYER_WIDTH,
   pageDownload,
+  videoPageAddress,
   mediaKind,
   mediaLabel,
   responseLength,
@@ -171,8 +172,88 @@ describe('isWorthPanel', () => {
   });
 });
 
+describe('videoPageAddress', () => {
+  const watch = 'https://www.youtube.com/watch?v=pBzadnf1Z4M&list=PLD8ifvNZtu-c&index=1';
+
+  // Each of these is what a real YouTube page showed in Chrome.
+  it('finds the video playing in a playlist, not the playlist', () => {
+    expect(videoPageAddress({ page: watch, named: undefined, watching: 'pBzadnf1Z4M' })).toBe(
+      'https://www.youtube.com/watch?v=pBzadnf1Z4M',
+    );
+  });
+
+  it('finds the video in the miniplayer while the page shows the playlist or the home page', () => {
+    for (const page of ['https://www.youtube.com/playlist?list=PLD8ifvNZtu-c', 'https://www.youtube.com/']) {
+      expect(videoPageAddress({ page, watching: '2Kqrs38vHfQ' })).toBe(
+        'https://www.youtube.com/watch?v=2Kqrs38vHfQ',
+      );
+    }
+  });
+
+  it('finds a preview playing on the home page from the name its player gives it', () => {
+    expect(
+      videoPageAddress({
+        page: 'https://www.youtube.com/',
+        named: 'https://www.youtube.com/watch?v=VO_oAPD0EdQ',
+        link: 'https://www.youtube.com/watch?v=VO_oAPD0EdQ&list=RDVO_oAPD0EdQ&start_radio=1',
+      }),
+    ).toBe('https://www.youtube.com/watch?v=VO_oAPD0EdQ');
+  });
+
+  it('finds a preview from the link around it on any site', () => {
+    expect(videoPageAddress({ page: 'https://videos.test/feed', link: 'https://videos.test/watch/7' })).toBe(
+      'https://videos.test/watch/7',
+    );
+    expect(videoPageAddress({ page: 'https://www.videos.test/', link: 'https://m.videos.test/watch/7' })).toBe(
+      'https://m.videos.test/watch/7',
+    );
+  });
+
+  it('uses where the tab is now when the player says nothing', () => {
+    expect(videoPageAddress({ page: 'https://videos.test/watch/9' })).toBe('https://videos.test/watch/9');
+    expect(videoPageAddress({ page: watch, watching: '' })).toBe(watch);
+  });
+
+  it("works on YouTube's mobile and music sites too", () => {
+    expect(videoPageAddress({ page: 'https://m.youtube.com/', watching: 'abcdefghijk' })).toBe(
+      'https://m.youtube.com/watch?v=abcdefghijk',
+    );
+    expect(videoPageAddress({ page: 'https://music.youtube.com/', watching: 'abcdefghijk' })).toBe(
+      'https://music.youtube.com/watch?v=abcdefghijk',
+    );
+  });
+
+  it('never takes an address from the page that leads to another site', () => {
+    const page = 'https://videos.test/feed';
+    expect(videoPageAddress({ page, link: 'https://elsewhere.test/watch/1' })).toBe(page);
+    expect(videoPageAddress({ page, named: 'http://192.168.1.1/admin' })).toBe(page);
+    expect(videoPageAddress({ page, link: 'https://evilvideos.test/' })).toBe(page);
+  });
+
+  it('never takes anything but a web address', () => {
+    const page = 'https://videos.test/feed';
+    for (const bad of ['javascript:alert(1)', 'file:///C:/Windows/win.ini', 'data:text/html,x', 'not a url']) {
+      expect(videoPageAddress({ page, named: bad, link: bad }), bad).toBe(page);
+    }
+    expect(videoPageAddress({ page: 'file:///C:/a.html' })).toBe(null);
+    expect(videoPageAddress({})).toBe(null);
+  });
+
+  it('only builds a YouTube address from a real video id, and only on YouTube', () => {
+    const home = 'https://www.youtube.com/';
+    for (const bad of ['../../x', 'a b c d e f', 'x', 'abc&list=1', 'a'.repeat(40)]) {
+      expect(videoPageAddress({ page: home, watching: bad }), bad).toBe(home);
+    }
+    expect(videoPageAddress({ page: 'https://videos.test/', watching: 'abcdefghijk' })).toBe('https://videos.test/');
+  });
+});
+
 describe('pageDownload', () => {
   const page = { url: 'https://www.youtube.com/watch?v=abc', title: ' A film ', userAgent: 'Agent' };
+
+  it('names the page it came from as the referrer', () => {
+    expect(pageDownload({ ...page, page: 'https://www.youtube.com/' }).referrer).toBe('https://www.youtube.com/');
+  });
 
   it('describes the page as a page, with its title', () => {
     expect(pageDownload(page)).toEqual({

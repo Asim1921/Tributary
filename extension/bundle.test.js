@@ -44,6 +44,15 @@ describe('the content script', () => {
     expect(script).toContain(`const MIN_PLAYER_HEIGHT = ${MIN_PLAYER_HEIGHT};`);
   });
 
+  it('says where the tab is now, because the browser only knows where it started', () => {
+    const script = readFileSync(join(FOLDER, 'content.js'), 'utf8');
+    const background = readFileSync(join(FOLDER, 'background.js'), 'utf8');
+    const savePage = background.slice(background.indexOf('async function savePage'));
+
+    expect(script).toContain('page: location.href');
+    expect(savePage.slice(0, savePage.indexOf('\n}\n'))).not.toContain('sender.url');
+  });
+
   it('only ever sends a page for a trusted click', () => {
     const script = readFileSync(join(FOLDER, 'content.js'), 'utf8');
     const sends = script.indexOf("type: 'save-page'");

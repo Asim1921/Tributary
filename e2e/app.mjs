@@ -1409,13 +1409,14 @@ try {
     assert.ok(readFileSync(fakeLog, 'utf8').includes('/video'), 'yt-dlp was never run');
   });
 
-  await step('protected, live and login-only pages are refused, and nothing is saved', async () => {
+  await step('protected, live, login-only and list-only pages are refused, and nothing is saved', async () => {
     const before = await page.locator('tbody tr').count();
 
     for (const [query, words] of [
       ['?case=drm', 'protected'],
       ['?case=live', 'live stream'],
       ['?case=private', 'login or a paid account'],
+      ['?case=playlist', 'list of videos, not one video'],
       ['?case=broken', "couldn't read this page"],
     ]) {
       await lookForVideo(query);

@@ -186,18 +186,70 @@ export function isWorthPanel(box) {
   );
 }
 
+/** A YouTube video's id: letters, digits, `-` and `_`. */
+const VIDEO_ID = /^[\w-]{6,20}$/;
+
+/** Reads an http or https address, or gives null for anything else. */
+function webAddress(text) {
+  try {
+    const url = new URL(text);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Whether two addresses are on the same site, counting `www.` and other subdomains. */
+function sameSite(one, other) {
+  const plain = (url) => url.hostname.replace(/^www\./, '');
+  const [a, b] = [plain(one), plain(other)];
+  return a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`);
+}
+
+function isYouTube(url) {
+  return url.hostname === 'youtube.com' || url.hostname.endsWith('.youtube.com');
+}
+
+/**
+ * Works out the address of the video a player is showing, from what the page shows:
+ *
+ * - `page`: where the tab is now. The browser's own record of a frame's address is the one
+ *   it loaded with, which is out of date on sites that change page without reloading. On
+ *   YouTube that's a playlist or the home page while a video plays.
+ * - `named`: the address the player gives as its own video, as YouTube's previews do.
+ * - `watching`: the id of the video in YouTube's main player. That player keeps playing in a
+ *   corner when the page moves on to something else.
+ * - `link`: the link a player sits inside, as previews in a feed do.
+ *
+ * Only addresses on the page's own site are taken from the page, so a page can't point the
+ * button somewhere else. Returns null when there's no web address at all.
+ */
+export function videoPageAddress({ page, named, watching, link } = {}) {
+  const here = webAddress(page);
+  if (!here) return null;
+
+  const fromPage = (text) => {
+    const url = webAddress(text);
+    return url && sameSite(url, here) ? url.href : null;
+  };
+  const playing =
+    isYouTube(here) && VIDEO_ID.test(watching ?? '') ? `${here.origin}/watch?v=${watching}` : null;
+
+  return fromPage(named) ?? playing ?? fromPage(link) ?? here.href;
+}
+
 /**
  * What to tell the app about a page with a player and no stream the extension could see.
  * There is deliberately no cookie in it: the app reads the page without the browser's
  * logins, and never passes them to another server. Returns null for anything but a web page.
  */
-export function pageDownload({ url, title, userAgent }) {
-  if (!hasCapturableScheme(url) || new URL(url).protocol === 'ftp:') return null;
+export function pageDownload({ url, page, title, userAgent }) {
+  if (!webAddress(url)) return null;
 
   return {
     type: 'download',
     url,
-    referrer: url,
+    referrer: webAddress(page)?.href ?? url,
     userAgent,
     fileName: (title ?? '').trim() || undefined,
     video: true,

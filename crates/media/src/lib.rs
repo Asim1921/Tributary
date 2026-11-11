@@ -36,6 +36,10 @@ pub enum Error {
     LoginRequired,
     #[error("this address isn't a video stream")]
     NotAStream,
+    #[error(
+        "this address is a list of videos, not one video. Open the video you want and use the button beside its player, or paste that video's own address"
+    )]
+    Playlist,
     #[error("the stream couldn't be read: {0}")]
     Invalid(String),
     #[error("{0}")]
