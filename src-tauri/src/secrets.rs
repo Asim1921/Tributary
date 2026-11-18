@@ -109,18 +109,35 @@ pub fn delete(key: &str) {
 mod tests {
     use super::*;
 
-    /// Unique per test run, and removed even if the test fails.
-    struct TestKey(String);
+    use std::sync::{Mutex, MutexGuard, PoisonError};
+    use std::thread;
+    use std::time::Duration;
+
+    /// Credential Manager can lose a login written while another test writes or removes
+    /// one at the same moment: it reads back as missing, and removing it then misses it and
+    /// leaves it behind. So these tests take turns.
+    static TURN: Mutex<()> = Mutex::new(());
+
+    /// Unique per test run, and removed even if the test fails. Holds the turn until then.
+    struct TestKey(String, #[allow(dead_code)] MutexGuard<'static, ()>);
 
     impl TestKey {
         fn new(label: &str) -> Self {
-            Self(format!("test/{label}/{}", std::process::id()))
+            let turn = TURN.lock().unwrap_or_else(PoisonError::into_inner);
+            Self(format!("test/{label}/{}", std::process::id()), turn)
         }
     }
 
     impl Drop for TestKey {
         fn drop(&mut self) {
-            delete(&self.0);
+            // Checked, because a test must never leave a login behind.
+            for _ in 0..20 {
+                delete(&self.0);
+                if read(&self.0).is_none() {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(25));
+            }
         }
     }
 

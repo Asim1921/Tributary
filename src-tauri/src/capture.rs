@@ -48,6 +48,13 @@ pub struct Captured {
     /// The address is a web page with a video player on it, rather than the video itself.
     #[serde(default)]
     pub page: bool,
+    /// For a player embedded in another page, that page, to try when the player can't be
+    /// read on its own.
+    #[serde(default)]
+    pub host: Option<String>,
+    /// The `Origin` a player's script sent when it asked for a stream.
+    #[serde(default)]
+    pub origin: Option<String>,
     /// Only set from the command line.
     #[serde(skip)]
     pub folder: Option<PathBuf>,
@@ -69,6 +76,7 @@ impl Captured {
     pub fn headers(&self) -> Vec<(String, String)> {
         [
             ("Referer", &self.referrer),
+            ("Origin", &self.origin),
             ("User-Agent", &self.user_agent),
             ("Cookie", &self.cookies),
         ]
@@ -135,6 +143,15 @@ impl Pending {
     }
 
     /// The headers of a held file, for checking it before the user decides.
+    /// The page a player is embedded in, and the page holding it, for reading a video page.
+    pub fn page_context(&self, token: u64) -> (Option<String>, Option<String>) {
+        self.waiting
+            .get(&token)
+            .and_then(|files| files.first())
+            .map(|file| (file.referrer.clone(), file.host.clone()))
+            .unwrap_or_default()
+    }
+
     pub fn headers(&self, token: u64) -> Vec<(String, String)> {
         self.waiting
             .get(&token)

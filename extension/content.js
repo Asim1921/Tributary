@@ -45,10 +45,10 @@ const PANEL_STYLE = `
   .hide { align-self: flex-end; padding: 0 6px; opacity: 0.7; }
 `;
 
-// These match `MIN_PLAYER_WIDTH` and `MIN_PLAYER_HEIGHT` in rules.js, which a test checks.
-// A content script can't import that file, so the two numbers are kept here as well.
-const MIN_PLAYER_WIDTH = 320;
-const MIN_PLAYER_HEIGHT = 180;
+// These match `MIN_PLAYER_LONG_SIDE` and `MIN_PLAYER_SHORT_SIDE` in rules.js, which a test
+// checks. A content script can't import that file, so the two numbers are kept here too.
+const MIN_PLAYER_LONG_SIDE = 320;
+const MIN_PLAYER_SHORT_SIDE = 180;
 
 /** The most room a player can have, so ads and previews don't get the panel. */
 function largestVideo() {
@@ -139,7 +139,10 @@ function playerWorthPanel() {
   const box = video.getBoundingClientRect();
   const style = getComputedStyle(video);
   const hidden = style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0';
-  return box.width >= MIN_PLAYER_WIDTH && box.height >= MIN_PLAYER_HEIGHT && !hidden;
+  // Measured on the long and short sides, so an upright player counts too.
+  const long = Math.max(box.width, box.height);
+  const short = Math.min(box.width, box.height);
+  return long >= MIN_PLAYER_LONG_SIDE && short >= MIN_PLAYER_SHORT_SIDE && !hidden;
 }
 
 function showPanel(labels) {
@@ -192,6 +195,8 @@ function showPanel(labels) {
       void chrome.runtime.sendMessage({
         type: 'save-page',
         page: location.href,
+        // The page this player is embedded in, as the browser named it to the player.
+        parent: window === window.top ? undefined : document.referrer || undefined,
         title: document.title,
         player: currentPlayer(),
       });

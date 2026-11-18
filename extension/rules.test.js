@@ -12,9 +12,10 @@ import {
   isExcluded,
   isWorthPanel,
   keepDocument,
-  MIN_PLAYER_HEIGHT,
-  MIN_PLAYER_WIDTH,
+  MIN_PLAYER_LONG_SIDE,
+  MIN_PLAYER_SHORT_SIDE,
   pageDownload,
+  streamHeaders,
   videoPageAddress,
   mediaKind,
   mediaLabel,
@@ -157,13 +158,20 @@ describe('a page opening', () => {
 describe('isWorthPanel', () => {
   it('wants a real player', () => {
     expect(isWorthPanel({ width: 640, height: 360 })).toBe(true);
-    expect(isWorthPanel({ width: MIN_PLAYER_WIDTH, height: MIN_PLAYER_HEIGHT })).toBe(true);
+    expect(isWorthPanel({ width: MIN_PLAYER_LONG_SIDE, height: MIN_PLAYER_SHORT_SIDE })).toBe(true);
   });
 
   it('leaves thumbnails and previews alone', () => {
-    expect(isWorthPanel({ width: MIN_PLAYER_WIDTH - 1, height: 360 })).toBe(false);
-    expect(isWorthPanel({ width: 640, height: MIN_PLAYER_HEIGHT - 1 })).toBe(false);
+    expect(isWorthPanel({ width: MIN_PLAYER_LONG_SIDE - 1, height: MIN_PLAYER_SHORT_SIDE })).toBe(false);
+    expect(isWorthPanel({ width: 640, height: MIN_PLAYER_SHORT_SIDE - 1 })).toBe(false);
+    expect(isWorthPanel({ width: MIN_PLAYER_SHORT_SIDE - 1, height: 640 })).toBe(false);
     expect(isWorthPanel({ width: 0, height: 0 })).toBe(false);
+  });
+
+  it('wants an upright player too, as phone videos play', () => {
+    // How Dailymotion showed an upright video.
+    expect(isWorthPanel({ width: 239, height: 425 })).toBe(true);
+    expect(isWorthPanel({ width: MIN_PLAYER_SHORT_SIDE, height: MIN_PLAYER_LONG_SIDE })).toBe(true);
   });
 
   it('leaves a hidden player alone', () => {
@@ -245,6 +253,63 @@ describe('videoPageAddress', () => {
       expect(videoPageAddress({ page: home, watching: bad }), bad).toBe(home);
     }
     expect(videoPageAddress({ page: 'https://videos.test/', watching: 'abcdefghijk' })).toBe('https://videos.test/');
+  });
+});
+
+describe('pageDownload inside an embedded player', () => {
+  const player = 'https://player.test/embed/1';
+
+  it('names the page the player is embedded in, and the page holding it', () => {
+    const found = pageDownload({ url: player, page: player, parent: 'https://host.test/', host: 'https://host.test/film/2' });
+    expect(found.referrer).toBe('https://host.test/');
+    expect(found.host).toBe('https://host.test/film/2');
+  });
+
+  it('names the page itself on a page of its own', () => {
+    const found = pageDownload({ url: 'https://videos.test/watch/1', page: 'https://videos.test/watch/1' });
+    expect(found.referrer).toBe('https://videos.test/watch/1');
+    expect(found.host).toBeUndefined();
+  });
+
+  it('never names anything but a web page', () => {
+    for (const bad of ['javascript:alert(1)', 'file:///C:/a.html', 'data:text/html,x', 'not a url']) {
+      const found = pageDownload({ url: player, page: player, parent: bad, host: bad });
+      expect(found.referrer, bad).toBe(player);
+      expect(found.host, bad).toBeUndefined();
+    }
+  });
+
+  it('has no host page to fall back on when the host is the player itself', () => {
+    expect(pageDownload({ url: player, page: player, host: player }).host).toBeUndefined();
+  });
+});
+
+describe('streamHeaders', () => {
+  const tab = 'https://host.test/film/2';
+
+  it('asks for a stream as the embedded player did', () => {
+    expect(streamHeaders({ initiator: 'https://player.test', request: 'xmlhttprequest' }, tab)).toEqual({
+      referrer: 'https://player.test/',
+      origin: 'https://player.test',
+    });
+  });
+
+  it('sends no Origin for a video the player loaded directly, as the browser does', () => {
+    expect(streamHeaders({ initiator: 'https://player.test', request: 'media' }, tab)).toEqual({
+      referrer: 'https://player.test/',
+      origin: undefined,
+    });
+  });
+
+  it('keeps the page address for a stream the page asked for itself', () => {
+    expect(streamHeaders({ initiator: 'https://host.test', request: 'xmlhttprequest' }, tab)).toEqual({ referrer: tab });
+  });
+
+  it('keeps the page address when the browser named no usable origin', () => {
+    for (const initiator of [undefined, 'null', 'chrome-extension://abc', 'not a url']) {
+      expect(streamHeaders({ initiator, request: 'media' }, tab), String(initiator)).toEqual({ referrer: tab });
+    }
+    expect(streamHeaders(undefined, tab)).toEqual({ referrer: tab });
   });
 });
 

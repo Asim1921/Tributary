@@ -11,6 +11,7 @@ import {
   mediaKind,
   mediaLabel,
   pageDownload,
+  streamHeaders,
   videoPageAddress,
   responseLength,
   shouldCapture,
@@ -175,7 +176,14 @@ function findMedia(details) {
   });
   if (!kind) return;
 
-  const found = { url: details.url, kind, documentId: details.documentId };
+  const found = {
+    url: details.url,
+    kind,
+    documentId: details.documentId,
+    // Who asked for it, so the app can ask the same way.
+    initiator: details.initiator,
+    request: details.type,
+  };
   void updateMedia(details.tabId, (items) => addMedia(items, found))
     .then((items) => (items ? showPanel(details.tabId, details.frameId, items) : undefined))
     .catch(() => {});
@@ -209,7 +217,19 @@ async function savePage(message, sender) {
     watching: player.watching,
     link: player.link,
   });
-  const found = url && pageDownload({ url, page, title: message.title, userAgent: navigator.userAgent });
+  // A player inside an iframe names the page it's in. The tab's address stands in when the
+  // browser kept that back, and is the page to read if the player can't be read alone.
+  const embedded = sender.frameId !== 0;
+  const found =
+    url &&
+    pageDownload({
+      url,
+      page,
+      parent: embedded ? message.parent || sender.tab.url : undefined,
+      host: embedded ? sender.tab.url : undefined,
+      title: message.title,
+      userAgent: navigator.userAgent,
+    });
   if (found) await ask(found).catch(() => {});
 }
 
@@ -222,8 +242,12 @@ async function saveMedia(tabId, index) {
 
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   const stream = item.kind === 'stream';
+  const asked = streamHeaders(item, tab?.url);
   const file = await describe(item.url, {
-    referrer: tab?.url,
+    referrer: asked.referrer,
+    origin: asked.origin,
+    // The page holding the player, for when the stream can't be read on its own.
+    host: stream ? tab?.url : undefined,
     fileName: stream ? tab?.title : undefined,
     video: stream,
   });

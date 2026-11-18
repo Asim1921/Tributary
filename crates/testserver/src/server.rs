@@ -20,7 +20,7 @@ use tokio::task::{JoinHandle, JoinSet};
 use crate::content;
 use crate::http::{RangeRequest, RequestHead, parse_range, reason};
 use crate::scenario::{Scenario, with_redirects};
-use crate::{streams, website};
+use crate::{embed, streams, website};
 
 const MAX_HEAD_BYTES: usize = 64 << 10;
 const MAX_CHUNK_BYTES: u64 = 64 << 10;
@@ -428,6 +428,21 @@ async fn respond(state: &State, stream: &mut TcpStream, head: &RequestHead) -> S
             let headers = [("Content-Type", "text/plain".to_owned())];
             send_small(stream, head, 200, &headers, website::ROBOTS.as_bytes()).await
         }
+        "/embed-host" | "/embedded-player" => {
+            let own = format!("http://{}", head.header("host").unwrap_or_default());
+            let reply = if path == "/embed-host" {
+                embed::host_page(&own, query)
+            } else {
+                embed::player_page(&own, query, head.header("referer"))
+            };
+            match reply {
+                embed::Reply::Page(html) => {
+                    let headers = [("Content-Type", "text/html; charset=utf-8".to_owned())];
+                    send_small(stream, head, 200, &headers, html.as_bytes()).await
+                }
+                embed::Reply::Status(status) => send_small(stream, head, status, &[], b"").await,
+            }
+        }
         "/video-script" => {
             let headers = [("Content-Type", "text/html; charset=utf-8".to_owned())];
             send_small(stream, head, 200, &headers, SCRIPT_VIDEO_PAGE.as_bytes()).await
@@ -539,6 +554,15 @@ async fn serve_file(
         if !cookies.split(';').any(|cookie| cookie.trim() == required) {
             return send_small(stream, head, 403, &[], b"cookie required\n").await;
         }
+    }
+
+    if let Some(prefix) = &scenario.require_referer
+        && !head
+            .header("referer")
+            .unwrap_or_default()
+            .starts_with(prefix.as_str())
+    {
+        return send_small(stream, head, 403, &[], b"referer required\n").await;
     }
 
     if let Some(expected) = &scenario.basic {

@@ -37,11 +37,11 @@ describe('the installer', () => {
 describe('the content script', () => {
   // It can't import rules.js, so it holds its own copy of the smallest player size.
   it('uses the same smallest player size as the rules', async () => {
-    const { MIN_PLAYER_HEIGHT, MIN_PLAYER_WIDTH } = await import('./rules.js');
+    const { MIN_PLAYER_LONG_SIDE, MIN_PLAYER_SHORT_SIDE } = await import('./rules.js');
     const script = readFileSync(join(FOLDER, 'content.js'), 'utf8');
 
-    expect(script).toContain(`const MIN_PLAYER_WIDTH = ${MIN_PLAYER_WIDTH};`);
-    expect(script).toContain(`const MIN_PLAYER_HEIGHT = ${MIN_PLAYER_HEIGHT};`);
+    expect(script).toContain(`const MIN_PLAYER_LONG_SIDE = ${MIN_PLAYER_LONG_SIDE};`);
+    expect(script).toContain(`const MIN_PLAYER_SHORT_SIDE = ${MIN_PLAYER_SHORT_SIDE};`);
   });
 
   it('says where the tab is now, because the browser only knows where it started', () => {
@@ -50,6 +50,7 @@ describe('the content script', () => {
     const savePage = background.slice(background.indexOf('async function savePage'));
 
     expect(script).toContain('page: location.href');
+    expect(script).toContain('document.referrer');
     expect(savePage.slice(0, savePage.indexOf('\n}\n'))).not.toContain('sender.url');
   });
 

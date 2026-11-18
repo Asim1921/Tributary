@@ -88,21 +88,32 @@ fn check_page(address: &str) -> Result<Url, Error> {
 }
 
 /// The whole command line. Nothing in a page's address can become an option, because it
-/// comes after \`--\`. Nothing here reads a configuration file or a cookie file.
-fn arguments(url: &Url) -> Vec<String> {
-    [
+/// comes after `--`, and a referer is only ever the value of `--referer`, never an argument
+/// of its own. Nothing here reads a configuration file or a cookie file.
+fn arguments(url: &Url, referer: Option<&Url>) -> Vec<String> {
+    let mut all: Vec<String> = [
         "--ignore-config",
         "--no-playlist",
         "--no-warnings",
         "--dump-single-json",
         "--socket-timeout",
         "20",
-        "--",
     ]
     .iter()
     .map(|argument| (*argument).to_owned())
-    .chain([url.to_string()])
-    .collect()
+    .collect();
+    if let Some(referer) = referer {
+        all.extend(["--referer".to_owned(), referer.to_string()]);
+    }
+    all.extend(["--".to_owned(), url.to_string()]);
+    all
+}
+
+/// The page to name as the referer: a web address other than the page itself.
+fn referer_for(url: &Url, referer: Option<&str>) -> Option<Url> {
+    check_page(referer?)
+        .ok()
+        .filter(|referer| referer.as_str() != url.as_str())
 }
 
 async fn read_limited(stream: Option<impl AsyncRead + Unpin>, limit: u64) -> Vec<u8> {
@@ -113,12 +124,14 @@ async fn read_limited(stream: Option<impl AsyncRead + Unpin>, limit: u64) -> Vec
     data
 }
 
-/// Asks yt-dlp what video a page holds.
-pub async fn inspect(program: &Path, address: &str) -> Result<Page, Error> {
+/// Asks yt-dlp what video a page holds. A player embedded in another site is asked about
+/// with that site as the referer, as the browser asked for it.
+pub async fn inspect(program: &Path, address: &str, referer: Option<&str>) -> Result<Page, Error> {
     let url = check_page(address)?;
+    let referer = referer_for(&url, referer);
 
     let mut child = Command::new(program)
-        .args(arguments(&url))
+        .args(arguments(&url, referer.as_ref()))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -247,16 +260,53 @@ mod tests {
     #[test]
     fn a_pages_address_can_never_become_an_option() {
         let url = Url::parse("https://x.test/watch?v=--exec=calc").unwrap();
-        let all = arguments(&url);
+        let all = arguments(&url, None);
 
         let separator = all.iter().position(|item| item == "--").unwrap();
+        assert_eq!(all.len(), separator + 2, "only the address follows");
+        assert_eq!(all.last().unwrap(), url.as_str());
+        assert!(!all.contains(&"--referer".to_owned()));
+    }
+
+    #[test]
+    fn a_referer_is_only_ever_the_value_of_its_option() {
+        let url = Url::parse("https://player.test/embed/1").unwrap();
+        let referer = Url::parse("https://host.test/films?x=--exec=calc").unwrap();
+        let all = arguments(&url, Some(&referer));
+
+        let at = all.iter().position(|item| item == "--referer").unwrap();
+        let separator = all.iter().position(|item| item == "--").unwrap();
+        assert_eq!(all[at + 1], referer.as_str());
+        assert!(at + 1 < separator, "it comes before --");
         assert_eq!(all.len(), separator + 2, "only the address follows");
         assert_eq!(all.last().unwrap(), url.as_str());
     }
 
     #[test]
+    fn only_another_web_page_is_given_as_the_referer() {
+        let url = Url::parse("https://player.test/embed/1").unwrap();
+
+        assert_eq!(
+            referer_for(&url, Some("https://host.test/")).map(String::from),
+            Some("https://host.test/".to_owned())
+        );
+        for nothing in [
+            None,
+            Some(""),
+            Some("-o x"),
+            Some("--exec=calc"),
+            Some("file:///C:/a"),
+            Some("javascript:alert(1)"),
+            Some(url.as_str()),
+        ] {
+            assert_eq!(referer_for(&url, nothing), None, "{nothing:?}");
+        }
+    }
+
+    #[test]
     fn no_cookie_or_configuration_is_ever_read() {
-        let all = arguments(&Url::parse("https://x.test/").unwrap()).join(" ");
+        let referer = Url::parse("https://host.test/").unwrap();
+        let all = arguments(&Url::parse("https://x.test/").unwrap(), Some(&referer)).join(" ");
 
         assert!(all.contains("--ignore-config"));
         assert!(!all.to_ascii_lowercase().contains("cookie"));
@@ -362,7 +412,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_missing_program_is_explained() {
-        let problem = inspect(Path::new(r"C:\no\such\yt-dlp.exe"), "https://x.test/").await;
+        let problem = inspect(Path::new(r"C:\no\such\yt-dlp.exe"), "https://x.test/", None).await;
         assert!(matches!(problem, Err(Error::Fetch(text)) if text.contains("couldn't start")));
     }
 
@@ -371,6 +421,7 @@ mod tests {
         let problem = inspect(
             Path::new(r"C:\no\such\yt-dlp.exe"),
             "file:///C:/Windows/win.ini",
+            Some("https://host.test/"),
         )
         .await;
         assert!(matches!(problem, Err(Error::Invalid(_))), "{problem:?}");

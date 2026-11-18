@@ -37,6 +37,10 @@ pub enum Error {
     #[error("this address isn't a video stream")]
     NotAStream,
     #[error(
+        "there's no video here that can be saved. If the player hasn't started yet, press play for a few seconds, then use the button again"
+    )]
+    NoVideo,
+    #[error(
         "this address is a list of videos, not one video. Open the video you want and use the button beside its player, or paste that video's own address"
     )]
     Playlist,
@@ -122,6 +126,13 @@ where
     }
     qualities.sort_by_key(|quality| {
         std::cmp::Reverse((quality.height.unwrap_or(0), quality.bandwidth.unwrap_or(0)))
+    });
+    // A list can hold the same quality twice, at two bit rates. The better one stays.
+    let mut seen = Vec::new();
+    qualities.retain(|quality| {
+        let new = !seen.contains(&quality.label);
+        seen.push(quality.label.clone());
+        new
     });
     Ok(qualities)
 }
@@ -267,6 +278,31 @@ mod tests {
         assert_eq!(video_label(Some(1280), Some(0), None), "Video");
         // Nothing a source says can make this overflow.
         assert!(video_label(Some(u64::MAX), Some(u64::MAX), None).ends_with('p'));
+    }
+
+    #[tokio::test]
+    async fn the_same_quality_listed_twice_is_offered_once_at_its_best() {
+        // As TED lists it: two sizes each at two bit rates.
+        let master = "#EXTM3U\n\
+            #EXT-X-STREAM-INF:BANDWIDTH=150000,RESOLUTION=240x180\nlow-a.m3u8\n\
+            #EXT-X-STREAM-INF:BANDWIDTH=219000,RESOLUTION=240x180\nlow-b.m3u8\n\
+            #EXT-X-STREAM-INF:BANDWIDTH=851000,RESOLUTION=480x360\nhigh.m3u8\n";
+        let media = "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4.0,\na.ts\n#EXT-X-ENDLIST\n";
+        let fetch = |url: String| async move {
+            Ok::<_, String>(
+                if url.ends_with("master.m3u8") {
+                    master
+                } else {
+                    media
+                }
+                .to_owned(),
+            )
+        };
+
+        let qualities = discover("https://x.test/master.m3u8", fetch).await.unwrap();
+        let labels: Vec<&str> = qualities.iter().map(|item| item.label.as_str()).collect();
+        assert_eq!(labels, ["360p", "180p"]);
+        assert_eq!(qualities[1].bandwidth, Some(219_000));
     }
 
     #[tokio::test]

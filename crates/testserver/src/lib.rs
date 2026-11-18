@@ -8,6 +8,7 @@
 //! their checksums are known in advance. See [`scenario`] for the fault options.
 
 pub mod content;
+pub mod embed;
 pub mod ftp;
 pub mod http;
 pub mod scenario;

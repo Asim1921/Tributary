@@ -18,6 +18,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -59,6 +60,8 @@ const browserFolder = mkdtempSync(join(tmpdir(), 'tributary-browser-downloads-')
 const profile = mkdtempSync(join(tmpdir(), 'tributary-browser-profile-'));
 
 const serverLog = join(dataDir, 'server.jsonl');
+// Where the stand-in yt-dlp writes each command line it's given.
+const fakeLog = join(dataDir, 'fake-ytdlp.log');
 const results = [];
 let appPage;
 
@@ -399,6 +402,7 @@ try {
     TRIBUTARY_PIPE: PIPE,
     WEBVIEW2_USER_DATA_FOLDER: join(dataDir, 'webview'),
     WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${APP_DEBUG_PORT}`,
+    FAKE_YTDLP_LOG: fakeLog,
   };
   app = spawn(APP, [], { stdio: 'ignore', env: appEnv });
 
@@ -617,6 +621,150 @@ try {
     // Once the pointer moves away, a panel with no player goes too.
     await pageTools.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 5, y: 5, modifiers: 0 });
     await pageTools.waitFor(`!document.querySelector('[data-tributary-panel]')`, 5000);
+  });
+
+  // A player embedded from another site, as video hosting services offer, answers only
+  // when it's asked from the page it's embedded in. The test server is reached as both
+  // 127.0.0.1 and localhost, so the page and its player are on different sites.
+  const PLAYER = `http://localhost:${SERVER_PORT}`;
+  const fakeYtdlp = join(dataDir, 'fake-ytdlp.cmd');
+  writeFileSync(fakeYtdlp, `@node "${join(import.meta.dirname, 'fake-ytdlp.mjs')}" %*\r\n`);
+  const ytdlpRuns = () =>
+    existsSync(fakeLog)
+      ? readFileSync(fakeLog, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))
+      : [];
+  const serverRecords = () =>
+    existsSync(serverLog)
+      ? readFileSync(serverLog, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))
+      : [];
+  const headerOf = (record, name) => record.headers.find(([key]) => key.toLowerCase() === name)?.[1];
+
+  async function useYtdlp(program) {
+    await appPage.evaluate(async (path) => {
+      const invoke = window.__TAURI_INTERNALS__.invoke;
+      const settings = await invoke('get_settings');
+      await invoke('save_settings', { settings: { ...settings, ytdlpPath: path } });
+    }, program);
+  }
+
+  /** Opens the page holding a player from the other site, and connects to that player. */
+  async function openEmbedded(query) {
+    const address = `${BASE}/embed-host?player=${encodeURIComponent(PLAYER)}&${query}`;
+    await pageTools.open(address);
+    const target = await findTarget(
+      BROWSER_DEBUG_PORT,
+      (item) => item.type === 'iframe' && item.url.startsWith(`${PLAYER}/embedded-player`),
+    );
+    if (!target) throw new Error('the embedded player never loaded');
+    const frame = await DevTools.open(target.webSocketDebuggerUrl);
+    await frame.send('Runtime.enable');
+    const box = await pageTools.evaluate(
+      `(() => { const box = document.querySelector('iframe').getBoundingClientRect(); return { x: box.left, y: box.top }; })()`,
+    );
+    return { frame, box, url: target.url, address };
+  }
+
+  /** Presses the panel inside the embedded player, with a real click on the page. */
+  async function pressInPlayer({ frame, box }, kind) {
+    const panel = await waitForPanel(frame, kind);
+    await pageTools.clickAt(box.x + panel.x + 30, box.y + panel.y + 14);
+  }
+
+  await step('a player embedded from another site is read with the page it sits in', async () => {
+    await useYtdlp(fakeYtdlp);
+    const embedded = await openEmbedded('kind=script');
+    const before = ytdlpRuns().length;
+
+    await pressInPlayer(embedded, 'page');
+    await appPage.getByRole('heading', { name: 'Save video' }).waitFor();
+    const given = (await appPage.getByRole('dialog').locator('p.selectable.note').first().textContent()).trim();
+    assert.equal(given, embedded.url, 'the app is given the player itself');
+    await appPage.getByRole('radio', { name: /^240p/ }).waitFor();
+    assert.equal(await appPage.getByLabel('Save as').inputValue(), 'Embedded film');
+
+    const runs = ytdlpRuns().slice(before);
+    assert.equal(runs.length, 1, 'the player answered the first time');
+    assert.equal(runs[0][runs[0].indexOf('--referer') + 1], `${BASE}/`, 'asked as the page it sits in');
+    assert.equal(runs[0].at(-1), embedded.url);
+
+    await appPage.getByRole('button', { name: 'Cancel' }).click();
+    await appPage.getByRole('dialog').waitFor({ state: 'hidden' });
+  });
+
+  await step("a player that can't be read on its own is found on the page holding it", async () => {
+    const embedded = await openEmbedded('kind=script&case=stuck');
+    const before = ytdlpRuns().length;
+
+    await pressInPlayer(embedded, 'page');
+    await appPage.getByRole('heading', { name: 'Save video' }).waitFor();
+    await appPage.getByRole('radio', { name: /^240p/ }).waitFor();
+    assert.equal(await appPage.getByLabel('Save as').inputValue(), 'Film found on its page');
+
+    const asked = ytdlpRuns().slice(before).map((args) => new URL(args.at(-1)));
+    assert.deepEqual(
+      asked.map((url) => url.pathname),
+      ['/embedded-player', '/embed-host'],
+      'the player first, then the page holding it',
+    );
+    assert.equal(asked[1].href, embedded.address);
+
+    await appPage.getByRole('button', { name: 'Cancel' }).click();
+    await appPage.getByRole('dialog').waitFor({ state: 'hidden' });
+  });
+
+  await step("a stream that can't be read on its own is looked up through the page holding it", async () => {
+    const embedded = await openEmbedded('kind=guarded');
+    const before = ytdlpRuns().length;
+
+    await pressInPlayer(embedded, 'media');
+    await appPage.getByRole('heading', { name: 'Save video' }).waitFor();
+    await appPage.getByRole('radio', { name: /^240p/ }).waitFor();
+    assert.equal(await appPage.getByLabel('Save as').inputValue(), 'Film found on its page');
+
+    const asked = ytdlpRuns().slice(before).map((args) => args.at(-1));
+    assert.deepEqual(asked, [embedded.address], 'the page holding the player was looked up');
+    const refused = serverRecords().filter((record) => record.target.startsWith('/file/1K.m3u8?seed=903') && record.status === 403);
+    assert.ok(refused.length > 0, 'the stream was tried first');
+
+    await appPage.getByRole('button', { name: 'Cancel' }).click();
+    await appPage.getByRole('dialog').waitFor({ state: 'hidden' });
+  });
+
+  // Phone videos play upright, taller than they are wide.
+  await step('an upright player gets a panel too', async () => {
+    await pageTools.open(`${BASE}/`);
+    await pageTools.evaluate(`(() => {
+      const video = document.createElement('video');
+      video.style.cssText = 'display:block;width:240px;height:426px;background:#222';
+      document.body.prepend(video);
+    })()`);
+    const box = await waitForPanel(pageTools, 'page');
+    assert.ok(box.width > 0 && box.height > 0);
+  });
+
+  await step('a video inside a player from another site is fetched as the player asked for it', async () => {
+    await useYtdlp('C:\\no\\such\\yt-dlp.exe');
+    const embedded = await openEmbedded('kind=file');
+    const before = serverRecords().length;
+
+    await pressInPlayer(embedded, 'media');
+    await appPage.getByRole('heading', { name: 'Download file' }).waitFor();
+    // The size shows only if the app's own request was let in.
+    await appPage.getByRole('dialog').getByText('2.0 MB').waitFor();
+    await appPage.getByLabel('Save as').fill('from-embedded-player.mp4');
+    await appPage.getByRole('button', { name: 'Start download' }).click();
+    await appPage.locator('tbody tr', { hasText: 'from-embedded-player.mp4' }).getByText('Complete').waitFor();
+
+    const saved = join(appFolder, 'from-embedded-player.mp4');
+    assert.equal(statSync(saved).size, 2 * 1024 * 1024);
+    const fromApp = serverRecords()
+      .slice(before)
+      .filter((record) => record.target.startsWith('/file/2M.mp4?seed=902') && headerOf(record, 'referer') === `${PLAYER}/`);
+    assert.ok(fromApp.length > 0, 'the app never asked as the player');
+    assert.ok(
+      fromApp.every((record) => record.status === 200 || record.status === 206),
+      fromApp.map((record) => record.status).join(', '),
+    );
   });
 
   await step('a page with no player gets no panel', async () => {

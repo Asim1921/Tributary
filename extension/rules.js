@@ -8,9 +8,12 @@ export const MIN_MEDIA_BYTES = 256 * 1024;
 
 const MAX_MEDIA_ITEMS = 20;
 
-/** A player smaller than this is a thumbnail or a preview, not worth a panel. */
-export const MIN_PLAYER_WIDTH = 320;
-export const MIN_PLAYER_HEIGHT = 180;
+/**
+ * A player smaller than this is a thumbnail or a preview, not worth a panel. Measured on
+ * its long and short sides, so an upright player counts as well as a wide one.
+ */
+export const MIN_PLAYER_LONG_SIDE = 320;
+export const MIN_PLAYER_SHORT_SIDE = 180;
 
 const SCHEMES = ['http:', 'https:', 'ftp:'];
 
@@ -181,9 +184,10 @@ export const mediaKey = (tabId) => `media-${tabId}`;
 
 /** Whether a player is big and showing enough to put a panel beside. */
 export function isWorthPanel(box) {
-  return Boolean(
-    box && box.width >= MIN_PLAYER_WIDTH && box.height >= MIN_PLAYER_HEIGHT && !box.hidden,
-  );
+  if (!box || box.hidden) return false;
+  const long = Math.max(box.width, box.height);
+  const short = Math.min(box.width, box.height);
+  return long >= MIN_PLAYER_LONG_SIDE && short >= MIN_PLAYER_SHORT_SIDE;
 }
 
 /** A YouTube video's id: letters, digits, `-` and `_`. */
@@ -243,17 +247,39 @@ export function videoPageAddress({ page, named, watching, link } = {}) {
  * There is deliberately no cookie in it: the app reads the page without the browser's
  * logins, and never passes them to another server. Returns null for anything but a web page.
  */
-export function pageDownload({ url, page, title, userAgent }) {
+export function pageDownload({ url, page, parent, host, title, userAgent }) {
   if (!webAddress(url)) return null;
+  const holder = webAddress(host);
 
   return {
     type: 'download',
     url,
-    referrer: webAddress(page)?.href ?? url,
+    // For a player embedded in another page, that page, as the browser named it to the
+    // player. Players often answer only when asked from the page they're embedded in.
+    referrer: webAddress(parent)?.href ?? webAddress(page)?.href ?? url,
+    // The page holding the player, to read instead when the player can't be read alone.
+    host: holder && holder.href !== url ? holder.href : undefined,
     userAgent,
     fileName: (title ?? '').trim() || undefined,
     video: true,
     page: true,
+  };
+}
+
+/**
+ * The `Referer`, and for a script's request the `Origin`, that a stream was asked for
+ * with. A player embedded from another site asks for its video as that site, and a video
+ * server that checks this turns away anything else, such as the page the player sits in.
+ * `initiator` is the origin the browser reports for the request.
+ */
+export function streamHeaders({ initiator, request } = {}, tabUrl) {
+  const tab = webAddress(tabUrl);
+  const from = webAddress(initiator);
+  if (!from || (tab && from.origin === tab.origin)) return { referrer: tab?.href };
+
+  return {
+    referrer: `${from.origin}/`,
+    origin: request === 'xmlhttprequest' ? from.origin : undefined,
   };
 }
 

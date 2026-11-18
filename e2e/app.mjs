@@ -1428,6 +1428,45 @@ try {
     assert.equal(await page.locator('tbody tr').count(), before);
   });
 
+  await step('a page offered only as HLS is read and saved by Tributary itself', async () => {
+    const before = serverSaw().length;
+
+    await lookForVideo('?case=hls');
+    await page.getByRole('radio', { name: /^720p/ }).waitFor();
+    await page.getByRole('radio', { name: /^360p/ }).waitFor();
+    assert.equal(await page.getByLabel('Save as').inputValue(), 'Streamed film');
+    await saveVideo('Streamed film');
+    await rowFor(page, 'Streamed film.ts').getByText('Complete').waitFor();
+    assert.ok(statSync(join(downloadDir, 'Streamed film.ts')).size > 0);
+
+    // The stream and its parts were asked for with yt-dlp's headers, and never a cookie.
+    const asked = serverSaw()
+      .slice(before)
+      .filter((entry) => entry.target.startsWith('/media/') || /^\/file\/[^?]+\.ts\?/.test(entry.target));
+    assert.ok(asked.some((entry) => entry.target.startsWith('/media/master.m3u8')), 'the list was never read');
+    assert.ok(asked.some((entry) => entry.target.startsWith('/file/')), 'no part was fetched');
+    for (const entry of asked) {
+      const names = entry.headers.map(([name]) => name.toLowerCase());
+      assert.ok(!names.includes('cookie'), `a cookie went with ${entry.target}`);
+      assert.equal(entry.headers.find(([name]) => name.toLowerCase() === 'user-agent')?.[1], 'FakeAgent/1', entry.target);
+    }
+  });
+
+  await step("a stream whose full list is turned away is read quality by quality", async () => {
+    const before = serverSaw().length;
+
+    await lookForVideo('?case=hls-guarded');
+    await page.getByRole('radio', { name: /^720p/ }).waitFor();
+    await page.getByRole('radio', { name: /^360p/ }).waitFor();
+    await saveVideo('Guarded film');
+    await rowFor(page, 'Guarded film.ts').getByText('Complete').waitFor();
+    assert.ok(statSync(join(downloadDir, 'Guarded film.ts')).size > 0);
+
+    const asked = serverSaw().slice(before);
+    assert.ok(asked.some((entry) => entry.target.startsWith('/file/1K.m3u8') && entry.status === 403), 'the full list was tried first');
+    assert.ok(asked.some((entry) => entry.target.startsWith('/media/high.m3u8') && entry.status === 200), "the best quality's own list was read");
+  });
+
   await step('without yt-dlp the dialog offers to install it, and runs nothing', async () => {
     await inOptions('Video', () => page.getByLabel('yt-dlp program').fill('C:\\no\\such\\yt-dlp.exe'));
     const before = readFileSync(fakeLog, 'utf8');

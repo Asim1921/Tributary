@@ -120,34 +120,140 @@ struct Offer {
     title: Option<String>,
 }
 
-/// Reads a web page's video through yt-dlp. No headers or logins go with it, so a cookie
-/// the browser held can never reach it.
-async fn read_page(state: &AppState, url: &str) -> Result<Offer, String> {
+/// The page holding an embedded player, when it's worth reading instead of the player. A
+/// refusal on principle, such as a protected or live video, would only be repeated.
+fn host_to_try<'a>(url: &str, host: Option<&'a str>, problem: &media::Error) -> Option<&'a str> {
+    let principled = matches!(
+        problem,
+        media::Error::Protected
+            | media::Error::Live
+            | media::Error::LoginRequired
+            | media::Error::Playlist
+    );
+    host.map(str::trim)
+        .filter(|host| !principled && !host.is_empty() && *host != url.trim())
+}
+
+/// Reads a web page's video through yt-dlp. No cookies or logins go with it, so nothing the
+/// browser held can reach it. A player embedded in another page is asked about with that
+/// page as the referer, and the page itself is read when the player can't be.
+async fn read_page(
+    state: &AppState,
+    url: &str,
+    referer: Option<&str>,
+    host: Option<&str>,
+) -> Result<Offer, String> {
     let program = ytdlp::program_for(state).ok_or_else(|| ytdlp::MISSING.to_owned())?;
-    let page = ytdlp::inspect(&program, url)
-        .await
-        .map_err(|error| error.to_string())?;
+    let page = match ytdlp::inspect(&program, url, referer).await {
+        Ok(page) => page,
+        // A player that can't be read on its own may be found in the page holding it.
+        Err(problem) => match host_to_try(url, host, &problem) {
+            Some(host) => ytdlp::inspect(&program, host, None)
+                .await
+                // The player's own answer says more about what went wrong.
+                .map_err(|_| problem.to_string())?,
+            None => return Err(problem.to_string()),
+        },
+    };
+
+    // A page whose best is only offered as HLS: Tributary reads the stream itself, which
+    // also refuses it if it's encrypted, and asks for it with only the headers yt-dlp named.
+    let mut qualities = page.qualities;
+    if let Some(stream) = page.stream {
+        match read_stream(&state.engine, &stream).await {
+            Ok(found) => qualities = found,
+            Err(problem) if qualities.is_empty() => return Err(problem),
+            // The plain files are still there to offer.
+            Err(_) => {}
+        }
+    }
     Ok(Offer {
-        qualities: page.qualities,
+        qualities,
         title: page.title,
     })
 }
 
-async fn read_qualities(
-    engine: &Engine,
+/// Reads a stream spotted in a page. One that can't be read on its own, say because its
+/// site turns away anything but a browser, is looked up through the page holding it. A
+/// refusal on principle, such as protection, isn't.
+async fn read_spotted(
+    state: &AppState,
     url: &str,
     headers: &[(String, String)],
     login: Option<Login>,
-) -> Result<Vec<Quality>, String> {
+    host: Option<&str>,
+) -> Result<Offer, String> {
     let fetch = |address: String| {
-        let engine = engine.clone();
+        let engine = state.engine.clone();
         let headers = headers.to_vec();
         let login = login.clone();
         async move { engine.fetch_text(&address, &headers, login).await }
     };
-    media::discover(url, fetch)
-        .await
-        .map_err(|error| error.to_string())
+    match media::discover(url, fetch).await {
+        Ok(qualities) => Ok(Offer {
+            qualities,
+            title: None,
+        }),
+        Err(problem) => match host_to_try(url, host, &problem) {
+            // The stream's own answer says more about what went wrong.
+            Some(host) => read_page(state, host, None, None)
+                .await
+                .map_err(|_| problem.to_string()),
+            None => Err(problem.to_string()),
+        },
+    }
+}
+
+async fn discover_stream(
+    engine: &Engine,
+    url: &str,
+    headers: &[(String, String)],
+) -> Result<Vec<Quality>, media::Error> {
+    let fetch = |address: String| {
+        let engine = engine.clone();
+        let headers = headers.to_vec();
+        async move { engine.fetch_text(&address, &headers, None).await }
+    };
+    media::discover(url, fetch).await
+}
+
+/// Reads an HLS stream yt-dlp found, with only the headers it named. Some sites turn away
+/// anything but a browser at the list of every quality, while each quality's own list,
+/// which yt-dlp has already read, stays open, so those are read one by one instead.
+/// Tributary doesn't pretend to be a browser. A protected quality refuses the whole stream.
+async fn read_stream(
+    engine: &Engine,
+    stream: &media::ytdlp::Stream,
+) -> Result<Vec<Quality>, String> {
+    let mut found = match discover_stream(engine, &stream.url, &stream.headers).await {
+        Ok(found) => found,
+        Err(media::Error::Protected) => return Err(media::Error::Protected.to_string()),
+        Err(problem) => {
+            let mut found = Vec::new();
+            for variant in &stream.variants {
+                match discover_stream(engine, &variant.url, &stream.headers).await {
+                    Ok(mut one) if !one.is_empty() => {
+                        let mut quality = one.remove(0);
+                        quality.label = variant.label.clone();
+                        quality.height = Some(variant.class);
+                        quality.bandwidth = variant.bandwidth.or(quality.bandwidth);
+                        found.push(quality);
+                    }
+                    Err(media::Error::Protected) => return Err(media::Error::Protected.to_string()),
+                    // One quality that can't be read leaves the others.
+                    _ => {}
+                }
+            }
+            if found.is_empty() {
+                return Err(problem.to_string());
+            }
+            found
+        }
+    };
+    for quality in &mut found {
+        quality.headers = Some(stream.headers.clone());
+    }
+    Ok(found)
 }
 
 /// Where one quality is going.
@@ -206,14 +312,17 @@ pub async fn inspect_video(
     let url = url.trim();
 
     let offer = if page == Some(true) {
-        read_page(&state, url).await?
+        let (referer, host) = capture_token
+            .map(|token| state.pending().page_context(token))
+            .unwrap_or_default();
+        read_page(&state, url, referer.as_deref(), host.as_deref()).await?
     } else {
         let headers = capture_token.map_or_else(Vec::new, |token| state.pending().headers(token));
+        let (_, host) = capture_token
+            .map(|token| state.pending().page_context(token))
+            .unwrap_or_default();
         let login = state.site_login_for(url);
-        Offer {
-            qualities: read_qualities(&state.engine, url, &headers, login).await?,
-            title: None,
-        }
+        read_spotted(&state, url, &headers, login, host.as_deref()).await?
     };
 
     let choices = offer.qualities.iter().map(VideoChoice::from).collect();
@@ -278,14 +387,15 @@ pub async fn add_best(app: AppHandle, file: Captured, later: bool, quit_when_don
     let login = state.site_login_for(&file.url);
 
     let read = if file.page {
-        read_page(&state, &file.url).await
+        read_page(
+            &state,
+            &file.url,
+            file.referrer.as_deref(),
+            file.host.as_deref(),
+        )
+        .await
     } else {
-        read_qualities(&state.engine, &file.url, &headers, login)
-            .await
-            .map(|qualities| Offer {
-                qualities,
-                title: None,
-            })
+        read_spotted(&state, &file.url, &headers, login, file.host.as_deref()).await
     };
 
     let saved = match read {
@@ -579,6 +689,43 @@ mod tests {
             remove_patiently(&folder.path().join("none"), 3, Duration::from_millis(1)),
             Ok(())
         );
+    }
+
+    #[test]
+    fn the_page_holding_a_player_is_tried_when_the_player_cannot_be_read() {
+        let player = "https://player.test/embed/1";
+        let host = Some("https://host.test/film");
+        let refused = media::Error::Fetch(media::ytdlp::REFUSED.into());
+
+        assert_eq!(host_to_try(player, host, &refused), host);
+        assert_eq!(host_to_try(player, host, &media::Error::NoVideo), host);
+    }
+
+    #[test]
+    fn a_refusal_on_principle_is_not_tried_again_on_the_host_page() {
+        let host = Some("https://host.test/film");
+        for problem in [
+            media::Error::Protected,
+            media::Error::Live,
+            media::Error::LoginRequired,
+            media::Error::Playlist,
+        ] {
+            assert_eq!(
+                host_to_try("https://player.test/1", host, &problem),
+                None,
+                "{problem:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn there_is_nothing_to_try_without_a_different_host_page() {
+        let player = "https://player.test/embed/1";
+        let problem = media::Error::NoVideo;
+
+        assert_eq!(host_to_try(player, None, &problem), None);
+        assert_eq!(host_to_try(player, Some("  "), &problem), None);
+        assert_eq!(host_to_try(player, Some(player), &problem), None);
     }
 
     #[test]

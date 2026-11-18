@@ -22,6 +22,7 @@
 //! | `redirects=N`             | Redirects N times before serving                             |
 //! | `change_after=N`          | Replaces the file with new content after N requests          |
 //! | `require_cookie=NAME=VAL` | Answers 403 unless that cookie is sent                       |
+//! | `require_referer=PREFIX`  | Answers 403 unless the `Referer` starts with this           |
 //! | `filename=NAME`           | Sends `Content-Disposition: attachment`                      |
 //! | `basic=USER:PASS`         | Requires this Basic login                                    |
 //! | `digest=USER:PASS`        | Requires this Digest login, refusing replayed counts         |
@@ -50,6 +51,7 @@ pub struct Scenario {
     pub redirects: u32,
     pub change_after: Option<u32>,
     pub require_cookie: Option<String>,
+    pub require_referer: Option<String>,
     pub filename: Option<String>,
     pub basic: Option<String>,
     pub digest: Option<String>,
@@ -76,6 +78,7 @@ impl Scenario {
             redirects: 0,
             change_after: None,
             require_cookie: None,
+            require_referer: None,
             filename: None,
             basic: None,
             digest: None,
@@ -100,6 +103,7 @@ impl Scenario {
                 "redirects" => scenario.redirects = number(key, value)?,
                 "change_after" => scenario.change_after = Some(number(key, value)?),
                 "require_cookie" => scenario.require_cookie = Some(decode(key, value)?),
+                "require_referer" => scenario.require_referer = Some(decode(key, value)?),
                 "basic" => scenario.basic = Some(decode(key, value)?),
                 "digest" => scenario.digest = Some(decode(key, value)?),
                 "filename" => scenario.filename = Some(header_safe(key, decode(key, value)?)?),
@@ -192,7 +196,7 @@ fn status(key: &str, value: &str) -> Result<u16, String> {
 }
 
 /// Decodes `%XX` escapes.
-fn decode(key: &str, value: &str) -> Result<String, String> {
+pub(crate) fn decode(key: &str, value: &str) -> Result<String, String> {
     let invalid = || format!("`{key}` has an invalid escape");
     let bytes = value.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
@@ -257,7 +261,15 @@ mod tests {
         let scenario =
             Scenario::parse("1K", "require_cookie=a%3Db&filename=my%20file.zip").unwrap();
         assert_eq!(scenario.require_cookie.as_deref(), Some("a=b"));
+
         assert_eq!(scenario.filename.as_deref(), Some("my file.zip"));
+
+        let referred =
+            Scenario::parse("1K", "require_referer=http%3A%2F%2Flocalhost%3A1%2F").unwrap();
+        assert_eq!(
+            referred.require_referer.as_deref(),
+            Some("http://localhost:1/")
+        );
         assert!(Scenario::parse("1K", "filename=a%0D%0AX:%20y").is_err());
         assert!(Scenario::parse("1K", "filename=%ZZ").is_err());
     }

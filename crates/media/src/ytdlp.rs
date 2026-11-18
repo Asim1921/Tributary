@@ -22,6 +22,88 @@ const MAX_FORMATS: usize = 400;
 pub struct Page {
     pub title: Option<String>,
     pub qualities: Vec<Quality>,
+    /// An HLS stream holding better qualities than any plain file, for Tributary to read
+    /// itself. Reading it refuses an encrypted stream, as any HLS address does.
+    pub stream: Option<Stream>,
+}
+
+/// A stream's address, and the only headers to send for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stream {
+    pub url: String,
+    pub headers: Vec<(String, String)>,
+    /// Each quality by its own list, best first, for a site that turns away anything but a
+    /// browser at the list of every quality. Only qualities with their sound in them.
+    pub variants: Vec<Variant>,
+}
+
+/// One quality of an HLS stream, by its own list, as yt-dlp found it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Variant {
+    pub url: String,
+    pub label: String,
+    pub class: u64,
+    pub bandwidth: Option<u64>,
+}
+
+/// The most qualities read one by one.
+const MAX_VARIANTS: usize = 12;
+
+fn variants(formats: &[Value]) -> Vec<Variant> {
+    let mut found: Vec<Variant> = formats
+        .iter()
+        .filter(|format| {
+            is_hls(format) && has_codec(format, "vcodec") && has_codec(format, "acodec")
+        })
+        .filter_map(|format| {
+            let item = candidate(format)?;
+            Some(Variant {
+                url: item.url.to_owned(),
+                label: label(&item),
+                class: item.class,
+                bandwidth: Some((item.bitrate * 1000.0) as u64).filter(|bits| *bits > 0),
+            })
+        })
+        .filter(|variant| variant.class > 0)
+        .collect();
+    found.sort_by_key(|variant| std::cmp::Reverse((variant.class, variant.bandwidth)));
+    let mut seen = Vec::new();
+    found.retain(|variant| {
+        let new = !seen.contains(&variant.label);
+        seen.push(variant.label.clone());
+        new
+    });
+    found.truncate(MAX_VARIANTS);
+    found
+}
+
+fn is_hls(format: &Value) -> bool {
+    text(format, "protocol").is_some_and(|protocol| protocol.starts_with("m3u8"))
+}
+
+/// The best picture offered as HLS, with the list that holds every quality of it.
+fn best_hls(formats: &[Value]) -> Option<(u64, Stream)> {
+    formats
+        .iter()
+        .filter(|format| is_hls(format) && has_codec(format, "vcodec"))
+        .filter_map(|format| {
+            let height = number(format, "height").map(|height| height as u64);
+            let width = number(format, "width").map(|width| width as u64);
+            let class = crate::picture_class(width, height)?;
+            let url = text(format, "manifest_url")
+                .or_else(|| text(format, "url"))
+                .filter(|url| url.starts_with("http"))?;
+            let headers = safe_headers(format.get("http_headers").unwrap_or(&Value::Null));
+            Some((
+                class,
+                Stream {
+                    url: url.to_owned(),
+                    headers,
+                    variants: variants(formats),
+                },
+            ))
+        })
+        .max_by_key(|(class, _)| *class)
 }
 
 fn text<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
@@ -287,9 +369,19 @@ pub fn parse(json: &str) -> Result<Page, Error> {
         });
     }
 
-    if qualities.is_empty() {
+    // Some sites offer their best, or everything, only as HLS, which Tributary reads itself.
+    let best_plain = qualities
+        .iter()
+        .filter_map(|quality| crate::picture_class(quality.width, quality.height))
+        .max()
+        .unwrap_or(0);
+    let stream = best_hls(formats)
+        .filter(|(class, _)| *class > best_plain)
+        .map(|(_, stream)| stream);
+
+    if qualities.is_empty() && stream.is_none() {
         return Err(Error::Invalid(
-            "it has no video that can be fetched as a plain file".into(),
+            "it has no video in a form Tributary can fetch".into(),
         ));
     }
 
@@ -298,13 +390,17 @@ pub fn parse(json: &str) -> Result<Page, Error> {
             .map(str::to_owned)
             .filter(|title| !title.trim().is_empty()),
         qualities,
+        stream,
     })
 }
 
-/// Turns yt-dlp's complaint into something to show.
 /// What to say when YouTube wants to check that this computer isn't a bot.
 pub const BOT_CHECK: &str = "YouTube wants to check this computer isn't a bot, which it does for a while after a lot of videos in a short time. Try again in a few minutes";
 
+/// What to say when a site won't hand a page to anything but its own player.
+pub const REFUSED: &str = "the site wouldn't show this page outside its own player. It may only work inside the page it's embedded in, or its link may have expired, so use the button beside the player on that page";
+
+/// Turns yt-dlp's complaint into something to show.
 pub fn explain_failure(stderr: &str) -> Error {
     let lower = stderr.to_ascii_lowercase();
     let says = |words: &[&str]| words.iter().any(|word| lower.contains(word));
@@ -321,6 +417,8 @@ pub fn explain_failure(stderr: &str) -> Error {
         "sign in",
         "log in",
         "login",
+        "logged in",
+        "logged-in",
         "private video",
         "members-only",
         "members only",
@@ -336,7 +434,10 @@ pub fn explain_failure(stderr: &str) -> Error {
         "no video formats",
         "no video could be found",
     ]) {
-        Error::Invalid("there's no video here that can be saved".into())
+        Error::NoVideo
+    } else if says(&["http error 403", "http error 404", "http error 410"]) {
+        // Players embedded in another site often answer only when asked from that site.
+        Error::Fetch(REFUSED.into())
     } else {
         let last = stderr
             .lines()
@@ -555,11 +656,129 @@ mod tests {
     }
 
     #[test]
+    fn each_quality_with_its_sound_is_kept_by_its_own_list() {
+        // As Dailymotion lists them: upright pictures, with the sound in each.
+        let master = "https://director.test/master.m3u8";
+        let with_sound = |id: &str, width: u64, height: u64, fps: u64, bitrate: f64| {
+            let mut format = hls(id, height, Some(master));
+            format["width"] = json!(width);
+            format["fps"] = json!(fps);
+            format["tbr"] = json!(bitrate);
+            format["acodec"] = json!("mp4a.40.2");
+            format
+        };
+        let found = parse(&page(vec![
+            with_sound("hls-380", 360, 640, 25, 461.0),
+            with_sound("hls-1080@60", 1080, 1920, 60, 5717.0),
+            with_sound("hls-2160@60", 2160, 3840, 60, 20394.0),
+            with_sound("hls-1080-low", 1080, 1920, 60, 3000.0),
+        ]))
+        .unwrap();
+
+        let stream = found.stream.unwrap();
+        let labels: Vec<&str> = stream
+            .variants
+            .iter()
+            .map(|variant| variant.label.as_str())
+            .collect();
+        assert_eq!(labels, ["2160p60", "1080p60", "360p"]);
+        assert_eq!(
+            stream.variants[1].url, "https://v.test/hls-1080@60.m3u8",
+            "the better of the two 1080p"
+        );
+        assert_eq!(stream.variants[0].bandwidth, Some(20_394_000));
+    }
+
+    #[test]
+    fn pictures_without_their_sound_are_not_offered_one_by_one() {
+        // As TED lists them: the sound is a list of its own, so only the master will do.
+        let found = parse(&page(vec![hls(
+            "hls-851",
+            360,
+            Some("https://v.test/m.m3u8"),
+        )]))
+        .unwrap();
+        let stream = found.stream.unwrap();
+        assert_eq!(stream.url, "https://v.test/m.m3u8");
+        assert!(stream.variants.is_empty());
+    }
+
+    fn hls(id: &str, height: u64, master: Option<&str>) -> Value {
+        let mut format = picture(id, height, "mp4", "avc1", 1000.0);
+        format["protocol"] = json!("m3u8_native");
+        format["url"] = json!(format!("https://v.test/{id}.m3u8"));
+        if let Some(master) = master {
+            format["manifest_url"] = json!(master);
+        }
+        format["http_headers"] =
+            json!({ "User-Agent": "Agent", "Referer": "https://site.test/", "Cookie": "secret=1" });
+        format
+    }
+
+    #[test]
+    fn a_page_offered_only_as_hls_is_handed_to_tributarys_own_reader() {
+        let master = "https://v.test/master.m3u8";
+        let found = parse(&page(vec![
+            hls("h1", 1080, Some(master)),
+            hls("h2", 480, Some(master)),
+        ]))
+        .unwrap();
+
+        assert!(found.qualities.is_empty());
+        let stream = found.stream.unwrap();
+        assert_eq!(stream.url, master, "the list that holds every quality");
+        assert_eq!(
+            stream.headers,
+            [
+                ("User-Agent".to_owned(), "Agent".to_owned()),
+                ("Referer".to_owned(), "https://site.test/".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn hls_is_used_only_when_it_is_better_than_every_plain_file() {
+        let better = parse(&page(vec![
+            hls("h", 1080, None),
+            picture("p", 360, "mp4", "avc1", 500.0),
+        ]))
+        .unwrap();
+        assert_eq!(
+            better.stream.map(|stream| stream.url),
+            Some("https://v.test/h.m3u8".to_owned())
+        );
+
+        let worse = parse(&page(vec![
+            hls("h", 720, None),
+            picture("p", 1080, "mp4", "avc1", 4000.0),
+            sound("s", "m4a", 128.0),
+        ]))
+        .unwrap();
+        assert_eq!(worse.stream, None);
+        assert_eq!(worse.qualities[0].label, "1080p");
+    }
+
+    #[test]
+    fn protected_hls_still_refuses_the_whole_page() {
+        let mut locked = hls("h", 1080, None);
+        locked["has_drm"] = json!(true);
+        assert_eq!(parse(&page(vec![locked])).unwrap_err(), Error::Protected);
+    }
+
+    #[test]
+    fn a_page_with_nothing_tributary_can_read_says_so() {
+        let mut dash = picture("dash", 1080, "mp4", "avc1", 9000.0);
+        dash["protocol"] = json!("http_dash_segments");
+        assert!(matches!(parse(&page(vec![dash])), Err(Error::Invalid(_))));
+    }
+
+    #[test]
     fn a_page_with_nothing_fetchable_says_so() {
+        assert!(matches!(parse(&page(Vec::new())), Err(Error::Invalid(_))));
+        // HLS alone is no longer nothing: it's handed to Tributary's own reader.
         let mut stream = picture("hls", 1080, "mp4", "avc1", 4000.0);
         stream["protocol"] = json!("m3u8_native");
-        assert!(matches!(parse(&page(vec![stream])), Err(Error::Invalid(_))));
-        assert!(matches!(parse(&page(Vec::new())), Err(Error::Invalid(_))));
+        assert!(parse(&page(vec![stream])).unwrap().stream.is_some());
     }
 
     #[test]
@@ -676,6 +895,13 @@ mod tests {
             error("ERROR: Sign in to confirm your age"),
             Error::LoginRequired
         );
+        // What Vimeo answers now.
+        assert_eq!(
+            error(
+                "ERROR: [vimeo] 76979871: The web client only works when logged-in. Use --cookies, --username and --password"
+            ),
+            Error::LoginRequired
+        );
         assert_eq!(
             error("ERROR: This video is available to this channel's members only"),
             Error::LoginRequired
@@ -692,10 +918,20 @@ mod tests {
             error("ERROR: This live event will begin in 2 hours"),
             Error::Live
         );
-        assert!(matches!(
+        assert_eq!(
             error("ERROR: Unsupported URL: https://x.test/"),
-            Error::Invalid(_)
-        ));
+            Error::NoVideo
+        );
+        assert!(Error::NoVideo.to_string().contains("press play"));
+
+        // What a player embedded in another site answers when asked on its own.
+        for refused in [
+            "ERROR: [generic] 1339713?vs=x: Unable to download webpage: HTTP Error 404: Not Found",
+            "ERROR: [generic] player: Unable to download webpage: HTTP Error 403: Forbidden",
+            "ERROR: Unable to download webpage: HTTP Error 410: Gone",
+        ] {
+            assert_eq!(error(refused), Error::Fetch(REFUSED.into()), "{refused}");
+        }
 
         let other = error("WARNING: slow\nERROR: [x] something odd happened");
         assert_eq!(
