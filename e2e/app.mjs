@@ -1480,6 +1480,38 @@ try {
     assert.ok(asked.some((entry) => entry.target.startsWith('/media/high.m3u8') && entry.status === 200), "the best quality's own list was read");
   });
 
+  await step("a page's pictures and videos are saved together, and a video needing a login is told once", async () => {
+    const reply = await askHost({
+      type: 'batch',
+      gallery: true,
+      title: 'A page: of pictures?',
+      items: [
+        { url: `${BASE}/file/40K.jpg?seed=1`, kind: 'image' },
+        { url: `${BASE}/file/40K.jpg?seed=2`, kind: 'image' },
+        { url: `${BASE}/video?case=private`, page: true, video: true },
+        { url: `${BASE}/watch/3`, page: true, video: true },
+      ],
+    });
+    assert.equal(reply.ok, true);
+
+    await page.getByRole('heading', { name: 'Save pictures and videos' }).waitFor();
+    await page.getByText('2 pictures and 2 videos', { exact: false }).waitFor();
+    const folder = join(downloadDir, 'A page of pictures');
+    assert.equal(await page.getByLabel('Folder', { exact: true }).inputValue(), folder);
+    await page.getByRole('button', { name: 'Download all' }).click();
+
+    // One message for the video that needs a login, after the others are read.
+    await page.getByRole('heading', { name: 'Something went wrong' }).waitFor({ timeout: 30_000 });
+    await page.getByText("1 of 2 videos couldn't be saved", { exact: false }).waitFor();
+    await page.getByText('login or a paid account', { exact: false }).waitFor();
+    await page.getByRole('button', { name: 'Close' }).click();
+
+    const deadline = Date.now() + 30_000;
+    const arrived = () => (existsSync(folder) ? readdirSync(folder).filter((name) => !name.endsWith('.part')) : []);
+    while (Date.now() < deadline && arrived().length < 3) await sleep(200);
+    assert.deepEqual(arrived().sort(), ['40K (1).jpg', '40K.jpg', 'Post 3.mp4'].sort());
+  });
+
   await step('without yt-dlp the dialog offers to install it, and runs nothing', async () => {
     await inOptions('Video', () => page.getByLabel('yt-dlp program').fill('C:\\no\\such\\yt-dlp.exe'));
     const before = readFileSync(fakeLog, 'utf8');

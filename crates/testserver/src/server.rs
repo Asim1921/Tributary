@@ -36,6 +36,8 @@ const LAST_MODIFIED: [&str; 2] = [
 const INDEX_PAGE: &str = include_str!("index.html");
 const VIDEO_PAGE: &str = include_str!("video.html");
 const SCRIPT_VIDEO_PAGE: &str = include_str!("script-video.html");
+/// Pictures that load as the page scrolls, with `?wall=N` and `?drop=1` as described inside.
+const GALLERY_PAGE: &str = include_str!("gallery.html");
 
 const DIGEST_REALM: &str = "test";
 const DIGEST_NONCE: &str = "test-nonce";
@@ -442,6 +444,10 @@ async fn respond(state: &State, stream: &mut TcpStream, head: &RequestHead) -> S
                 }
                 embed::Reply::Status(status) => send_small(stream, head, status, &[], b"").await,
             }
+        }
+        "/gallery" => {
+            let headers = [("Content-Type", "text/html; charset=utf-8".to_owned())];
+            send_small(stream, head, 200, &headers, GALLERY_PAGE.as_bytes()).await
         }
         "/video-script" => {
             let headers = [("Content-Type", "text/html; charset=utf-8".to_owned())];

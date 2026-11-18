@@ -33,4 +33,12 @@ async function show() {
   });
 }
 
+document.getElementById('save-all').addEventListener('click', async () => {
+  const tabId = await currentTabId();
+  const reply = await chrome.runtime.sendMessage({ type: 'save-page-media', tabId }).catch(() => null);
+  // Out of the way, so the page can be seen being looked through.
+  if (reply?.started) window.close();
+  else document.getElementById('unreadable').hidden = false;
+});
+
 void show();

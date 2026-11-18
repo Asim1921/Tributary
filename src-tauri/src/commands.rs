@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -11,7 +12,7 @@ use engine::{
 };
 use media::{Part, Quality};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, State as Managed, Window};
+use tauri::{AppHandle, Emitter, Manager, State as Managed, Window};
 use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_opener::OpenerExt as _;
 use tokio::sync::oneshot;
@@ -147,6 +148,8 @@ impl AppState {
 
     /// Stops every running download, saving progress. Used by Stop All and on exit.
     pub async fn stop_all(&self) -> Result<(), engine::Error> {
+        // A gallery still reading its pages stops there too.
+        STOPS.fetch_add(1, Ordering::SeqCst);
         for download in self.engine.list()? {
             if download.state == State::Running {
                 self.engine.pause(download.id).await?;
@@ -326,11 +329,15 @@ pub struct AddRequest {
     /// The parts of a stream. Only the app sets these, never the window.
     #[serde(skip)]
     parts: Option<Vec<Part>>,
+    /// One of a page's gallery. Only the app sets this.
+    #[serde(skip)]
+    gallery: bool,
 }
 
 impl AddRequest {
     /// A download that goes straight into the list.
     pub fn from_captured(file: Captured) -> Self {
+        let gallery = file.gallery;
         Self {
             url: file.url,
             dest_dir: file.folder,
@@ -344,6 +351,7 @@ impl AddRequest {
             remember_login: false,
             capture_token: None,
             parts: None,
+            gallery,
         }
     }
 
@@ -364,6 +372,18 @@ impl AddRequest {
             parts,
             ..Self::from_captured(file)
         }
+    }
+
+    /// Saved to this queue rather than the main one, if one is given. For after `later`.
+    pub fn in_queue(mut self, queue: Option<i64>) -> Self {
+        self.queue_id = queue.or(self.queue_id);
+        self
+    }
+
+    /// One of a page's gallery, whose folder isn't remembered as the last one used.
+    pub fn in_gallery(mut self, gallery: bool) -> Self {
+        self.gallery = gallery;
+        self
     }
 
     /// The same, but saved to the main queue instead of starting.
@@ -573,30 +593,190 @@ pub async fn discard_capture(state: Managed<'_, AppState>, token: u64) -> Result
 
 /// Adds the chosen files from a capture of several.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn add_batch(
+    app: AppHandle,
     state: Managed<'_, AppState>,
     token: u64,
     urls: Vec<String>,
     dest_dir: Option<PathBuf>,
     queue_id: Option<i64>,
     paused: bool,
+    gallery: Option<bool>,
 ) -> Result<usize, String> {
     let files = state
         .pending()
         .take(token)
         .ok_or("these links have already been handled")?;
+    let (pages, files): (Vec<Captured>, Vec<Captured>) = files
+        .into_iter()
+        .filter(|file| urls.contains(&file.url))
+        .partition(|file| file.page);
 
+    // A page's pictures go through a queue of their own, a few at a time, rather than
+    // hundreds starting at once.
+    let together = gallery == Some(true) && !paused && !files.is_empty();
+    let queue = if together {
+        Some(page_media_queue(&state)?.0)
+    } else {
+        queue_id
+    };
+
+    let gallery = gallery == Some(true);
     let mut added = 0;
-    for file in files.into_iter().filter(|file| urls.contains(&file.url)) {
+    let mut failed = None;
+    for file in files {
         let headers = file.headers();
         let mut request = AddRequest::from_captured(file);
         request.dest_dir.clone_from(&dest_dir);
-        request.queue_id = queue_id;
-        request.paused = paused;
-        add_download_now(&state, request, headers)?;
-        added += 1;
+        request.queue_id = queue;
+        request.paused = paused || together;
+        request.gallery = gallery;
+        match add_download_now(&state, request, headers) {
+            Ok(_) => added += 1,
+            Err(problem) => {
+                failed = Some(problem);
+                break;
+            }
+        }
+    }
+    // What was added waits paused, so it has to be started even if a later file failed.
+    if let Some(queue) = queue.filter(|_| together && added > 0) {
+        state.engine.start_queue(QueueId(queue)).map_err(text)?;
+    }
+    if let Some(problem) = failed {
+        return Err(problem);
+    }
+
+    // Videos read from their pages are asked about one at a time, a little apart, so a
+    // site isn't asked many times at once.
+    added += pages.len();
+    if !pages.is_empty() {
+        let pages = pages
+            .into_iter()
+            .map(|mut page| {
+                page.queue = queue_id;
+                page.gallery = gallery;
+                page
+            })
+            .collect();
+        tauri::async_runtime::spawn(read_pages_in_turn(app, pages, dest_dir, paused));
     }
     Ok(added)
+}
+
+/// The queue a page's pictures go through. Made the first time it's needed.
+pub const PAGE_MEDIA_QUEUE: &str = "Page media";
+const PAGE_MEDIA_AT_ONCE: u32 = 4;
+
+fn page_media_queue(state: &AppState) -> Result<QueueId, String> {
+    if let Some(found) = state
+        .engine
+        .queues()
+        .map_err(text)?
+        .into_iter()
+        .find(|info| info.queue.name == PAGE_MEDIA_QUEUE)
+    {
+        return Ok(found.queue.id);
+    }
+    let mut queue = Queue::new(PAGE_MEDIA_QUEUE);
+    queue.concurrency = PAGE_MEDIA_AT_ONCE;
+    state.engine.save_queue(&queue).map_err(text)
+}
+
+/// The pause between videos read from their pages.
+const PAGE_PAUSE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Only one page is read at a time, however many galleries are being saved.
+static PAGE_READING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Counts Stop All, so a gallery can tell it was asked to stop while it waited.
+static STOPS: AtomicU64 = AtomicU64::new(0);
+
+/// Why some pages were left unread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Unread {
+    /// Nothing was left.
+    Nothing,
+    /// yt-dlp isn't installed, so no page could be read.
+    NoYtDlp(usize),
+    /// Stop All was pressed.
+    Stopped(usize),
+}
+
+/// Reads each video's page in turn and saves its best quality. Whatever couldn't be saved,
+/// such as a video that needs a login, is told in one message at the end.
+async fn read_pages_in_turn(
+    app: AppHandle,
+    pages: Vec<Captured>,
+    folder: Option<PathBuf>,
+    later: bool,
+) {
+    let total = pages.len();
+    let stops = STOPS.load(Ordering::SeqCst);
+    let mut refused = Vec::new();
+    let mut unread = Unread::Nothing;
+    for (index, mut file) in pages.into_iter().enumerate() {
+        let left = total - index;
+        let _turn = PAGE_READING.lock().await;
+        if STOPS.load(Ordering::SeqCst) != stops {
+            unread = Unread::Stopped(left);
+            break;
+        }
+        file.folder.clone_from(&folder);
+        let address = file.url.clone();
+        match crate::video::save_best(&app, file, later).await {
+            Err(problem) if problem == crate::ytdlp::MISSING => {
+                unread = Unread::NoYtDlp(left);
+                break;
+            }
+            Err(problem) => refused.push(format!("{address}: {problem}")),
+            Ok(_) => {}
+        }
+        let _ = app.emit("queues-changed", ());
+        // The pause is part of the turn, so another gallery waits for it too.
+        if left > 1 {
+            tokio::time::sleep(PAGE_PAUSE).await;
+        }
+    }
+    let _ = app.emit("queues-changed", ());
+    if let Some(message) = refused_summary(total, &refused, unread) {
+        let _ = app.emit("video-problem", message);
+    }
+}
+
+/// One message for the videos that couldn't be saved, naming a few, and for any left unread.
+fn refused_summary(total: usize, refused: &[String], unread: Unread) -> Option<String> {
+    let mut parts = Vec::new();
+    if !refused.is_empty() {
+        const NAMED: usize = 5;
+        let mut message = format!(
+            "{} of {total} videos couldn't be saved:\n{}",
+            refused.len(),
+            refused
+                .iter()
+                .take(NAMED)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        if refused.len() > NAMED {
+            message.push_str(&format!("\nand {} more", refused.len() - NAMED));
+        }
+        parts.push(message);
+    }
+    match unread {
+        Unread::Nothing => {}
+        Unread::NoYtDlp(count) => parts.push(format!(
+            "yt-dlp is needed to read videos from their pages (Options > Video can install it). {count} {} not read.",
+            if count == 1 { "video was" } else { "videos were" }
+        )),
+        Unread::Stopped(count) => parts.push(format!(
+            "Stopped before reading {count} {}.",
+            if count == 1 { "video" } else { "videos" }
+        )),
+    }
+    (!parts.is_empty()).then(|| parts.join("\n\n"))
 }
 
 /// Where the browser extension is installed, for the setup instructions.
@@ -658,9 +838,21 @@ pub fn add_download_now(
 
     let mut settings = state.settings();
     settings.remember_url(&url);
-    settings.last_folder = Some(dest_dir);
+    if remembers_folder(
+        &dest_dir,
+        &crate::video::sound_folder(&state.settings_path),
+        request.gallery,
+    ) {
+        settings.last_folder = Some(dest_dir);
+    }
     settings.save(&state.settings_path).map_err(text)?;
     Ok(id.0)
+}
+
+/// Whether a download's folder becomes the one offered next time. A video's hidden sound
+/// folder never does, and a gallery's folder, named after its page, doesn't either.
+fn remembers_folder(dest_dir: &Path, sound_folder: &Path, gallery: bool) -> bool {
+    !gallery && dest_dir != sound_folder
 }
 
 /// The part of a URL's path after the last slash, ignoring any query.
@@ -1059,6 +1251,62 @@ mod tests {
         let picture = DownloadView::from(download(7, State::Running, Some(8)));
         let shown = picture.with_sound(Some(&download(8, State::Failed, Some(7))));
         assert_eq!(shown.state, "running");
+    }
+
+    #[test]
+    fn videos_that_could_not_be_saved_are_told_in_one_message() {
+        assert_eq!(refused_summary(4, &[], Unread::Nothing), None);
+
+        let two = [
+            "https://x.test/reel/1/: needs a login".to_owned(),
+            "https://x.test/reel/2/: protected".to_owned(),
+        ];
+        assert_eq!(
+            refused_summary(4, &two, Unread::Nothing).as_deref(),
+            Some(
+                "2 of 4 videos couldn't be saved:\nhttps://x.test/reel/1/: needs a login\nhttps://x.test/reel/2/: protected"
+            )
+        );
+
+        let many: Vec<String> = (1..=8)
+            .map(|index| format!("https://x.test/reel/{index}/: needs a login"))
+            .collect();
+        let message = refused_summary(10, &many, Unread::Nothing).unwrap();
+        assert!(message.starts_with("8 of 10 videos couldn't be saved:"));
+        assert!(
+            message.contains("reel/5/") && !message.contains("reel/6/"),
+            "only a few are named"
+        );
+        assert!(message.ends_with("and 3 more"));
+    }
+
+    #[test]
+    fn a_missing_yt_dlp_is_told_once_with_the_videos_left_unread() {
+        let message = refused_summary(5, &[], Unread::NoYtDlp(5)).unwrap();
+        assert!(message.contains("yt-dlp is needed") && message.contains("Options > Video"));
+        assert!(message.contains("5 videos were not read"));
+        let one = refused_summary(5, &[], Unread::NoYtDlp(1)).unwrap();
+        assert!(one.contains("1 video was not read"));
+    }
+
+    #[test]
+    fn a_stopped_gallery_says_what_was_left_unread() {
+        let failed = ["https://x.test/reel/1/: needs a login".to_owned()];
+        let message = refused_summary(4, &failed, Unread::Stopped(2)).unwrap();
+        assert!(message.starts_with("1 of 4 videos couldn't be saved:"));
+        assert!(message.ends_with("Stopped before reading 2 videos."));
+    }
+
+    #[test]
+    fn the_sound_folder_and_galleries_are_not_remembered_as_the_last_folder() {
+        let sound = Path::new("C:/data/sound");
+        assert!(remembers_folder(Path::new("D:/Downloads"), sound, false));
+        assert!(!remembers_folder(sound, sound, false));
+        assert!(!remembers_folder(
+            Path::new("D:/Downloads/Page"),
+            sound,
+            true
+        ));
     }
 
     #[test]

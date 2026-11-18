@@ -275,10 +275,244 @@ for (const name of ['loadedmetadata', 'playing', 'resize']) {
 }
 refreshPanel();
 
+// Saving every picture and video on the page. Only the extension can start this: a page's
+// own scripts can't send it messages. What's collected here are plain facts about what
+// the page shows. The background decides what's worth offering, by rules it can test.
+
+// Matches \`MIN_IMAGE_SIDE\` in rules.js, which a test checks. Only used for the running count.
+const MIN_IMAGE_SIDE = 200;
+const SCROLL_PAUSE_MS = 1500;
+const QUIET_STEPS = 3;
+const MAX_SCROLL_STEPS = 60;
+const MAX_COLLECTED = 300;
+
+// The overlay sits in the bottom corner, with its two buttons a fixed size at its right.
+const COLLECT_STYLE = `
+  .box {
+    display: flex; gap: 10px; align-items: center;
+    padding: 10px 12px; font: 13px/1.3 system-ui, sans-serif; color: #eef3f2;
+    background: #15201ff2; border: 1px solid #26b5a4; border-radius: 8px;
+    box-shadow: 0 4px 16px #0006;
+  }
+  span { max-width: 260px; }
+  button {
+    box-sizing: border-box; width: 96px; padding: 5px 0; font: inherit; color: inherit;
+    cursor: pointer; background: #26b5a433; border: 1px solid #26b5a4; border-radius: 5px;
+  }
+  button.quiet { background: transparent; border-color: transparent; opacity: 0.8; }
+`;
+
+let collecting = null;
+
+/** The element that scrolls the page: the page itself, or the biggest scrolling box in it. */
+function scroller() {
+  const page = document.scrollingElement ?? document.documentElement;
+  if (page.scrollHeight > page.clientHeight + 4) return page;
+  let best = page;
+  let room = 0;
+  for (const element of document.querySelectorAll('*')) {
+    const style = getComputedStyle(element);
+    if (!/(auto|scroll)/.test(style.overflowY)) continue;
+    const extra = element.scrollHeight - element.clientHeight;
+    if (extra > room) {
+      best = element;
+      room = extra;
+    }
+  }
+  return best;
+}
+
+/** Adds what the page shows now to what's been seen, so rows a site drops still count. */
+function lookAround(seen) {
+  for (const image of document.images) {
+    const src = image.currentSrc || image.src;
+    const key = image.srcset || src;
+    if (!key) continue;
+    const box = image.getBoundingClientRect();
+    const known = seen.images.get(key);
+    if (known) {
+      // A lazy picture first seen before it loaded is bigger now, so keep the largest.
+      known.width = Math.max(known.width, Math.round(box.width));
+      known.height = Math.max(known.height, Math.round(box.height));
+      known.naturalWidth = Math.max(known.naturalWidth, image.naturalWidth);
+      known.naturalHeight = Math.max(known.naturalHeight, image.naturalHeight);
+      continue;
+    }
+    seen.images.set(key, {
+      srcset: image.srcset || image.closest('picture')?.querySelector('source[srcset]')?.srcset || '',
+      src,
+      width: Math.round(box.width),
+      height: Math.round(box.height),
+      naturalWidth: image.naturalWidth,
+      naturalHeight: image.naturalHeight,
+    });
+  }
+  for (const video of document.querySelectorAll('video')) {
+    const src = video.currentSrc || video.src || video.querySelector('source')?.src || '';
+    const player = describePlayer(video);
+    const key = /^https?:/.test(src) ? src : player.named || player.watching || player.link || location.href;
+    if (!seen.videos.has(key)) seen.videos.set(key, { src, ...player, page: location.href });
+  }
+  for (const link of document.links) {
+    if (seen.links.has(link.href)) continue;
+    seen.links.set(link.href, { href: link.href, holdsPicture: Boolean(link.querySelector('img, video, picture')) });
+  }
+}
+
+/** A rough count for the overlay. The background makes the exact list. */
+function tally(seen) {
+  let pictures = 0;
+  for (const image of seen.images.values()) {
+    const [w, h] = image.naturalWidth > 0 ? [image.naturalWidth, image.naturalHeight] : [image.width, image.height];
+    if (Math.min(w, h) >= MIN_IMAGE_SIDE) pictures += 1;
+  }
+  const videos = seen.videos.size + [...seen.links.values()].filter((link) => link.holdsPicture && /\/(reels?|videos?|shorts|watch)\b/.test(link.href)).length;
+  return { pictures, videos };
+}
+
+/**
+ * A small box in the page's bottom corner, out of the page's reach, with a few words and
+ * buttons that only a real click presses.
+ */
+function showOverlay(text, buttons) {
+  const host = document.createElement('div');
+  host.setAttribute('data-tributary-collecting', '');
+  host.style.cssText = 'all: initial; position: fixed; right: 16px; bottom: 16px; z-index: 2147483647;';
+  const shadow = host.attachShadow({ mode: 'closed' });
+  const style = document.createElement('style');
+  style.textContent = COLLECT_STYLE;
+  const box = document.createElement('div');
+  box.className = 'box';
+  const words = document.createElement('span');
+  words.textContent = text;
+  box.append(words);
+  for (const { label, quiet, press } of buttons) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    if (quiet) button.className = 'quiet';
+    button.textContent = label;
+    button.addEventListener('click', (event) => {
+      if (event.isTrusted) press();
+    });
+    box.append(button);
+  }
+  shadow.append(style, box);
+  document.documentElement.append(host);
+  return {
+    say: (text) => {
+      words.textContent = text;
+    },
+    remove: () => host.remove(),
+  };
+}
+
+/** Waits while the tab is out of sight, because a page loads nothing more until it's seen. */
+async function untilSeen(overlay) {
+  if (document.visibilityState !== 'hidden') return;
+  overlay.say('Waiting for this tab to be in view again…');
+  // The browser says when, so a tab left for a long while carries on straight away. Its
+  // timers then run only once a minute.
+  await new Promise((done) => {
+    const back = () => {
+      if (document.visibilityState === 'hidden') return;
+      document.removeEventListener('visibilitychange', back);
+      done();
+    };
+    document.addEventListener('visibilitychange', back);
+  });
+}
+
+/**
+ * Looks through the page for pictures and videos, scrolling down a screen at a time as a
+ * person would, until nothing new turns up, the end, the limit, or Stop. Then puts the
+ * page back where it was and hands what it found to the extension.
+ */
+async function collectMedia({ scroll }) {
+  if (collecting) return;
+  const seen = { images: new Map(), videos: new Map(), links: new Map() };
+  const state = { stopped: false, cancelled: false };
+  collecting = state;
+  const target = scroller();
+  const start = target.scrollTop;
+  const overlay = showOverlay('Tributary is looking for pictures and videos…', [
+    {
+      label: 'Stop here',
+      press: () => {
+        state.stopped = true;
+      },
+    },
+    {
+      label: 'Cancel',
+      quiet: true,
+      press: () => {
+        state.cancelled = true;
+      },
+    },
+  ]);
+  const report = () => {
+    const { pictures, videos } = tally(seen);
+    overlay.say(`Found ${pictures} pictures and ${videos} videos so far…`);
+  };
+
+  try {
+    lookAround(seen);
+    report();
+    let quiet = 0;
+    for (let step = 0; scroll && step < MAX_SCROLL_STEPS && !state.stopped && !state.cancelled; step += 1) {
+      await untilSeen(overlay);
+      if (state.stopped || state.cancelled) break;
+      const before = seen.images.size + seen.videos.size + seen.links.size;
+      const height = target.scrollHeight;
+      target.scrollTop += Math.round(target.clientHeight * 0.9);
+      await new Promise((done) => setTimeout(done, SCROLL_PAUSE_MS));
+      lookAround(seen);
+      report();
+      if (tally(seen).pictures + tally(seen).videos >= MAX_COLLECTED) break;
+      const grew = seen.images.size + seen.videos.size + seen.links.size > before || target.scrollHeight > height;
+      // A step spent out of sight proves nothing: the page had no chance to load more.
+      if (document.visibilityState === 'hidden') continue;
+      const atEnd = target.scrollTop + target.clientHeight >= target.scrollHeight - 4;
+      // The end of the page is a quiet step too, as a slow feed may still add more.
+      quiet = grew ? 0 : quiet + 1;
+      // A login wall, the end, or a page that's stopped loading more.
+      if (quiet >= QUIET_STEPS) break;
+    }
+  } finally {
+    target.scrollTop = start;
+    overlay.remove();
+    collecting = null;
+  }
+  if (state.cancelled) return;
+
+  void chrome.runtime.sendMessage({
+    type: 'page-media',
+    page: location.href,
+    title: document.title,
+    images: [...seen.images.values()],
+    videos: [...seen.videos.values()],
+    links: [...seen.links.values()],
+  });
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, respond) => {
   if (message?.type === 'media') {
     found = message.labels;
     refreshPanel();
+    return undefined;
+  }
+  if (message?.type === 'media-none') {
+    const notice = showOverlay('Tributary found no pictures or videos on this page.', [
+      { label: 'Close', quiet: true, press: () => notice.remove() },
+    ]);
+    setTimeout(() => notice.remove(), 6000);
+    return undefined;
+  }
+  if (message?.type === 'collect-media') {
+    // Only the top page collects. A player's frame is reached through its own page.
+    if (window !== window.top) return undefined;
+    void collectMedia({ scroll: message.scroll !== false });
+    // Says the page heard, so the popup can tell a page it can't reach.
+    respond({ started: true });
     return undefined;
   }
   if (message?.type !== 'collect') return undefined;

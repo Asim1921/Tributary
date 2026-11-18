@@ -135,6 +135,8 @@ export interface CaptureItem {
   fileName: string | null;
   video: boolean;
   page: boolean;
+  /** What it is: a picture, a video file, a video read from its page, or any file. */
+  kind?: 'image' | 'video' | 'page' | 'file';
 }
 
 export interface GrabberProject {
@@ -214,6 +216,10 @@ export interface CaptureEvent {
   token: number;
   items: CaptureItem[];
   batch: boolean;
+  /** For every picture and video on a page, that page's title. */
+  title?: string | null;
+  /** Whether these are every picture and video on a page. */
+  gallery?: boolean;
 }
 
 export type ProxyChoice = 'system' | 'direct' | 'manual';

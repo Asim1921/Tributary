@@ -122,6 +122,8 @@ class DevTools {
   #socket;
   #next = 1;
   #waiting = new Map();
+  #closed = false;
+  #onClosed = [];
 
   static async open(url) {
     const tools = new DevTools();
@@ -139,10 +141,25 @@ class DevTools {
         else pending.resolve(message.result);
       }
     };
+    // A page that closes itself takes its connection with it. Nothing waits for it then.
+    tools.#socket.onclose = () => {
+      tools.#closed = true;
+      for (const pending of tools.#waiting.values()) pending.reject(new Error('the page has closed'));
+      tools.#waiting.clear();
+      for (const done of tools.#onClosed.splice(0)) done();
+    };
     return tools;
   }
 
+  /** Waits for the page to close by itself, as the toolbar popup does once it's used. */
+  async closedWithin(timeoutMs) {
+    if (this.#closed) return true;
+    const closed = new Promise((done) => this.#onClosed.push(() => done(true)));
+    return Promise.race([closed, sleep(timeoutMs).then(() => this.#closed)]);
+  }
+
   send(method, params = {}) {
+    if (this.#closed) return Promise.reject(new Error('the page has closed'));
     const id = this.#next++;
     this.#socket.send(JSON.stringify({ id, method, params }));
     return new Promise((resolve, reject) => this.#waiting.set(id, { resolve, reject }));
@@ -202,7 +219,7 @@ class DevTools {
 
   /** Closes the tab this is connected to. */
   async closeTarget() {
-    await this.send('Page.close').catch(() => {});
+    if (!this.#closed) await Promise.race([this.send('Page.close').catch(() => {}), sleep(5000)]);
     this.close();
   }
 
@@ -422,6 +439,10 @@ try {
       '--enable-unsafe-extension-debugging',
       '--no-first-run',
       '--no-default-browser-check',
+      // Edge signs a new profile in to the Windows user's Microsoft account by itself. With
+      // sync on, that pulls their own extensions in, whose welcome tabs then take the front,
+      // and sends this test's history out. The profile must stay a stranger.
+      '--disable-sync',
       // A covered window counts as hidden, and then test clicks don't reach the page.
       '--disable-features=CalculateNativeWinOcclusion,msEdgeSidebarV2,msHubApps',
       `${BASE}/`,
@@ -765,6 +786,151 @@ try {
       fromApp.every((record) => record.status === 200 || record.status === 206),
       fromApp.map((record) => record.status).join(', '),
     );
+  });
+
+  /** Asks for every picture and video on the gallery page, as the toolbar button does. */
+  async function savePageMedia() {
+    const popup = await openExtensionPage('popup.html');
+    try {
+      const tabId = await popup.evaluate(`(async () => {
+        const [tab] = await chrome.tabs.query({ url: '${BASE}/gallery*' });
+        return tab.id;
+      })()`);
+      await popup.open(`chrome-extension://${EXTENSION_ID}/popup.html?tab=${tabId}`);
+      // The popup closes itself once it has asked, so the page underneath is in view.
+      await popup.evaluate(`document.getElementById('save-all').click()`).catch(() => {});
+      assert.ok(await popup.closedWithin(5000), 'the popup stayed open');
+    } finally {
+      await popup.closeTarget();
+    }
+    // A real popup sits over the page, which stays in view. Here it was a tab of its own,
+    // and the browser may bring another tab forward once it closes.
+    await pageTools.show();
+  }
+  const pictureCount = async () =>
+    Number(/(\d+) pictures/.exec(await appPage.getByRole('dialog').locator('p.lede').textContent())?.[1] ?? -1);
+
+  await step('every picture and video on a page is gathered as it scrolls, and saved with one click', async () => {
+    await useYtdlp(fakeYtdlp);
+    await pageTools.open(`${BASE}/gallery?wall=2`);
+    await sleep(800);
+    const runsBefore = ytdlpRuns().length;
+
+    await savePageMedia();
+    await pageTools.waitFor(`Boolean(document.querySelector('[data-tributary-collecting]'))`, 5000);
+    await appPage.getByRole('heading', { name: 'Save pictures and videos' }).waitFor({ timeout: 60_000 });
+    assert.equal(await pageTools.evaluate('Math.round(scrollY)'), 0, 'the page was put back where it was');
+
+    // Every picture at its largest, no icon, the video file, and the videos fed by script.
+    await appPage.getByText('18 pictures and 5 videos', { exact: false }).waitFor();
+    const listed = await appPage
+      .getByRole('dialog')
+      .locator('label.check[title]')
+      .evaluateAll((labels) => labels.map((label) => label.title));
+    const expected = [
+      ...Array.from({ length: 18 }, (_, index) => `${BASE}/file/90K.jpg?seed=${100 + index}`),
+      `${BASE}/file/1M.mp4?seed=950`,
+      `${BASE}/watch/7`,
+      `${BASE}/reel/r5`,
+      `${BASE}/reel/r11`,
+      `${BASE}/reel/r17`,
+    ];
+    assert.deepEqual([...listed].sort(), [...expected].sort());
+    const folder = await appPage.getByLabel('Folder', { exact: true }).inputValue();
+    assert.equal(folder, join(appFolder, 'Gallery test page'));
+
+    await appPage.getByRole('button', { name: 'Download all' }).click();
+    await appPage.getByRole('dialog').waitFor({ state: 'hidden' });
+
+    // Pictures go a few at a time, and the videos' pages are read one at a time, apart.
+    const asked = [];
+    const deadline = Date.now() + 120_000;
+    const finished = () => {
+      const files = existsSync(folder) ? readdirSync(folder).filter((name) => !name.endsWith('.part')) : [];
+      return files.length >= expected.length ? files : null;
+    };
+    while (Date.now() < deadline && !finished()) {
+      const runs = ytdlpRuns().length - runsBefore;
+      while (asked.length < runs) asked.push(Date.now());
+      await sleep(200);
+    }
+    const files = finished();
+    assert.ok(files, `only ${existsSync(folder) ? readdirSync(folder).length : 0} of ${expected.length} files arrived`);
+    assert.equal(files.filter((name) => name.endsWith('.jpg')).length, 18);
+    for (const name of files.filter((item) => item.endsWith('.jpg'))) {
+      assert.equal(statSync(join(folder, name)).size, 90 * 1024, name);
+    }
+    assert.equal(ytdlpRuns().length - runsBefore, 4, 'each video page was read once');
+    for (let index = 1; index < asked.length; index += 1) {
+      assert.ok(asked[index] - asked[index - 1] >= 2000, 'the pages were read too close together');
+    }
+
+    const queues = await appPage.evaluate(() => window.__TAURI_INTERNALS__.invoke('list_queues'));
+    const own = queues.find((queue) => queue.name === 'Page media');
+    assert.ok(own, 'no Page media queue');
+    assert.equal(own.concurrency, 4);
+    await useYtdlp('C:\\no\\such\\yt-dlp.exe');
+  });
+
+  await step('a page that empties rows it has scrolled past still gives every picture', async () => {
+    await pageTools.open(`${BASE}/gallery?wall=2&drop=1`);
+    await sleep(800);
+    await savePageMedia();
+    await appPage.getByRole('heading', { name: 'Save pictures and videos' }).waitFor({ timeout: 60_000 });
+    assert.equal(await pictureCount(), 18);
+    await appPage.getByRole('button', { name: 'Cancel' }).click();
+    await appPage.getByRole('dialog').waitFor({ state: 'hidden' });
+  });
+
+  await step('gathering can be stopped part-way, and a page cannot start it', async () => {
+    await pageTools.open(`${BASE}/gallery?wall=30`);
+    await sleep(800);
+
+    // A page's own script has no way in.
+    await pageTools.evaluate(`window.postMessage({ type: 'collect-media' }, '*')`);
+    await sleep(2500);
+    assert.equal(await pageTools.evaluate(`Boolean(document.querySelector('[data-tributary-collecting]'))`), false);
+
+    await savePageMedia();
+    await pageTools.waitFor(`Boolean(document.querySelector('[data-tributary-collecting]'))`, 5000);
+
+    // Another tab in front for longer than three empty screens take: it waits, rather than
+    // taking a page that couldn't load as one that has ended.
+    const other = await fetch(`http://127.0.0.1:${BROWSER_DEBUG_PORT}/json/new?about:blank`, { method: 'PUT' }).then((reply) => reply.json());
+    await pageTools.waitFor(`document.visibilityState === 'hidden'`, 5000);
+    await sleep(6000);
+    assert.ok(await pageTools.evaluate(`Boolean(document.querySelector('[data-tributary-collecting]'))`), 'gathering ended while the tab was out of sight');
+    await fetch(`http://127.0.0.1:${BROWSER_DEBUG_PORT}/json/close/${other.id}`);
+    await pageTools.show();
+    await sleep(4500);
+    // Stop here is the first of the two buttons at the overlay's right.
+    const box = await pageTools.evaluate(
+      `(() => { const box = document.querySelector('[data-tributary-collecting]').getBoundingClientRect(); return { right: box.right, middle: (box.top + box.bottom) / 2 }; })()`,
+    );
+    await pageTools.clickAt(box.right - 13 - 96 - 10 - 48, box.middle);
+
+    await appPage.getByRole('heading', { name: 'Save pictures and videos' }).waitFor({ timeout: 15_000 });
+    const pictures = await pictureCount();
+    assert.ok(pictures > 6 && pictures < 6 * 31, `${pictures} pictures`);
+    assert.equal(await pageTools.evaluate('Math.round(scrollY)'), 0, 'the page was put back where it was');
+    await appPage.getByRole('button', { name: 'Cancel' }).click();
+    await appPage.getByRole('dialog').waitFor({ state: 'hidden' });
+  });
+
+  await step("the popup says so when it can't reach a page", async () => {
+    const popup = await openExtensionPage('popup.html');
+    let blankId;
+    try {
+      // The browser's blank page has no content script.
+      blankId = await popup.evaluate(`chrome.tabs.create({ url: 'about:blank', active: false }).then((tab) => tab.id)`);
+      await popup.open(`chrome-extension://${EXTENSION_ID}/popup.html?tab=${blankId}`);
+      await popup.evaluate(`document.getElementById('save-all').click()`);
+      await popup.waitFor(`!document.getElementById('unreadable').hidden`, 5000);
+      assert.equal(await popup.closedWithin(500), false, 'the popup closed without saying why');
+      await popup.evaluate(`chrome.tabs.remove(${blankId})`);
+    } finally {
+      await popup.closeTarget();
+    }
   });
 
   await step('a page with no player gets no panel', async () => {

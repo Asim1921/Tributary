@@ -11,6 +11,7 @@ import {
   mediaKind,
   mediaLabel,
   pageDownload,
+  pageMediaBatch,
   streamHeaders,
   videoPageAddress,
   responseLength,
@@ -121,13 +122,20 @@ chrome.downloads.onChanged.addListener((delta) => {
   });
 });
 
-chrome.runtime.onMessage.addListener((message, sender) => {
+chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (message?.type === 'click') {
     lastClick = { ctrl: message.ctrl, alt: message.alt, shift: message.shift, at: Date.now() };
   } else if (message?.type === 'save-media') {
     void saveMedia(message.tabId ?? sender.tab?.id, message.index);
   } else if (message?.type === 'save-page') {
     void savePage(message, sender);
+  } else if (message?.type === 'save-page-media') {
+    // From the popup, which names the tab it was opened over, and says if the page can't
+    // be reached.
+    void collectPageMedia(message.tabId).then(respond);
+    return true;
+  } else if (message?.type === 'page-media') {
+    void sendPageMedia(message, sender);
   } else if (message?.type === 'page-start' && sender.tab) {
     void updateMedia(sender.tab.id, (items) => keepDocument(items, sender.documentId)).catch(
       () => {},
@@ -258,7 +266,45 @@ const MENU = {
   link: 'tributary-link',
   selection: 'tributary-selection',
   page: 'tributary-page',
+  pageMedia: 'tributary-page-media',
 };
+
+/**
+ * Asks the page to look for its pictures and videos, scrolling as a person would. The
+ * browser's own pages, and pages opened before the extension was loaded, can't be asked.
+ */
+async function collectPageMedia(tabId) {
+  if (typeof tabId !== 'number') return { started: false };
+  try {
+    const reply = await chrome.tabs.sendMessage(tabId, { type: 'collect-media', scroll: true }, { frameId: 0 });
+    return { started: reply?.started === true };
+  } catch {
+    return { started: false };
+  }
+}
+
+/**
+ * Offers what a page showed to the app, which asks which to save. Pictures and video
+ * files go with the browser's cookies for their own address, as any download does. A video
+ * fed by script goes by its own page, with no cookie, to be read without a login.
+ */
+async function sendPageMedia(message, sender) {
+  if (!sender.tab || sender.frameId !== 0) return;
+  const page = message.page ?? sender.tab.url;
+  const batch = pageMediaBatch(message, page);
+  if (batch.length === 0) {
+    await chrome.tabs.sendMessage(sender.tab.id, { type: 'media-none' }, { frameId: 0 }).catch(() => {});
+    return;
+  }
+  const items = await Promise.all(
+    batch.map((item) =>
+      item.kind === 'page'
+        ? { url: item.url, referrer: page, userAgent: navigator.userAgent, video: true, page: true, kind: 'page' }
+        : describe(item.url, { referrer: page, kind: item.kind }),
+    ),
+  );
+  await ask({ type: 'batch', gallery: true, title: message.title ?? sender.tab.title, items }).catch(() => {});
+}
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({ id: MENU.link, title: 'Download with Tributary', contexts: ['link'] });
@@ -272,6 +318,15 @@ chrome.runtime.onInstalled.addListener(() => {
     title: 'Download all links with Tributary',
     contexts: ['page'],
   });
+  chrome.contextMenus.create({
+    id: MENU.pageMedia,
+    title: 'Download all images and videos on this page with Tributary',
+    contexts: ['page', 'image', 'video'],
+  });
+});
+
+chrome.commands?.onCommand.addListener((command, tab) => {
+  if (command === 'save-page-media') collectPageMedia(tab?.id);
 });
 
 async function sendLinks(tab, mode) {
@@ -292,5 +347,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     void sendLinks(tab, 'selection').catch(() => {});
   } else if (tab && info.menuItemId === MENU.page) {
     void sendLinks(tab, 'page').catch(() => {});
+  } else if (tab && info.menuItemId === MENU.pageMedia) {
+    collectPageMedia(tab.id);
   }
 });

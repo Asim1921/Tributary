@@ -283,6 +283,158 @@ export function streamHeaders({ initiator, request } = {}, tabUrl) {
   };
 }
 
+/** A picture smaller than this on either side is an icon, an avatar or a tracking pixel. */
+export const MIN_IMAGE_SIDE = 200;
+
+/** The most a page's media can come to in one go. */
+export const MAX_PAGE_MEDIA = 1000;
+
+const IMAGE_ENDINGS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'bmp', 'heic'];
+const VIDEO_ENDINGS = ['mp4', 'webm', 'mov', 'm4v', 'mkv'];
+
+/** Whether an address is a picture or a video file, going by its name. */
+export function mediaFileKind(url) {
+  const address = webAddress(url);
+  if (!address) return null;
+  const ending = address.pathname.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
+  if (IMAGE_ENDINGS.includes(ending)) return 'image';
+  if (VIDEO_ENDINGS.includes(ending)) return 'video';
+  return null;
+}
+
+/**
+ * The biggest picture a `srcset` offers, by width, then by density, or the one the
+ * browser chose when there's no choice. Relative addresses are read against the page.
+ */
+export function largestCandidate(srcset, current, page) {
+  const resolve = (text) => {
+    try {
+      const url = new URL(text, page);
+      return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null;
+    } catch {
+      return null;
+    }
+  };
+  let best = null;
+  let bestScore = -1;
+  // Entries are split at a comma followed by space, so a comma inside an address stays.
+  for (const entry of (srcset ?? '').split(/,\s+/)) {
+    const [address, descriptor = '1x'] = entry.trim().split(/\s+/);
+    if (!address) continue;
+    const width = /^(\d+)w$/.exec(descriptor);
+    const density = /^(\d+(?:\.\d+)?)x$/.exec(descriptor);
+    // Widths are compared among themselves, and always beat a density.
+    const score = width ? 1e6 + Number(width[1]) : density ? Number(density[1]) : 0;
+    const url = resolve(address);
+    if (url && score > bestScore) {
+      best = url;
+      bestScore = score;
+    }
+  }
+  return best ?? (current ? resolve(current) : null);
+}
+
+/**
+ * Whether a picture is worth saving: big enough to be content, and a real file. Its own
+ * size counts when the browser knows it, and how big it's shown when it doesn't.
+ */
+export function worthSaving({ url, width = 0, height = 0, naturalWidth = 0, naturalHeight = 0 }) {
+  const address = webAddress(url);
+  if (!address || /\.svg$/i.test(address.pathname)) return false;
+  const [w, h] = naturalWidth > 0 && naturalHeight > 0 ? [naturalWidth, naturalHeight] : [width, height];
+  return Math.min(w, h) >= MIN_IMAGE_SIDE;
+}
+
+/** Whether an address is a single video's own page, as reels, shorts and watch pages are. */
+export function looksLikeVideoPage(url) {
+  const address = webAddress(url);
+  if (!address) return false;
+  const path = address.pathname.toLowerCase();
+  if (path === '/watch' || path.startsWith('/watch/')) return true;
+  return /\/(reels?|videos?|shorts|tv)\/[^/]+/.test(path);
+}
+
+/**
+ * Turns what a page showed into the list to offer, in the order it was found, each
+ * address once, up to a limit. Pictures and video files are fetched as they are. A video
+ * fed by script goes by its own page, which is read without any cookie.
+ *
+ * `found` holds what the content script saw: `images` ({ srcset, src, width, height,
+ * naturalWidth, naturalHeight }), `videos` ({ src, named, watching, link }) and `links`
+ * ({ href, holdsPicture }).
+ */
+export function pageMediaBatch({ images = [], videos = [], links = [] } = {}, page) {
+  const here = webAddress(page);
+  if (!here) return [];
+
+  // Keyed by what each one is, so a photo shown at two sizes is offered once, at the bigger.
+  const items = new Map();
+  const add = (url, kind, size = 0) => {
+    const address = webAddress(url);
+    if (!address) return;
+    const key = kind === 'image' ? photoKey(address) : address.href;
+    const held = items.get(key);
+    if (held) {
+      if (size > held.size) Object.assign(held, { url: address.href, size });
+      return;
+    }
+    if (items.size < MAX_PAGE_MEDIA) items.set(key, { url: address.href, kind, size });
+  };
+
+  for (const image of images) {
+    const best = largestCandidate(image.srcset, image.src, here.href);
+    // The picture as loaded is no bigger than the largest offered, and an address often
+    // says its size, which counts too when the picture hasn't loaded yet.
+    const size = Math.max((image.naturalWidth ?? 0) * (image.naturalHeight ?? 0), statedSize(best ?? ''));
+    if (best && worthSaving({ ...image, url: best })) add(best, 'image', size);
+  }
+  for (const video of videos) {
+    // A feed that rewrites its address as it scrolls, so each video is read on the page it
+    // was seen on, as long as that's this site.
+    const seenOn = webAddress(video.page);
+    const seenHere = seenOn && sameSite(seenOn, here) ? seenOn.href : here.href;
+    const source = webAddress(video.src);
+    // A playlist is only text. The page it plays on is what yt-dlp can read.
+    if (source && !/\.(m3u8|mpd)$/i.test(source.pathname)) {
+      add(video.src, 'video');
+    } else {
+      add(videoPageAddress({ page: seenHere, named: video.named, watching: video.watching, link: video.link }), 'page');
+    }
+  }
+  for (const link of links) {
+    const kind = mediaFileKind(link.href);
+    if (kind) {
+      add(link.href, kind);
+    } else if (link.holdsPicture && looksLikeVideoPage(link.href)) {
+      const address = webAddress(link.href);
+      if (address && sameSite(address, here)) add(address.href, 'page');
+    }
+  }
+  return [...items.values()].map(({ url, kind }) => ({ url, kind }));
+}
+
+/**
+ * Photo sites name each photo's file by a long id, and serve its sizes from that one path
+ * with different settings after the `?`. Such a path is one photo, however it's sized.
+ * A short name such as `photo.jpg` says nothing, so the whole address counts then.
+ */
+function photoKey(address) {
+  const name = address.pathname.split('/').pop() ?? '';
+  return name.length >= 16 && /\d{6,}/.test(name) ? `${address.origin}${address.pathname}` : address.href;
+}
+
+/**
+ * The size in pixels an address says its picture is, as image servers write it: `s960x960`,
+ * `1080x1350` or `w=2000`. Only ever compared between sizes of one photo.
+ */
+export function statedSize(url) {
+  let largest = 0;
+  for (const [, width, height] of url.matchAll(/(\d{2,5})x(\d{2,5})/g)) largest = Math.max(largest, Number(width) * Number(height));
+  const wide = /[?&](?:w|width)=(\d{2,5})\b/.exec(url);
+  if (wide) largest = Math.max(largest, Number(wide[1]) ** 2);
+  return largest;
+}
+
 /** Turns the browser's cookie list into a `Cookie` header. */
 export function cookieHeader(cookies) {
   return (cookies ?? []).map(({ name, value }) => `${name}=${value}`).join('; ');

@@ -262,6 +262,9 @@ struct Destination<'a> {
     name: &'a str,
     folder: Option<PathBuf>,
     later: bool,
+    /// The queue for later, when it isn't the main one.
+    queue: Option<i64>,
+    gallery: bool,
     headers: &'a [(String, String)],
 }
 
@@ -278,8 +281,12 @@ fn add_track(
     };
 
     let request = AddRequest::for_track(url, to.folder.clone(), file_name, parts);
-    let request = if to.later { request.later() } else { request };
-    add_download_now(state, request, to.headers.to_vec())
+    let request = if to.later {
+        request.later().in_queue(to.queue)
+    } else {
+        request
+    };
+    add_download_now(state, request.in_gallery(to.gallery), to.headers.to_vec())
 }
 
 /// Adds a quality to the list, as two linked downloads if its sound is separate.
@@ -310,6 +317,8 @@ fn save_quality(state: &AppState, quality: &Quality, to: &Destination) -> Result
         name: to.name,
         folder: Some(working),
         later: to.later,
+        queue: to.queue,
+        gallery: to.gallery,
         headers: to.headers,
     };
     let sound = add_track(state, &sound_to, audio, audio_name)?;
@@ -386,6 +395,8 @@ pub async fn add_video(
         name: &request.name,
         folder: Some(request.dest_dir.clone()),
         later: request.later,
+        queue: None,
+        gallery: false,
         headers: &headers,
     };
     let ids = save_quality(&state, &quality, &to)?;
@@ -402,7 +413,24 @@ fn join_finished(app: &AppHandle, ids: &[i64]) {
 }
 
 /// Saves the best quality with no questions, for a command line asking for silence.
+/// Saves the best quality of a stream, or of the video on a page, without asking. A
+/// problem shows as a message.
 pub async fn add_best(app: AppHandle, file: Captured, later: bool, quit_when_done: bool) {
+    match save_best(&app, file, later).await {
+        Ok(ids) if quit_when_done => {
+            let state = app.state::<AppState>();
+            ids.iter().for_each(|id| state.quit_after(*id));
+        }
+        Ok(_) => {}
+        Err(problem) => {
+            let _ = app.emit("video-problem", problem);
+        }
+    }
+}
+
+/// Saves the best quality of a stream, or of the video on a page. Returns the downloads
+/// added, or why there's nothing to save.
+pub async fn save_best(app: &AppHandle, file: Captured, later: bool) -> Result<Vec<i64>, String> {
     let state = app.state::<AppState>();
     let headers = file.headers();
     let login = state.site_login_for(&file.url);
@@ -434,6 +462,8 @@ pub async fn add_best(app: AppHandle, file: Captured, later: bool, quit_when_don
                 name: &name,
                 folder: file.folder.clone(),
                 later,
+                queue: file.queue,
+                gallery: file.gallery,
                 headers: own.as_deref().unwrap_or(&headers),
             };
             offer
@@ -445,17 +475,10 @@ pub async fn add_best(app: AppHandle, file: Captured, later: bool, quit_when_don
         Err(problem) => Err(problem),
     };
 
-    match saved {
-        Ok(ids) => {
-            if quit_when_done {
-                ids.iter().for_each(|id| state.quit_after(*id));
-            }
-            join_finished(&app, &ids);
-        }
-        Err(problem) => {
-            let _ = app.emit("video-problem", problem);
-        }
+    if let Ok(ids) = &saved {
+        join_finished(app, ids);
     }
+    saved
 }
 
 /// Joins picture and sound without re-encoding, then replaces the picture file with the

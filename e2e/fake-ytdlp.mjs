@@ -91,6 +91,30 @@ if (page.pathname === '/embedded-player') {
   console.log(JSON.stringify({ title: 'Embedded film', duration: 6, formats: [picture, sound] }));
   process.exit(0);
 }
+// A video post on a page of pictures: one file with picture and sound in it.
+if (page.pathname.startsWith('/reel/') || page.pathname.startsWith('/watch/')) {
+  const seed = [...page.pathname].reduce((sum, letter) => sum + letter.charCodeAt(0), 0);
+  console.log(
+    JSON.stringify({
+      title: `Post ${page.pathname.split('/').at(-1)}`,
+      duration: 6,
+      formats: [
+        {
+          format_id: 'whole',
+          url: `${base}/file/300K.mp4?seed=${seed}`,
+          protocol: 'https',
+          ext: 'mp4',
+          vcodec: 'avc1.4d401f',
+          acodec: 'mp4a.40.2',
+          height: 360,
+          width: 640,
+          tbr: 400,
+        },
+      ],
+    }),
+  );
+  process.exit(0);
+}
 if (page.pathname === '/embed-host') {
   console.log(JSON.stringify({ title: 'Film found on its page', duration: 6, formats: [picture, sound] }));
   process.exit(0);

@@ -52,7 +52,13 @@
   type Dialog =
     | { kind: 'add' }
     | { kind: 'start'; url: string; token?: number; fileName?: string | null }
-    | { kind: 'batch'; token: number; items: CaptureItem[] }
+    | {
+        kind: 'batch';
+        token: number;
+        items: CaptureItem[];
+        title?: string | null;
+        gallery?: boolean;
+      }
     | { kind: 'video'; url: string; token?: number; fileName?: string | null; page?: boolean }
     | { kind: 'progress'; id: number }
     | { kind: 'properties'; id: number }
@@ -132,7 +138,13 @@
     if (!event || !first) return;
 
     if (event.batch) {
-      dialog = { kind: 'batch', token: event.token, items: event.items };
+      dialog = {
+        kind: 'batch',
+        token: event.token,
+        items: event.items,
+        title: event.title,
+        gallery: event.gallery,
+      };
     } else {
       const kind = first.video ? 'video' : 'start';
       dialog = {
@@ -602,11 +614,14 @@
     items={dialog.items}
     {defaultFolder}
     queues={downloads.queues}
+    title={dialog.title}
+    gallery={dialog.gallery}
     onsubmit={(urls, folder, queueId, later) => {
       const token = dialog?.kind === 'batch' ? dialog.token : 0;
+      const gallery = dialog?.kind === 'batch' && Boolean(dialog.gallery);
       closeDialog();
       api
-        .addBatch(token, urls, folder, queueId, later)
+        .addBatch(token, urls, folder, queueId, later, gallery)
         .then(() => downloads.refresh())
         .catch(showError);
     }}

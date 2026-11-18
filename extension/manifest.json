@@ -15,6 +15,12 @@
       "all_frames": true
     }
   ],
+  "commands": {
+    "save-page-media": {
+      "suggested_key": { "default": "Alt+Shift+S" },
+      "description": "Save every image and video on this page with Tributary"
+    }
+  },
   "action": {
     "default_title": "Tributary",
     "default_popup": "popup.html",

@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Gallery test page</title>
+<style>
+  body { font: 16px/1.6 system-ui, sans-serif; max-width: 56rem; margin: 2rem auto; padding: 0 1rem; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .tile img { display: block; width: 100%; aspect-ratio: 1; background: #ccc; }
+  .icon { width: 24px; height: 24px; vertical-align: middle; }
+  video { display: block; width: 480px; height: 270px; background: #222; margin: 8px 0; }
+  .wall { margin: 1rem 0; padding: 2rem; border: 1px solid #888; }
+</style>
+</head>
+<body>
+<h1>Gallery test page</h1>
+<p><img class="icon" src="/file/2K.png?seed=900" width="24" height="24" alt="icon">
+  Pictures that load as the page is scrolled, as photo sites do.</p>
+<video id="clip" src="/file/1M.mp4?seed=950" controls></video>
+<a href="/watch/7"><video id="fed" controls></video></a>
+<div class="grid" id="grid"></div>
+<div id="end"></div>
+<script>
+  // ?wall=N stops adding pictures after N loads, as a login wall does.
+  // ?drop=1 empties the rows scrolled well past, as some sites do to save memory.
+  const options = new URLSearchParams(location.search);
+  const wall = Number(options.get('wall') ?? 3);
+  const drop = options.get('drop') === '1';
+  let loads = 0;
+  let next = 0;
+  let busy = false;
+
+  function tile(index) {
+    const link = document.createElement('a');
+    link.className = 'tile';
+    // Every sixth one is a video post, as a grid of mixed posts has.
+    link.href = index % 6 === 5 ? `/reel/r${index}` : `/post/${index}`;
+    const picture = document.createElement('img');
+    picture.alt = `picture ${index}`;
+    picture.src = `/file/30K.jpg?seed=${100 + index}`;
+    picture.srcset = `/file/30K.jpg?seed=${100 + index} 320w, /file/90K.jpg?seed=${100 + index} 1080w`;
+    link.append(picture);
+    return link;
+  }
+
+  function more() {
+    const grid = document.getElementById('grid');
+    for (let count = 0; count < 6; count += 1) grid.append(tile(next++));
+  }
+
+  more();
+  addEventListener('scroll', () => {
+    if (busy || innerHeight + scrollY < document.documentElement.scrollHeight - 200) return;
+    if (loads >= wall) {
+      if (!document.querySelector('.wall')) {
+        const notice = document.createElement('div');
+        notice.className = 'wall';
+        notice.textContent = 'Log in to see more';
+        document.getElementById('end').append(notice);
+      }
+      return;
+    }
+    busy = true;
+    setTimeout(() => {
+      loads += 1;
+      more();
+      if (drop) {
+        for (const item of document.querySelectorAll('.tile')) {
+          if (item.getBoundingClientRect().bottom < -300) item.replaceChildren();
+        }
+      }
+      busy = false;
+    }, 300);
+  });
+
+  // A player fed by script, inside a link to its own page.
+  fetch('/file/1M.bin?seed=79')
+    .then((reply) => reply.blob())
+    .then((blob) => {
+      document.getElementById('fed').src = URL.createObjectURL(blob);
+    });
+</script>
+</body>
+</html>

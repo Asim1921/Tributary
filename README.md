@@ -56,6 +56,20 @@ The extension shows a panel in the corner of any video player on a page, and lis
 - **Protected, live, paid and login-only videos are refused.** Anything that declares encryption or DRM won't be saved, and neither will members-only or private videos. yt-dlp is never given your cookies or logins.
 - **Some videos keep picture and sound apart**, as YouTube and Facebook do. The sound is downloaded out of sight, in Tributary's own folder, and joined into the video with [ffmpeg](https://ffmpeg.org): the list shows one item, which reads **Adding sound…** while they're joined, and you get one file. If ffmpeg isn't installed, or can't join them, the sound is put beside the video instead, so nothing is lost. Set ffmpeg's location under **Options**, **Video**, if it isn't found automatically.
 
+## Saving every picture and video on a page
+
+On a page full of photos or posts, such as a public profile, open the extension's toolbar popup and choose **Save all images and videos on this page**. The page's right-click menu has the same thing, and so does **Alt+Shift+S**. If that key does nothing, Chrome hasn't given it to Tributary; choose a key at `chrome://extensions/shortcuts`.
+
+- **Tributary scrolls the page as you would**, a screen at a time. It gathers every picture at the largest size the page offers, every video that has a file of its own, and the posts that hold a video. A small box in the corner counts what it has found. **Stop here** keeps what's been found so far, and **Cancel** gives up. Afterwards the page is put back where it was.
+- **It stops by itself** when nothing new has turned up for a few screens (at the end of the page too, as a slow page may still be loading more), or after 300 pictures and videos (or 60 screens).
+- **Keep the tab in view while it looks.** A page loads nothing more while it's out of sight, so if you switch tabs, Tributary waits until the tab is back.
+- **Small pictures are left out**: icons, avatars and anything under 200 pixels on a side. A photo the page shows at two sizes is listed once, at the bigger.
+- **Pages that were already open** when the extension was loaded or updated need reloading first. The popup says so if it can't reach a page.
+- **Then you choose.** The list shows each picture and video, with both kinds ticked. **Download all** saves them in a folder named after the page. Pictures go through the **Page media** queue, four at a time. Videos are read from their own pages one at a time, a few seconds apart (even across two pages saved at once), and any that can't be saved are named together in one message at the end. **Stop all** also stops the videos not yet read, and if yt-dlp isn't installed, Tributary says so once rather than for every video.
+- **Only what your browser is shown.** Signed out, sites such as Instagram and Facebook show a handful of posts and then ask you to log in, and Tributary stops there. It never gets around a login wall, a private account or a site's limits. Videos' pages are read without your cookies, so a video that needs a login is skipped.
+- **Posts aren't opened one by one.** Pictures come at the size the page itself offers, which on some sites is a preview's size.
+- **Terms and ownership:** Instagram's and Facebook's terms forbid collecting from them automatically, and the pictures belong to the people who posted them. That's your decision to make, and the dialog says so too.
+
 ## Site grabber
 
 **Grabber** on the toolbar explores a website for pages and files. Choose what to get, and it reads the site one page at a time, always following its `robots.txt`.

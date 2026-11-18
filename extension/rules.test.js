@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   CLICK_WINDOW_MS,
+  MAX_PAGE_MEDIA,
+  MIN_IMAGE_SIDE,
   MIN_MEDIA_BYTES,
   addMedia,
   baseName,
@@ -12,9 +14,14 @@ import {
   isExcluded,
   isWorthPanel,
   keepDocument,
+  largestCandidate,
+  looksLikeVideoPage,
   MIN_PLAYER_LONG_SIDE,
   MIN_PLAYER_SHORT_SIDE,
+  mediaFileKind,
   pageDownload,
+  pageMediaBatch,
+  statedSize,
   streamHeaders,
   videoPageAddress,
   mediaKind,
@@ -23,6 +30,7 @@ import {
   shouldCapture,
   usableLinks,
   wildcardMatch,
+  worthSaving,
 } from './rules.js';
 
 describe('mediaKind', () => {
@@ -525,5 +533,244 @@ describe('usableLinks', () => {
 
   it('drops anything else', () => {
     expect(usableLinks(['mailto:a@b.test', 'blob:https://a.test/1', 'not a url'])).toEqual([]);
+  });
+});
+
+describe('largestCandidate', () => {
+  const page = 'https://www.instagram.com/someone/';
+
+  it('takes the widest picture a srcset offers', () => {
+    // As Instagram's grid lists them.
+    const srcset =
+      'https://cdn.test/a_s150.jpg?stp=x 150w, https://cdn.test/a_s640.jpg?stp=x 640w, https://cdn.test/a_s1080.jpg?stp=x 1080w, https://cdn.test/a_s320.jpg 320w';
+    expect(largestCandidate(srcset, 'https://cdn.test/a_s320.jpg', page)).toBe('https://cdn.test/a_s1080.jpg?stp=x');
+  });
+
+  it('takes the densest when sizes are given as densities', () => {
+    expect(largestCandidate('/a.jpg 1x, /a@2x.jpg 2x, /a@1_5x.jpg 1.5x', '/a.jpg', 'https://x.test/p/')).toBe('https://x.test/a@2x.jpg');
+  });
+
+  it('keeps a comma that is part of an address', () => {
+    expect(largestCandidate('https://img.test/w_400,h_300/a.jpg 400w, https://img.test/w_800,h_600/a.jpg 800w', null, page)).toBe(
+      'https://img.test/w_800,h_600/a.jpg',
+    );
+  });
+
+  it('falls back on the picture the browser chose', () => {
+    expect(largestCandidate('', 'https://cdn.test/only.jpg', page)).toBe('https://cdn.test/only.jpg');
+    expect(largestCandidate(undefined, '/only.jpg', 'https://x.test/a/')).toBe('https://x.test/only.jpg');
+  });
+
+  it('never gives anything but a web address', () => {
+    expect(largestCandidate('data:image/png;base64,AAAA 100w', 'blob:https://x.test/1', page)).toBe(null);
+  });
+});
+
+describe('worthSaving', () => {
+  it('keeps pictures big enough to be content', () => {
+    expect(worthSaving({ url: 'https://cdn.test/a.jpg', naturalWidth: 1080, naturalHeight: 1350 })).toBe(true);
+    expect(worthSaving({ url: 'https://cdn.test/a.jpg', width: 300, height: 300 })).toBe(true);
+  });
+
+  it('leaves icons, avatars and tracking pixels', () => {
+    expect(worthSaving({ url: 'https://cdn.test/icon.png', naturalWidth: 24, naturalHeight: 24 })).toBe(false);
+    expect(worthSaving({ url: 'https://cdn.test/avatar.jpg', naturalWidth: 150, naturalHeight: 150 })).toBe(false);
+    expect(worthSaving({ url: 'https://t.test/p.gif', naturalWidth: 1, naturalHeight: 1, width: 1, height: 1 })).toBe(false);
+    expect(worthSaving({ url: 'https://cdn.test/a.jpg', naturalWidth: MIN_IMAGE_SIDE - 1, naturalHeight: 2000 })).toBe(false);
+  });
+
+  it('goes by the size shown when the picture has none of its own yet', () => {
+    expect(worthSaving({ url: 'https://cdn.test/a.jpg', width: 240, height: 240, naturalWidth: 0, naturalHeight: 0 })).toBe(true);
+  });
+
+  it('leaves drawings and anything that is not a web file', () => {
+    expect(worthSaving({ url: 'https://cdn.test/logo.svg', naturalWidth: 800, naturalHeight: 800 })).toBe(false);
+    expect(worthSaving({ url: 'data:image/png;base64,AAAA', naturalWidth: 800, naturalHeight: 800 })).toBe(false);
+  });
+});
+
+describe('looksLikeVideoPage', () => {
+  it("knows a single video's own page", () => {
+    for (const url of [
+      'https://www.instagram.com/reel/C1a2B3c4D5e/',
+      'https://www.instagram.com/someone/reels/C1a2B3c4D5e/',
+      'https://www.facebook.com/someone/videos/1234567890/',
+      'https://www.facebook.com/watch/?v=1234567890',
+      'https://www.facebook.com/reel/1234567890',
+      'https://www.youtube.com/watch?v=abc',
+      'https://www.youtube.com/shorts/abc',
+      'https://www.tiktok.com/@someone/video/1234567890',
+    ]) {
+      expect(looksLikeVideoPage(url), url).toBe(true);
+    }
+  });
+
+  it('leaves pages that are not one video', () => {
+    for (const url of [
+      'https://www.instagram.com/p/C1a2B3c4D5e/',
+      'https://www.instagram.com/someone/reels/',
+      'https://www.facebook.com/someone/videos/',
+      'https://www.youtube.com/watcher',
+      'https://x.test/',
+      'javascript:alert(1)',
+    ]) {
+      expect(looksLikeVideoPage(url), url).toBe(false);
+    }
+  });
+});
+
+describe('mediaFileKind', () => {
+  it('tells pictures and video files by their names', () => {
+    expect(mediaFileKind('https://x.test/a/photo.JPG?x=1')).toBe('image');
+    expect(mediaFileKind('https://x.test/clip.webm')).toBe('video');
+    expect(mediaFileKind('https://x.test/page.html')).toBe(null);
+    expect(mediaFileKind('ftp://x.test/a.jpg')).toBe(null);
+  });
+});
+
+describe('statedSize', () => {
+  it('reads the size an address gives its picture', () => {
+    expect(statedSize('https://cdn.test/p.jpg?stp=dst-jpg_e35_s640x640_tt6')).toBe(640 * 640);
+    expect(statedSize('https://cdn.test/p.jpg?cstp=mx2047x1487&ctp=s960x960')).toBe(2047 * 1487);
+    expect(statedSize('https://images.test/photo-17934?w=2000&q=60')).toBe(2000 * 2000);
+    expect(statedSize('https://cdn.test/photo.jpg')).toBe(0);
+  });
+});
+
+describe('pageMediaBatch', () => {
+  const page = 'https://www.instagram.com/someone/';
+  const picture = (name, size = 640) => ({
+    srcset: `https://cdn.test/${name}_s320.jpg 320w, https://cdn.test/${name}_s1080.jpg 1080w`,
+    src: `https://cdn.test/${name}_s320.jpg`,
+    width: 300,
+    height: 300,
+    naturalWidth: size,
+    naturalHeight: size,
+  });
+
+  it('offers each picture at its largest, each once, in the order found', () => {
+    const batch = pageMediaBatch({ images: [picture('a'), picture('b'), picture('a')] }, page);
+    expect(batch).toEqual([
+      { url: 'https://cdn.test/a_s1080.jpg', kind: 'image' },
+      { url: 'https://cdn.test/b_s1080.jpg', kind: 'image' },
+    ]);
+  });
+
+  it('offers a photo shown at two sizes once, at the bigger, where it was first found', () => {
+    const shown = (query, size) => ({
+      src: `https://scontent.fbcdn.test/v/t39/809146614_4484013928506139_3181913787670602881_n.png?${query}`,
+      width: size,
+      height: size,
+      naturalWidth: size,
+      naturalHeight: size,
+    });
+    const batch = pageMediaBatch(
+      { images: [shown('stp=s320x320&oh=1', 320), picture('b'), shown('stp=s960x960&oh=2', 960)] },
+      page,
+    );
+    expect(batch).toEqual([
+      { url: 'https://scontent.fbcdn.test/v/t39/809146614_4484013928506139_3181913787670602881_n.png?stp=s960x960&oh=2', kind: 'image' },
+      { url: 'https://cdn.test/b_s1080.jpg', kind: 'image' },
+    ]);
+  });
+
+  it("takes the bigger of a photo's sizes by its address when it hasn't loaded yet", () => {
+    const base = 'https://scontent.fbcdn.test/v/t39/809146614_4484013928506139_3181913787670602881_n.png';
+    const batch = pageMediaBatch(
+      {
+        images: [
+          { src: `${base}?stp=dst-jpg_s320x320&oh=1`, width: 168, height: 168, naturalWidth: 320, naturalHeight: 320 },
+          { src: `${base}?stp=dst-jpg&cstp=mx2047x1487&ctp=s960x960&oh=2`, width: 500, height: 360, naturalWidth: 0, naturalHeight: 0 },
+        ],
+      },
+      page,
+    );
+    expect(batch).toEqual([{ url: `${base}?stp=dst-jpg&cstp=mx2047x1487&ctp=s960x960&oh=2`, kind: 'image' }]);
+  });
+
+  it('keeps pictures apart whose short names say nothing of what they are', () => {
+    const named = (query) => ({ src: `https://site.test/image.jpg?${query}`, naturalWidth: 800, naturalHeight: 600 });
+    expect(pageMediaBatch({ images: [named('id=1'), named('id=2')] }, page)).toHaveLength(2);
+  });
+
+  it('leaves the icons and avatars a page is full of', () => {
+    const icon = { src: 'https://cdn.test/icon.png', naturalWidth: 24, naturalHeight: 24 };
+    expect(pageMediaBatch({ images: [picture('avatar', 150), icon] }, page)).toEqual([]);
+  });
+
+  it('offers a video file as it is, and a video fed by script by its own page', () => {
+    const batch = pageMediaBatch(
+      {
+        videos: [
+          { src: 'https://cdn.test/clip.mp4' },
+          { src: 'blob:https://www.instagram.com/1', link: 'https://www.instagram.com/reel/AbC/' },
+          { src: 'blob:https://www.instagram.com/2' },
+        ],
+      },
+      page,
+    );
+    expect(batch).toEqual([
+      { url: 'https://cdn.test/clip.mp4', kind: 'video' },
+      { url: 'https://www.instagram.com/reel/AbC/', kind: 'page' },
+      { url: page, kind: 'page' },
+    ]);
+  });
+
+  it('offers a video fed by script by the address it was seen on, as a feed rewrites it', () => {
+    const batch = pageMediaBatch(
+      {
+        videos: [
+          { src: 'blob:https://www.instagram.com/1', page: 'https://www.instagram.com/reel/One/' },
+          { src: 'blob:https://www.instagram.com/2', page: 'https://www.instagram.com/reel/Two/' },
+          { src: 'blob:https://www.instagram.com/3', page: 'https://elsewhere.test/reel/Three/' },
+        ],
+      },
+      'https://www.instagram.com/reel/Two/',
+    );
+    expect(batch).toEqual([
+      { url: 'https://www.instagram.com/reel/One/', kind: 'page' },
+      { url: 'https://www.instagram.com/reel/Two/', kind: 'page' },
+    ]);
+  });
+
+  it('offers a video whose source is a playlist as the page it plays on', () => {
+    const batch = pageMediaBatch(
+      {
+        videos: [
+          { src: 'https://cdn.test/live/master.m3u8?token=1', page },
+          { src: 'https://cdn.test/dash/manifest.MPD' },
+        ],
+      },
+      page,
+    );
+    expect(batch).toEqual([{ url: page, kind: 'page' }]);
+  });
+
+  it("offers a grid's video posts by their own pages, and only on this site", () => {
+    const batch = pageMediaBatch(
+      {
+        links: [
+          { href: 'https://www.instagram.com/reel/AbC/', holdsPicture: true },
+          { href: 'https://www.instagram.com/p/XyZ/', holdsPicture: true },
+          { href: 'https://www.instagram.com/reel/Text/', holdsPicture: false },
+          { href: 'https://elsewhere.test/reel/AbC/', holdsPicture: true },
+          { href: 'https://cdn.test/full.jpg', holdsPicture: false },
+        ],
+      },
+      page,
+    );
+    expect(batch).toEqual([
+      { url: 'https://www.instagram.com/reel/AbC/', kind: 'page' },
+      { url: 'https://cdn.test/full.jpg', kind: 'image' },
+    ]);
+  });
+
+  it('stops at a limit', () => {
+    const images = Array.from({ length: MAX_PAGE_MEDIA + 50 }, (_, index) => picture(`n${index}`));
+    expect(pageMediaBatch({ images }, page)).toHaveLength(MAX_PAGE_MEDIA);
+  });
+
+  it('offers nothing for a page that is not on the web', () => {
+    expect(pageMediaBatch({ images: [picture('a')] }, 'file:///C:/a.html')).toEqual([]);
   });
 });

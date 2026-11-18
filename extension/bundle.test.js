@@ -54,6 +54,12 @@ describe('the content script', () => {
     expect(savePage.slice(0, savePage.indexOf('\n}\n'))).not.toContain('sender.url');
   });
 
+  it('counts pictures with the same smallest size as the rules', async () => {
+    const { MIN_IMAGE_SIDE } = await import('./rules.js');
+    const script = readFileSync(join(FOLDER, 'content.js'), 'utf8');
+    expect(script).toContain(`const MIN_IMAGE_SIDE = ${MIN_IMAGE_SIDE};`);
+  });
+
   it('only ever sends a page for a trusted click', () => {
     const script = readFileSync(join(FOLDER, 'content.js'), 'utf8');
     const sends = script.indexOf("type: 'save-page'");

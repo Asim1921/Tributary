@@ -99,7 +99,8 @@ export const addBatch = (
   destDir: string,
   queueId: number | null,
   paused: boolean,
-) => invoke<number>('add_batch', { token, urls, destDir, queueId, paused });
+  gallery = false,
+) => invoke<number>('add_batch', { token, urls, destDir, queueId, paused, gallery });
 export const extensionFolder = () => invoke<string>('extension_folder');
 export const addDroppedLink = (url: string) => invoke<void>('add_dropped_link', { url });
 export const exportData = (path: string) => invoke<number>('export_data', { path });

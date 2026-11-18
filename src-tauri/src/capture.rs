@@ -55,9 +55,18 @@ pub struct Captured {
     /// The `Origin` a player's script sent when it asked for a stream.
     #[serde(default)]
     pub origin: Option<String>,
+    /// What the extension took this for on a page: `image` or `video`.
+    #[serde(default)]
+    pub kind: Option<String>,
     /// Only set from the command line.
     #[serde(skip)]
     pub folder: Option<PathBuf>,
+    /// The queue a video saved for later goes to. Only the app sets this.
+    #[serde(skip)]
+    pub queue: Option<i64>,
+    /// Part of a page's gallery, whose folder isn't remembered as the last one used.
+    #[serde(skip)]
+    pub gallery: bool,
 }
 
 impl Captured {
@@ -97,7 +106,13 @@ pub enum Request {
     Ping,
     Settings,
     Download(Captured),
-    Batch { items: Vec<Captured> },
+    Batch {
+        items: Vec<Captured>,
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        gallery: bool,
+    },
 }
 
 /// Captures waiting for the user to decide.
@@ -168,6 +183,23 @@ pub struct CaptureItem {
     file_name: Option<String>,
     video: bool,
     page: bool,
+    /// `image`, `video`, `page` (a video read from its page) or `file`.
+    kind: &'static str,
+}
+
+impl Captured {
+    /// What this is, for the list a page's media is chosen from.
+    fn kind_name(&self) -> &'static str {
+        if self.page {
+            return "page";
+        }
+        match self.kind.as_deref() {
+            Some("image") => "image",
+            Some("video") => "video",
+            _ if self.is_stream() => "video",
+            _ => "file",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -176,11 +208,32 @@ pub struct CaptureEvent {
     items: Vec<CaptureItem>,
     /// Whether the user is choosing from several files.
     batch: bool,
+    /// For every picture and video on a page, that page's title.
+    title: Option<String>,
+    /// Whether this is every picture and video on a page.
+    gallery: bool,
+}
+
+/// Where several files came from, when they came together.
+#[derive(Debug, Default)]
+pub struct BatchFrom {
+    pub title: Option<String>,
+    pub gallery: bool,
 }
 
 /// Takes in files from outside the app. Returns whether they were accepted. If not, the
 /// browser keeps the download.
 pub fn receive(app: &AppHandle, files: Vec<Captured>, batch: bool) -> Result<(), String> {
+    receive_from(app, files, batch.then(BatchFrom::default))
+}
+
+pub fn receive_from(
+    app: &AppHandle,
+    files: Vec<Captured>,
+    from: Option<BatchFrom>,
+) -> Result<(), String> {
+    let batch = from.is_some();
+    let from = from.unwrap_or_default();
     let files: Vec<Captured> = files.into_iter().filter(Captured::is_valid).collect();
     if files.is_empty() {
         return Err("there's nothing here that can be downloaded".to_owned());
@@ -207,6 +260,7 @@ pub fn receive(app: &AppHandle, files: Vec<Captured>, batch: bool) -> Result<(),
             file_name: file.file_name.clone(),
             video: file.is_stream(),
             page: file.page,
+            kind: file.kind_name(),
         })
         .collect();
 
@@ -219,6 +273,11 @@ pub fn receive(app: &AppHandle, files: Vec<Captured>, batch: bool) -> Result<(),
             token,
             items,
             batch,
+            title: from
+                .title
+                .map(|title| title.trim().chars().take(200).collect::<String>())
+                .filter(|title| !title.is_empty()),
+            gallery: from.gallery,
         })
     };
 
@@ -255,7 +314,11 @@ fn answer(app: &AppHandle, message: &[u8]) -> Value {
         Request::Ping => Ok(()),
         Request::Settings => return settings_reply(&app.state::<AppState>()),
         Request::Download(file) => receive(app, vec![file], false),
-        Request::Batch { items } => receive(app, items, true),
+        Request::Batch {
+            items,
+            title,
+            gallery,
+        } => receive_from(app, items, Some(BatchFrom { title, gallery })),
     };
 
     match result {
@@ -455,11 +518,51 @@ mod tests {
         assert!(pending.take(token).is_none(), "a token only works once");
     }
 
+    #[test]
+    fn a_pages_media_arrives_as_one_batch_with_its_title() {
+        let message = br#"{"type":"batch","gallery":true,"title":"Someone on Instagram","items":[
+            {"url":"https://cdn.test/a.jpg","kind":"image"},
+            {"url":"https://cdn.test/b.mp4","kind":"video"},
+            {"url":"https://x.test/reel/1/","page":true,"video":true}]}"#;
+        let Ok(Request::Batch {
+            items,
+            title,
+            gallery,
+        }) = serde_json::from_slice::<Request>(message)
+        else {
+            panic!("not read as a batch");
+        };
+
+        assert!(gallery);
+        assert_eq!(title.as_deref(), Some("Someone on Instagram"));
+        let kinds: Vec<&str> = items.iter().map(Captured::kind_name).collect();
+        assert_eq!(kinds, ["image", "video", "page"]);
+    }
+
+    #[test]
+    fn a_batch_of_links_still_reads_as_before() {
+        let message = br#"{"type":"batch","items":[{"url":"https://x.test/a.zip"}]}"#;
+        let Ok(Request::Batch {
+            items,
+            title,
+            gallery,
+        }) = serde_json::from_slice::<Request>(message)
+        else {
+            panic!("not read as a batch");
+        };
+
+        assert!(!gallery);
+        assert_eq!(title, None);
+        assert_eq!(items[0].kind_name(), "file");
+    }
+
     fn event(token: u64) -> CaptureEvent {
         CaptureEvent {
             token,
             items: Vec::new(),
             batch: false,
+            title: None,
+            gallery: false,
         }
     }
 
