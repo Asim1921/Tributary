@@ -75,6 +75,8 @@ const STATE_LABELS: Record<DownloadState, string> = {
 };
 
 export function statusText(download: Download): string {
+  // A video saved as two parts is done once its sound is joined in.
+  if (download.state === 'completed' && download.addingSound) return 'Adding sound…';
   const value = percent(download);
   if (download.state === 'completed' || value === null) return STATE_LABELS[download.state];
   return `${STATE_LABELS[download.state]} ${value.toFixed(1)}%`;

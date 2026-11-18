@@ -283,6 +283,17 @@ fn add_track(
 }
 
 /// Adds a quality to the list, as two linked downloads if its sound is separate.
+/// Where a video's sound waits to be joined to its picture, out of the user's way. It
+/// only ever reaches the user's folder if the two can't be joined.
+pub fn sound_folder(settings_path: &Path) -> PathBuf {
+    settings_path
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join(SOUND_FOLDER)
+}
+
+const SOUND_FOLDER: &str = "sound";
+
 fn save_quality(state: &AppState, quality: &Quality, to: &Destination) -> Result<Vec<i64>, String> {
     let video_name = format!("{}.{}", to.name, quality.video.extension);
     let video = add_track(state, to, &quality.video, video_name)?;
@@ -290,8 +301,18 @@ fn save_quality(state: &AppState, quality: &Quality, to: &Destination) -> Result
     let Some(audio) = &quality.audio else {
         return Ok(vec![video]);
     };
+    let working = sound_folder(&state.settings_path);
+    fs::create_dir_all(&working)
+        .map_err(|error| format!("couldn't make a folder for the sound: {error}"))?;
     let audio_name = format!("{}.audio.{}", to.name, audio.extension);
-    let sound = add_track(state, to, audio, audio_name)?;
+    let sound_to = Destination {
+        url: to.url,
+        name: to.name,
+        folder: Some(working),
+        later: to.later,
+        headers: to.headers,
+    };
+    let sound = add_track(state, &sound_to, audio, audio_name)?;
 
     state
         .engine
@@ -519,27 +540,99 @@ fn finished_pair(state: &AppState, id: DownloadId) -> Option<(Download, Download
     })
 }
 
-/// Joins a video's picture and sound if both are ready and ffmpeg is available. Without
-/// ffmpeg they simply stay as two files.
+/// Where a sound that can't be joined is put: beside its video, under a name nothing
+/// there already has.
+fn beside(video: &Path, sound_name: &str) -> PathBuf {
+    let folder = video.parent().unwrap_or(Path::new("."));
+    let wanted = folder.join(sound_name);
+    if !wanted.exists() {
+        return wanted;
+    }
+    let name = Path::new(sound_name);
+    let stem = name.file_stem().unwrap_or_default().to_string_lossy();
+    let extension = name
+        .extension()
+        .map(|extension| format!(".{}", extension.to_string_lossy()));
+    (2..)
+        .map(|count| {
+            folder.join(format!(
+                "{stem} ({count}){}",
+                extension.as_deref().unwrap_or("")
+            ))
+        })
+        .find(|path| !path.exists())
+        .unwrap_or(wanted)
+}
+
+/// Moves a file, copying it when the two places are on different drives.
+fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    fs::rename(from, to).or_else(|_| {
+        fs::copy(from, to)?;
+        fs::remove_file(from)
+    })
+}
+
+/// Puts a sound that can't be joined beside its video, so nothing is lost, and lets the
+/// list forget it, since the video stands for both.
+async fn keep_apart(
+    state: &AppState,
+    video_path: &Path,
+    audio: &engine::Download,
+) -> Result<PathBuf, String> {
+    let from = audio.final_path.clone().ok_or("the sound has no file")?;
+    let name = from
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "sound".to_owned());
+    let to = if from.parent() == video_path.parent() {
+        from.clone()
+    } else {
+        let to = beside(video_path, &name);
+        move_file(&from, &to)
+            .map_err(|error| format!("the sound couldn't be put beside the video: {error}"))?;
+        to
+    };
+    state
+        .engine
+        .remove(audio.id, false)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(to)
+}
+
+/// Joins a video's picture and sound once both are ready. Without ffmpeg, or if they can't
+/// be joined, the sound is put beside the video instead, so nothing is lost.
 pub fn join_if_ready(app: &AppHandle, id: DownloadId) {
     let state = app.state::<AppState>();
     let Some((video, audio)) = finished_pair(&state, id) else {
         return;
     };
-    let (Some(video_path), Some(audio_path)) = (video.final_path, audio.final_path) else {
-        return;
-    };
-    let Some(ffmpeg) = ffmpeg_for(&state) else {
+    let (Some(video_path), Some(audio_path)) = (video.final_path.clone(), audio.final_path.clone())
+    else {
         return;
     };
     if !state.start_joining(video.id.0) {
         return;
     }
-
     let handle = app.clone();
+    let Some(ffmpeg) = ffmpeg_for(&state) else {
+        // The dialog said they'd stay as two files, so that's no surprise worth a message.
+        tauri::async_runtime::spawn(async move {
+            let state = handle.state::<AppState>();
+            let kept = keep_apart(&state, &video_path, &audio).await;
+            state.finish_joining(video.id.0);
+            if let Err(problem) = kept {
+                let _ = handle.emit("video-problem", problem);
+            }
+            let _ = handle.emit("queues-changed", ());
+        });
+        return;
+    };
+
     tauri::async_runtime::spawn(async move {
-        let joined = tauri::async_runtime::spawn_blocking(move || {
-            join_files(&ffmpeg, &video_path, &audio_path)
+        let joined = tauri::async_runtime::spawn_blocking({
+            let video_path = video_path.clone();
+            move || join_files(&ffmpeg, &video_path, &audio_path)
         })
         .await
         .map_err(|error| error.to_string())
@@ -561,7 +654,14 @@ pub fn join_if_ready(app: &AppHandle, id: DownloadId) {
                         None => Ok(()),
                     })
             }
-            Err(problem) => Err(problem),
+            // Nothing is lost: the sound goes beside the video, and the message says where.
+            Err(problem) => match keep_apart(&state, &video_path, &audio).await {
+                Ok(kept) => Err(format!(
+                    "{problem}. The sound is saved beside the video, as {}",
+                    kept.file_name().unwrap_or_default().to_string_lossy()
+                )),
+                Err(also) => Err(format!("{problem}. Also, {also}")),
+            },
         };
 
         state.finish_joining(video.id.0);
@@ -689,6 +789,50 @@ mod tests {
             remove_patiently(&folder.path().join("none"), 3, Duration::from_millis(1)),
             Ok(())
         );
+    }
+
+    #[test]
+    fn a_videos_sound_waits_in_tributarys_own_folder() {
+        let settings =
+            Path::new(r"C:\Users\me\AppData\Roaming\app.tributary.desktop\settings.json");
+        assert_eq!(
+            sound_folder(settings),
+            Path::new(r"C:\Users\me\AppData\Roaming\app.tributary.desktop\sound")
+        );
+    }
+
+    #[test]
+    fn a_sound_kept_apart_goes_beside_its_video_under_a_free_name() {
+        let folder = tempfile::tempdir().unwrap();
+        let video = folder.path().join("film.mp4");
+
+        assert_eq!(
+            beside(&video, "film.audio.m4a"),
+            folder.path().join("film.audio.m4a")
+        );
+        fs::write(folder.path().join("film.audio.m4a"), b"older").unwrap();
+        assert_eq!(
+            beside(&video, "film.audio.m4a"),
+            folder.path().join("film.audio (2).m4a")
+        );
+        fs::write(folder.path().join("film.audio (2).m4a"), b"older").unwrap();
+        assert_eq!(
+            beside(&video, "film.audio.m4a"),
+            folder.path().join("film.audio (3).m4a")
+        );
+    }
+
+    #[test]
+    fn a_kept_sound_is_moved_whole() {
+        let working = tempfile::tempdir().unwrap();
+        let downloads = tempfile::tempdir().unwrap();
+        let from = working.path().join("film.audio.m4a");
+        fs::write(&from, b"the sound").unwrap();
+        let to = downloads.path().join("film.audio.m4a");
+
+        move_file(&from, &to).unwrap();
+        assert!(!from.exists());
+        assert_eq!(fs::read(&to).unwrap(), b"the sound");
     }
 
     #[test]

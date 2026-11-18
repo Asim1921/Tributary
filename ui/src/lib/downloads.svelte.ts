@@ -1,4 +1,5 @@
 import { LOGIN_NEEDED, listDownloads, listQueues, onProgress, onQueuesChanged, onState } from './api';
+import { finishedForGood, shownDownloads } from './filters';
 import type { Download, DownloadRow, DownloadState, ProgressEvent, Queue } from './types';
 
 function toRow(download: Download, previous?: DownloadRow): DownloadRow {
@@ -45,6 +46,13 @@ class DownloadStore {
 
     for (const download of downloads) {
       if (this.ended.get(download.id) !== download.state) continue;
+      // A video's sound isn't an item of its own, and a video isn't done until its sound
+      // is joined in. Its turn comes on a later refresh.
+      if (download.partOf != null) {
+        this.ended.delete(download.id);
+        continue;
+      }
+      if (download.state === 'completed' && !finishedForGood(download)) continue;
 
       this.ended.delete(download.id);
       if (download.state === 'completed') {
@@ -54,7 +62,7 @@ class DownloadStore {
       }
     }
 
-    this.rows = downloads.map((download) => toRow(download, previous.get(download.id)));
+    this.rows = shownDownloads(downloads).map((download) => toRow(download, previous.get(download.id)));
   }
 
   private applyProgress(event: ProgressEvent): void {

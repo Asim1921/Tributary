@@ -1032,11 +1032,15 @@ try {
     await page.getByText('stay as two files', { exact: false }).first().waitFor();
     await saveVideo('apart');
 
+    // One item in the list. Once both are done, the sound is put beside the video.
     await rowFor(page, 'apart.mp4').getByText('Complete').waitFor();
-    await rowFor(page, 'apart.audio.m4a').getByText('Complete').waitFor();
+    const keptSound = join(downloadDir, 'apart.audio.m4a');
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline && !existsSync(keptSound)) await sleep(100);
+    assert.equal(await page.locator('tbody tr', { hasText: 'apart.audio' }).count(), 0, 'the sound is listed on its own');
 
     assert.equal(await sha256(join(downloadDir, 'apart.mp4')), trackSha256('v720'));
-    assert.equal(await sha256(join(downloadDir, 'apart.audio.m4a')), trackSha256('a128'));
+    assert.equal(await sha256(keptSound), trackSha256('a128'));
 
     await inOptions('Video', () => page.getByLabel('ffmpeg program').fill(''));
   });
@@ -1048,6 +1052,7 @@ try {
 
     await page.getByRole('heading', { name: 'Something went wrong' }).waitFor();
     await page.getByText('stay as two files', { exact: false }).waitFor();
+    await page.getByText('sound is saved beside the video, as unjoinable.audio.m4a', { exact: false }).waitFor();
     await page.getByRole('button', { name: 'Close' }).click();
 
     assert.ok(existsSync(join(downloadDir, 'unjoinable.mp4')));
@@ -1378,23 +1383,31 @@ try {
     await shot(page, '14-page-video');
     await saveVideo('Fake film');
 
-    // Done means one file with picture and sound in it, and no separate sound file. Neither
-    // file exists at first, so the end state is the only sign that can be trusted.
+    // Done means one file with picture and sound in it. The sound is fetched out of sight,
+    // so at no point is there a sound file in the folder, or a sound item in the list.
     const joined = join(downloadDir, 'Fake film.mp4');
     const joinedUp = () => {
-      if (existsSync(join(downloadDir, 'Fake film.audio.m4a'))) return false;
       try {
         return probe(joined).kinds.join() === 'audio,video';
       } catch {
         return false; // Not finished arriving yet.
       }
     };
+    const seen = new Set();
     const deadline = Date.now() + 30_000;
-    while (Date.now() < deadline && !joinedUp()) await sleep(100);
+    while (Date.now() < deadline && !joinedUp()) {
+      for (const name of readdirSync(downloadDir)) if (name.startsWith('Fake film') && name.includes('.audio')) seen.add(name);
+      for (const row of await page.locator('tbody tr').allInnerTexts()) if (row.includes('Fake film.audio')) seen.add('a row for the sound');
+      await sleep(50);
+    }
     assert.ok(joinedUp(), 'picture and sound never ended up in one file');
+    assert.deepEqual([...seen], [], 'the sound showed up on its own');
 
     await rowFor(page, 'Fake film.mp4').getByText('Complete').waitFor();
     assert.equal(await page.locator('tbody tr', { hasText: 'Fake film.audio.m4a' }).count(), 0);
+    assert.ok(!existsSync(join(downloadDir, 'Fake film.audio.m4a')), 'a sound file was left in the folder');
+    const working = join(dataDir, 'sound');
+    assert.deepEqual(existsSync(working) ? readdirSync(working) : [], [], "the sound was left in Tributary's own folder");
     assertRealVideo(joined);
 
     // What the server was sent: the safe headers only, and never a cookie.

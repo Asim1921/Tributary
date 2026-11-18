@@ -233,6 +233,37 @@ pub struct DownloadView {
     completed_at: Option<i64>,
     queue_id: Option<i64>,
     category: Option<String>,
+    /// For the sound of a video saved as two parts, that video. The list doesn't show it.
+    part_of: Option<i64>,
+    /// Whether this video's sound is still to be joined in.
+    adding_sound: bool,
+}
+
+impl DownloadView {
+    /// A video saved as two parts shows as one item: once its picture is done, the item
+    /// says how its sound is getting on, so it can still be stopped, resumed or explained.
+    fn with_sound(mut self, sound: Option<&Download>) -> Self {
+        if let Some(sound) = sound
+            && self.state == state_name(State::Completed)
+            && sound.state != State::Completed
+        {
+            self.state = state_name(sound.state);
+            self.error = sound
+                .error
+                .as_ref()
+                .map(|problem| format!("the sound couldn't be saved: {problem}"));
+        }
+        self
+    }
+}
+
+/// The sound of a video saved as two parts, while it's still apart from the picture.
+fn sound_of(state: &AppState, id: DownloadId) -> Option<Download> {
+    let companion = state.engine.get(id).ok()?.companion?;
+    if companion.0 < id.0 {
+        return None;
+    }
+    state.engine.get(companion).ok()
 }
 
 impl From<Download> for DownloadView {
@@ -253,6 +284,14 @@ impl From<Download> for DownloadView {
             completed_at: download.completed_at,
             queue_id: download.queue.map(|queue| queue.0),
             category: download.category,
+            // The picture is added first, so the sound is the later of the two.
+            part_of: download
+                .companion
+                .filter(|companion| companion.0 < download.id.0)
+                .map(|companion| companion.0),
+            adding_sound: download
+                .companion
+                .is_some_and(|companion| companion.0 > download.id.0),
         }
     }
 }
@@ -424,7 +463,20 @@ fn blank_to_none(value: Option<String>) -> Option<String> {
 #[tauri::command]
 pub async fn list_downloads(state: Managed<'_, AppState>) -> Result<Vec<DownloadView>, String> {
     let downloads = state.engine.list().map_err(text)?;
-    Ok(downloads.into_iter().map(DownloadView::from).collect())
+    let sounds: Vec<Option<Download>> = downloads
+        .iter()
+        .map(|download| {
+            let sound = download
+                .companion
+                .filter(|companion| companion.0 > download.id.0)?;
+            downloads.iter().find(|other| other.id == sound).cloned()
+        })
+        .collect();
+    Ok(downloads
+        .into_iter()
+        .zip(sounds)
+        .map(|(download, sound)| DownloadView::from(download).with_sound(sound.as_ref()))
+        .collect())
 }
 
 #[tauri::command]
@@ -656,6 +708,13 @@ pub async fn set_download_queue(
     id: i64,
     queue_id: Option<i64>,
 ) -> Result<(), String> {
+    // A video's sound goes wherever its picture goes.
+    if let Some(sound) = sound_of(&state, DownloadId(id)) {
+        state
+            .engine
+            .set_queue(sound.id, queue_id.map(QueueId))
+            .map_err(text)?;
+    }
     state
         .engine
         .set_queue(DownloadId(id), queue_id.map(QueueId))
@@ -675,13 +734,32 @@ pub async fn cancel_shutdown() -> Result<(), String> {
 
 #[tauri::command]
 pub async fn pause_download(state: Managed<'_, AppState>, id: i64) -> Result<(), String> {
-    state.engine.pause(DownloadId(id)).await.map_err(text)
+    if let Some(sound) = sound_of(&state, DownloadId(id))
+        && sound.state == State::Running
+    {
+        state.engine.pause(sound.id).await.map_err(text)?;
+    }
+    let picture = state.engine.get(DownloadId(id)).map_err(text)?;
+    if picture.state == State::Running {
+        state.engine.pause(DownloadId(id)).await.map_err(text)?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn resume_download(state: Managed<'_, AppState>, id: i64) -> Result<(), String> {
     state.attach_site_logins();
-    state.engine.resume(DownloadId(id), &[]).map_err(text)
+    // A video saved as two parts carries on with whichever part isn't finished.
+    let picture = state.engine.get(DownloadId(id)).map_err(text)?;
+    if let Some(sound) = sound_of(&state, picture.id)
+        && sound.state != State::Completed
+    {
+        state.engine.resume(sound.id, &[]).map_err(text)?;
+        if picture.state == State::Completed {
+            return Ok(());
+        }
+    }
+    state.engine.resume(picture.id, &[]).map_err(text)
 }
 
 /// Gives a download a login and tries it again.
@@ -768,6 +846,16 @@ pub async fn remove_download(
     id: i64,
     delete_file: bool,
 ) -> Result<(), String> {
+    // A video's sound goes with it. While it waits in Tributary's own folder, its file is
+    // only a working file, so it goes too.
+    if let Some(sound) = sound_of(&state, DownloadId(id)) {
+        let working = sound.dest_dir == crate::video::sound_folder(&state.settings_path);
+        state
+            .engine
+            .remove(sound.id, delete_file || working)
+            .await
+            .map_err(text)?;
+    }
     state
         .engine
         .remove(DownloadId(id), delete_file)
@@ -899,6 +987,79 @@ pub async fn save_settings(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn download(id: i64, state: State, companion: Option<i64>) -> Download {
+        Download {
+            id: DownloadId(id),
+            url: String::new(),
+            dest_dir: PathBuf::new(),
+            file_name: None,
+            headers: Vec::new(),
+            size: None,
+            etag: None,
+            last_modified: None,
+            ranged: true,
+            state,
+            error: None,
+            final_path: None,
+            downloaded: 0,
+            description: None,
+            added_at: 0,
+            completed_at: None,
+            part_dir: None,
+            queue: None,
+            category: None,
+            replace_on_finish: false,
+            is_stream: false,
+            parts_done: 0,
+            companion: companion.map(DownloadId),
+        }
+    }
+
+    #[test]
+    fn a_videos_sound_is_marked_as_part_of_it() {
+        let picture = DownloadView::from(download(7, State::Running, Some(8)));
+        let sound = DownloadView::from(download(8, State::Running, Some(7)));
+        let alone = DownloadView::from(download(9, State::Running, None));
+
+        assert_eq!((picture.part_of, picture.adding_sound), (None, true));
+        assert_eq!((sound.part_of, sound.adding_sound), (Some(7), false));
+        assert_eq!((alone.part_of, alone.adding_sound), (None, false));
+    }
+
+    #[test]
+    fn a_finished_picture_says_how_its_sound_is_getting_on() {
+        let picture = || DownloadView::from(download(7, State::Completed, Some(8)));
+
+        let running = picture().with_sound(Some(&download(8, State::Running, Some(7))));
+        assert_eq!(running.state, "running");
+
+        let stopped = picture().with_sound(Some(&download(8, State::Paused, Some(7))));
+        assert_eq!(stopped.state, "paused", "so it can be resumed");
+
+        let mut broken = download(8, State::Failed, Some(7));
+        broken.error = Some("the server answered 403 Forbidden".to_owned());
+        let failed = picture().with_sound(Some(&broken));
+        assert_eq!(failed.state, "failed");
+        assert_eq!(
+            failed.error.as_deref(),
+            Some("the sound couldn't be saved: the server answered 403 Forbidden")
+        );
+
+        let both = picture().with_sound(Some(&download(8, State::Completed, Some(7))));
+        assert_eq!(
+            (both.state, both.adding_sound),
+            ("completed", true),
+            "waiting to be joined"
+        );
+    }
+
+    #[test]
+    fn a_picture_still_downloading_shows_itself() {
+        let picture = DownloadView::from(download(7, State::Running, Some(8)));
+        let shown = picture.with_sound(Some(&download(8, State::Failed, Some(7))));
+        assert_eq!(shown.state, "running");
+    }
 
     #[test]
     fn blank_text_counts_as_nothing() {

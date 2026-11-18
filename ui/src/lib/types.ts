@@ -23,6 +23,10 @@ export interface Download {
   completedAt: number | null;
   queueId: number | null;
   category: string | null;
+  /** For the sound of a video saved as two parts, that video. It isn't listed. */
+  partOf?: number | null;
+  /** Whether this video's sound is still to be joined in. */
+  addingSound?: boolean;
 }
 
 /** A download plus the live figures that only exist while it runs. */

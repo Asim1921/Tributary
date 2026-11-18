@@ -1,6 +1,19 @@
-import type { Category, DownloadRow, Queue } from './types';
+import type { Category, Download, DownloadRow, Queue } from './types';
 
 export type StatusFilter = 'all' | 'active' | 'unfinished' | 'finished';
+
+/**
+ * What the list shows. A video saved as two parts is one item: its sound is downloaded
+ * out of sight and joined in, so it never appears on its own.
+ */
+export function shownDownloads<T extends Pick<Download, 'partOf'>>(downloads: T[]): T[] {
+  return downloads.filter((download) => download.partOf === null || download.partOf === undefined);
+}
+
+/** Whether a download has just finished for good, with nothing left to join in. */
+export function finishedForGood(download: Pick<Download, 'state' | 'addingSound' | 'partOf'>): boolean {
+  return download.state === 'completed' && !download.addingSound && (download.partOf ?? null) === null;
+}
 
 export type Filter =
   | { kind: 'status'; status: StatusFilter }

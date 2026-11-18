@@ -135,6 +135,8 @@ describe('statusText', () => {
 
   it('is plain when complete or when the size is unknown', () => {
     expect(statusText({ ...download, state: 'completed' })).toBe('Complete');
+    expect(statusText({ ...download, state: 'completed', addingSound: true })).toBe('Adding sound…');
+    expect(statusText({ ...download, state: 'running', addingSound: true })).toBe('Downloading 25.0%');
     expect(statusText({ ...download, size: null })).toBe('Downloading');
   });
 });

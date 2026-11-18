@@ -54,7 +54,7 @@ The extension shows a panel in the corner of any video player on a page, and lis
 - **A site being free to watch doesn't make its videos free to copy.** Sites that stream films without their owners' permission aren't supported. For free films, public-domain collections such as the Internet Archive's work well.
 - **Videos in a playlist** download one at a time: open the video and use the button beside its player. The button also works in YouTube's miniplayer and on the previews that play on its home page. A playlist's own page isn't downloaded as a whole.
 - **Protected, live, paid and login-only videos are refused.** Anything that declares encryption or DRM won't be saved, and neither will members-only or private videos. yt-dlp is never given your cookies or logins.
-- **Some videos keep picture and sound apart.** With [ffmpeg](https://ffmpeg.org) installed they're joined into one file. Without it they stay as two. Set its location under **Options**, **Video**, if it isn't found automatically.
+- **Some videos keep picture and sound apart**, as YouTube and Facebook do. The sound is downloaded out of sight, in Tributary's own folder, and joined into the video with [ffmpeg](https://ffmpeg.org): the list shows one item, which reads **Adding sound…** while they're joined, and you get one file. If ffmpeg isn't installed, or can't join them, the sound is put beside the video instead, so nothing is lost. Set ffmpeg's location under **Options**, **Video**, if it isn't found automatically.
 
 ## Site grabber
 

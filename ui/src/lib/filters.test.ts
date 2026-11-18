@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
-import { categoryEntries, filterKey, filterRows, queueEntries, statusEntries, type Filter } from './filters';
+import {
+  categoryEntries,
+  filterKey,
+  filterRows,
+  finishedForGood,
+  queueEntries,
+  shownDownloads,
+  statusEntries,
+  type Filter,
+} from './filters';
 import type { Category, DownloadRow, DownloadState, Queue } from './types';
 
 function row(id: number, state: DownloadState, changes: Partial<DownloadRow> = {}): DownloadRow {
@@ -71,5 +80,27 @@ describe('sidebar entries', () => {
       filterKey({ kind: 'queue', id: 1 }),
     ];
     expect(new Set(keys).size).toBe(3);
+  });
+});
+
+describe('a video saved as two parts', () => {
+  const picture = { id: 7, partOf: null, addingSound: true, state: 'completed' as const };
+  const sound = { id: 8, partOf: 7, addingSound: false, state: 'running' as const };
+  const plain = { id: 9, partOf: null, addingSound: false, state: 'completed' as const };
+
+  it('is one item: its sound is never listed', () => {
+    expect(shownDownloads([picture, sound, plain]).map((item) => item.id)).toEqual([7, 9]);
+  });
+
+  it('lists what an older app sent, which says nothing about parts', () => {
+    expect(shownDownloads([{ id: 1 }, { id: 2, partOf: undefined }]).map((item) => item.id)).toEqual([1, 2]);
+  });
+
+  it('is finished only once its sound is joined in', () => {
+    expect(finishedForGood(picture)).toBe(false);
+    expect(finishedForGood({ ...picture, addingSound: false })).toBe(true);
+    expect(finishedForGood({ ...sound, state: 'completed' })).toBe(false);
+    expect(finishedForGood(plain)).toBe(true);
+    expect(finishedForGood({ ...plain, state: 'failed' })).toBe(false);
   });
 });
