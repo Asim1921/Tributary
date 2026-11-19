@@ -4,17 +4,14 @@ import * as Accordion from "@radix-ui/react-accordion";
 import type { ReactNode } from "react";
 
 import { Container, Section } from "@/components/ui/container";
-import { site } from "@/lib/site";
 
 import { SectionTitle, Typed } from "./heading";
-
-const link = "text-estuary underline decoration-1 underline-offset-[0.2em] hover:text-foam";
 
 const ITEMS: { id: string; q: string; a: ReactNode }[] = [
   {
     id: "free",
     q: "Is Tributary free?",
-    a: <>Yes. There&rsquo;s no price, no account and no advertising, and the source is available on GitHub.</>,
+    a: <>Yes. There&rsquo;s no price, no account and no advertising.</>,
   },
   {
     id: "safe",
@@ -23,11 +20,9 @@ const ITEMS: { id: string; q: string; a: ReactNode }[] = [
       <>
         The installer isn&rsquo;t signed, so Windows SmartScreen warns about it. Check that your download&rsquo;s
         SHA-256 matches the one on this page, then choose <strong>More info</strong> and{" "}
-        <strong>Run anyway</strong>. You can read the code it&rsquo;s built from at{" "}
-        <a className={link} href={site.repo} target="_blank" rel="noreferrer">
-          github.com/Asim1921/Tributary
-        </a>
-        .
+        <strong>Run anyway</strong>. Tributary has no account and no telemetry, keeps server passwords in Windows
+        Credential Manager and holds browser cookies in memory only. It can also scan each finished download for
+        viruses, if you turn that on.
       </>
     ),
   },
@@ -36,7 +31,7 @@ const ITEMS: { id: string; q: string; a: ReactNode }[] = [
     q: "Does it download YouTube videos?",
     a: (
       <>
-        Yes, through yt-dlp, a free open-source tool Tributary can install for you and check against its published
+        Yes, through yt-dlp, a free tool Tributary can install for you and check against its published
         checksum. Saving video may go against a site&rsquo;s terms, and YouTube&rsquo;s forbid it, so that&rsquo;s your
         decision to make. Protected (DRM or encrypted), live, paid and login-only videos are refused, and yt-dlp is
         never given your cookies.

@@ -3,12 +3,10 @@
 import Link from "next/link";
 import { useEffect, useId, useRef, useState } from "react";
 
-import { GitHubIcon } from "@/components/ui/icons";
-
 type Item = { href: string; label: string };
 
 /** The header's links on narrow screens, behind one button. Escape or a choice closes it. */
-export function MobileMenu({ links, repo }: { links: readonly Item[]; repo: string }) {
+export function MobileMenu({ links }: { links: readonly Item[] }) {
   const [open, setOpen] = useState(false);
   const panelId = useId();
   const button = useRef<HTMLButtonElement>(null);
@@ -66,13 +64,6 @@ export function MobileMenu({ links, repo }: { links: readonly Item[]; repo: stri
               </Link>
             </li>
           ))}
-          <li>
-            <a href={repo} target="_blank" rel="noreferrer" className="flex min-h-12 items-center gap-2 text-body text-foam">
-              <GitHubIcon />
-              <span>Source on GitHub</span>
-              <span className="sr-only"> (opens in a new tab)</span>
-            </a>
-          </li>
         </ul>
       </nav>
     </div>

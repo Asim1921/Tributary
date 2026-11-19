@@ -1,6 +1,6 @@
 "use client";
 
-import { motion } from "motion/react";
+import * as m from "motion/react-m";
 import { useRef } from "react";
 
 import styles from "./channel.module.css";
@@ -12,7 +12,7 @@ export function ChannelLine() {
   const level = useLevel(ref);
   return (
     <div ref={ref} aria-hidden="true" className={`${styles.line} hidden lg:block`}>
-      <motion.div className={styles.fill} style={{ scaleY: level }} />
+      <m.div className={styles.fill} style={{ scaleY: level }} />
     </div>
   );
 }

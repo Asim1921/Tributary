@@ -1,6 +1,6 @@
 # Tributary website: specification
 
-The public website for Tributary, the free, open-source download manager for Windows in this
+The public website for Tributary, the free, closed-source download manager for Windows in this
 repository. It explains what the app does, earns trust, and hands over the installer.
 
 Everything here is binding for whoever builds a part of the site. Where this file and a
@@ -15,7 +15,7 @@ plugin's guidance disagree, this file wins.
 - **Audience**: Windows users who download large files; developers and engineers who will judge
   the quality of the work (the site is also the author's portfolio piece).
 - **Primary job**: make clear what Tributary does, earn trust honestly, and get the installer
-  downloaded. Secondary: point developers to the source.
+  downloaded. Secondary: show the demo footage.
 
 ## 2. Design plan (frontend-design, two passes; this is the revised plan)
 
@@ -64,11 +64,11 @@ Content is left-aligned on a 12-column grid (max width 1200px, gutter 24px, side
 interactive band; a two-column definition list); never a row of identical rounded cards.
 
 ```
- nav  [icon Tributary]   Features  How it works  Browser  Changelog        [GitHub] [Download]
+ nav  [icon Tributary]   Features  How it works  Browser  Changelog        [Download]
  ---------------------------------------------------------------------------------------------
  HERO   H1 (display, 2 lines)                      |  live 3D confluence (streams merge into one
         lede, one sentence                         |  channel, then the arrow). Pointer bends the
-        [Download for Windows] [View the source]   |  streams a little. Static frame if reduced
+        [Download for Windows] [Watch the demo]   |  streams a little. Static frame if reduced
         Version 0.1.0 / 5.2 MB / Windows 10 and 11  |  motion or no WebGL.
         (a small definition list, not a dotted line)|
  ---------------------------------------------------------------------------------------------
@@ -91,7 +91,7 @@ interactive band; a two-column definition list); never a row of identical rounde
  DOWNLOAD (the channel becomes the arrow)  version, size, date, SHA-256 with Copy, requirements,
            install steps (a real sequence, so numbered), SmartScreen note, extension setup steps
  FAQ (accordion)
- footer   source, changelog, privacy, licence note, "Built with Rust and Tauri"
+ footer   download, changelog, privacy, licence note, "Built with Rust and Tauri"
 ```
 
 ### Principles
@@ -121,7 +121,7 @@ Plain, specific, sentence case, active voice, written from the reader's side (ux
 README (`../README.md`) is the source of truth for behaviour. Start every CTA with a verb.
 
 - H1 candidates (pick one, or better): "Every file arrives in one piece." / "Many streams. One file."
-- Primary CTA: "Download for Windows". Secondary: "View the source".
+- Primary CTA: "Download for Windows". Secondary: "Watch the demo".
 - Notes that must appear, in the reader's words: saving video may go against a site's terms, and
   YouTube's forbid it; protected (DRM or encrypted), live, paid and login-only videos are refused;
   yt-dlp is never given your cookies; pictures belong to the people who posted them, and some
@@ -134,8 +134,10 @@ README (`../README.md`) is the source of truth for behaviour. Start every CTA wi
   Microsoft Edge WebView2 is needed (part of Windows 11; the installer fetches it if missing).
 - Installer: `Tributary_0.1.0_x64-setup.exe`. Size and SHA-256 come from the release manifest at
   runtime (see 6); never hard-code them in components.
-- Source: https://github.com/Asim1921/Tributary (public). No licence file yet: say "source
-  available on GitHub", not a licence name.
+- Closed source. Never link to a repository, issue tracker or "view the source"; never say
+  "open source" or "source available" about Tributary. Safety rests on the SHA-256 check, no
+  account, no telemetry, cookies in memory, passwords in Windows Credential Manager and the
+  optional virus scan.
 - Built with Rust, Tauri and Svelte; extension for Chrome and Edge (Manifest V3).
 - Capabilities (from the README; phrase them for readers):
   - Splits a file across several connections; a connection that finishes takes over part of a

@@ -55,7 +55,7 @@ export function DownloadPanel({ release }: { release: Release | null }) {
 
           <div className="lg:col-start-1 lg:row-span-2 lg:row-start-1">
             <ChannelOutlet>
-              <ButtonLink href={site.downloadPath} download size="lg" icon={<DownloadIcon />}>
+              <ButtonLink href={site.downloadPath} download size="lg" icon={<DownloadIcon />} className="relative lg:w-full">
                 Download for Windows
               </ButtonLink>
             </ChannelOutlet>

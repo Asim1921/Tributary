@@ -1,6 +1,7 @@
 "use client";
 
-import { motion, useTransform } from "motion/react";
+import { useTransform } from "motion/react";
+import * as m from "motion/react-m";
 import { useRef } from "react";
 
 import styles from "./channel.module.css";
@@ -32,7 +33,7 @@ export function Branch() {
         strokeLinecap="round"
       >
         <path d={PATH} className={styles.bed} />
-        <motion.path d={PATH} className={styles.stream} style={{ pathLength: level, opacity: shown }} />
+        <m.path d={PATH} className={styles.stream} style={{ pathLength: level, opacity: shown }} />
       </svg>
     </div>
   );

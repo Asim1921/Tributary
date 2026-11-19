@@ -1,6 +1,6 @@
 import { ButtonLink } from "@/components/ui/button";
 import { Container } from "@/components/ui/container";
-import { DownloadIcon, GitHubIcon } from "@/components/ui/icons";
+import { DownloadIcon, PlayIcon } from "@/components/ui/icons";
 import { formatBytes, type Release } from "@/lib/release";
 import { facts, site } from "@/lib/site";
 
@@ -40,13 +40,12 @@ export function Hero({ release }: { release: Release | null }) {
               Download for Windows
             </ButtonLink>
             <ButtonLink
-              href={site.repo}
-              external
+              href="/#footage"
               variant="secondary"
               size="lg"
-              icon={<GitHubIcon className="text-[1.05em]" />}
+              icon={<PlayIcon className="text-[1.05em]" />}
             >
-              View the source<span className="sr-only"> (opens in a new tab)</span>
+              Watch the demo
             </ButtonLink>
           </div>
           <dl className="mt-12 flex flex-wrap gap-x-10 gap-y-5 border-t border-bank pt-6">

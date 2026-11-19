@@ -17,7 +17,7 @@ const estuary = "#4C9BD1";
 const foam = "#E4F1F0";
 const silt = "#8FA9AC";
 
-// OFL fonts kept in the repository (licences beside them), so building never asks Google.
+// OFL fonts kept beside the code (licences next to them), so building never asks Google.
 const fonts = join(process.cwd(), "components", "pages", "og");
 
 export default async function OpenGraphImage() {

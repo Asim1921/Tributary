@@ -39,13 +39,13 @@ scheme), and look at every screenshot yourself. Put scratch scripts and screensh
 
 ## Shared pieces (already written; import them)
 
-- `@/lib/site`: `site` (name, url, repo, issues, downloadPath = `/api/download/latest`),
+- `@/lib/site`: `site` (name, url, downloadPath = `/api/download/latest`),
   `facts` (requirements, proof line numbers, the history milestones from SPEC section 4).
 - `@/lib/release`: `type Release`, `getLatestRelease(): Promise<Release | null>`,
   `getReleases(): Promise<Release[]>`, `formatBytes(n)`, `formatDate(iso)`. Server only.
 - `@/components/ui/button`: `ButtonLink` (`href`, `variant: 'primary' | 'secondary' | 'quiet'`,
   `size: 'md' | 'lg'`, `icon?`, `download?`, `external?`).
-- `@/components/ui/icons`: `DownloadIcon`, `GitHubIcon`, `CopyIcon`, `CheckIcon`, `SunIcon`,
+- `@/components/ui/icons`: `DownloadIcon`, `CopyIcon`, `CheckIcon`, `SunIcon`,
   `MoonIcon`, `PlayIcon` (all `className?`, decorative, 1em sized, `aria-hidden`).
 - `@/components/ui/copy-button`: `CopyButton` (`value`, `label`, `copiedLabel?`), client.
 - `@/components/ui/container`: `Container` (`as?`, `className?`), max width 1200px with the

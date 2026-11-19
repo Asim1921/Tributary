@@ -1,8 +1,8 @@
 import { Container } from "@/components/ui/container";
 import { formatDate } from "@/lib/release";
-import { facts, site } from "@/lib/site";
+import { facts } from "@/lib/site";
 
-/** One sentence of evidence, set as type: what checks the app, counted from the repository. */
+/** One sentence of evidence, set as type: what checks the app. */
 export function ProofLine() {
   const proof = facts.proof;
   const browsers = proof.browsers.join(" and ");
@@ -14,16 +14,7 @@ export function ProofLine() {
           {proof.endToEndSteps} end-to-end steps, with the extension tested in real {browsers}.
         </p>
         <p className="mt-5 text-caption text-silt">
-          Counted on {formatDate(proof.checkedOn)} from{" "}
-          <a
-            href={site.repo}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex min-h-11 items-center text-foam underline decoration-bank underline-offset-4 hover:decoration-stream"
-          >
-            the source on GitHub
-          </a>
-          .
+          Counted on {formatDate(proof.checkedOn)}.
         </p>
       </Container>
     </div>

@@ -2,6 +2,7 @@ import Image from "next/image";
 import type { ReactNode } from "react";
 
 import { Branch } from "@/components/channel/branch";
+import { DepthFrame } from "@/components/finale/depth-frame";
 import { Container, Section } from "@/components/ui/container";
 
 import { BlockTitle, Key, Lede, SectionTitle } from "./heading";
@@ -22,13 +23,14 @@ function Note({ children, className = "" }: { children: ReactNode; className?: s
   return <p className={`border-l-2 border-bank pl-4 text-silt ${className}`}>{children}</p>;
 }
 
+/** A real still from the demo, in a frame that answers the pointer. */
 function Still({ src, width, height, alt, caption }: { src: string; width: number; height: number; alt: string; caption: string }) {
   return (
     <figure>
-      <div className="overflow-hidden rounded-l border border-bank">
+      <DepthFrame>
         <Image src={src} width={width} height={height} alt={alt} className="block h-auto w-full" />
-      </div>
-      <figcaption className="mt-3 text-caption text-silt">{caption}</figcaption>
+      </DepthFrame>
+      <figcaption className="mt-3.5 text-caption text-silt">{caption}</figcaption>
     </figure>
   );
 }
@@ -87,7 +89,7 @@ export function Features() {
                 </p>
                 <p className={body}>
                   YouTube and sites like it feed their player by script, so there&rsquo;s no file to see. For those,
-                  Tributary hands the page to yt-dlp, a free open-source tool it can install for you, checked against
+                  Tributary hands the page to yt-dlp, a free tool it can install for you, checked against
                   its published checksum.
                 </p>
                 <Note className="mt-6 max-w-[58ch]">

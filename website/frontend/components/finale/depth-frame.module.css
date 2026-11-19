@@ -1,0 +1,54 @@
+/*
+ * A frame for real footage and stills: a bezel in the raised surface, a hairline round the
+ * picture, and a faint rim of light along the top. Under a mouse it turns a little towards the
+ * pointer and catches its light; with reduced motion, or by touch, it stays still.
+ */
+
+.stage {
+  perspective: 1400px;
+}
+
+.frame {
+  --rim: color-mix(in oklab, var(--foam) 9%, transparent);
+  --sheen: color-mix(in oklab, var(--foam) 11%, transparent);
+  position: relative;
+  border: 1px solid var(--bank);
+  border-radius: 20px;
+  background: var(--channel);
+  padding: 6px;
+  box-shadow: inset 0 1px 0 var(--rim);
+}
+
+@media (min-width: 40rem) {
+  .frame {
+    padding: 8px;
+  }
+}
+
+/* By day the frame is white on the pale page; the light is white too, and the rim a soft shade. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .frame {
+    --rim: color-mix(in oklab, var(--bank) 60%, transparent);
+    --sheen: color-mix(in oklab, var(--channel) 46%, transparent);
+  }
+}
+
+:root[data-theme="light"] .frame {
+  --rim: color-mix(in oklab, var(--bank) 60%, transparent);
+  --sheen: color-mix(in oklab, var(--channel) 46%, transparent);
+}
+
+.picture {
+  position: relative;
+  overflow: hidden;
+  border-radius: 13px;
+  box-shadow: 0 0 0 1px var(--bank);
+  isolation: isolate;
+}
+
+.light {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+}

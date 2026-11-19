@@ -1,3 +1,4 @@
+import { DepthFrame } from "@/components/finale/depth-frame";
 import { Container, Section } from "@/components/ui/container";
 
 import { Lede, SectionTitle } from "./heading";
@@ -16,7 +17,7 @@ export function Footage() {
             video quality chosen, and the finished list.
           </Lede>
           <figure className="mt-10 max-w-[64rem]">
-            <div className="overflow-hidden rounded-l border border-bank bg-channel">
+            <DepthFrame tilt={1.4}>
               <video
                 controls
                 muted
@@ -25,15 +26,15 @@ export function Footage() {
                 poster="/media/tributary-demo-poster.webp"
                 width={1280}
                 height={720}
-                className="block h-auto w-full"
+                className="block h-auto w-full bg-riverbed"
                 aria-describedby="footage-caption"
               >
                 <source src="/media/tributary-demo.mp4" type="video/mp4" />
                 Your browser can&rsquo;t play this video. It shows Tributary taking over a download from Chrome and
                 saving a video.
               </video>
-            </div>
-            <figcaption id="footage-caption" className="mt-3 max-w-[62ch] text-caption text-silt">
+            </DepthFrame>
+            <figcaption id="footage-caption" className="mt-3.5 max-w-[62ch] text-caption text-silt">
               The demo is silent. It saves Big Buck Bunny, a short film that is free to copy. Big Buck Bunny (c)
               Blender Foundation, CC BY 3.0.
             </figcaption>

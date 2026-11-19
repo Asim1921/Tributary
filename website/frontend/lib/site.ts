@@ -5,8 +5,6 @@ export const site = {
   description:
     "Tributary splits each download across several connections, resumes after a crash, takes over downloads from Chrome and Edge, and saves video from the pages you watch. Free, for Windows.",
   url: process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:8080",
-  repo: "https://github.com/Asim1921/Tributary",
-  issues: "https://github.com/Asim1921/Tributary/issues",
   /** The API counts the download and nginx hands over the installer. */
   downloadPath: "/api/download/latest",
 } as const;

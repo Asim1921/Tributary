@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
-import { site } from "@/lib/site";
 import { ButtonLink } from "@/components/ui/button";
 import { Container } from "@/components/ui/container";
 import { DownloadIcon } from "@/components/ui/icons";
@@ -48,16 +47,6 @@ export default function NotFound() {
                   </Link>
                 </li>
               ))}
-              <li>
-                <a
-                  href={site.repo}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex min-h-11 items-center text-silt underline decoration-bank underline-offset-[0.3em] hover:text-foam hover:decoration-(--current)"
-                >
-                  Source on GitHub
-                </a>
-              </li>
             </ul>
           </nav>
         </div>

@@ -3,7 +3,7 @@ import Link from "next/link";
 import { site } from "@/lib/site";
 import { ButtonLink } from "@/components/ui/button";
 import { Container } from "@/components/ui/container";
-import { DownloadIcon, GitHubIcon } from "@/components/ui/icons";
+import { DownloadIcon } from "@/components/ui/icons";
 
 import { Logo } from "./logo";
 import { MobileMenu } from "./mobile-menu";
@@ -39,15 +39,6 @@ export function Header() {
           </ul>
         </nav>
         <div className="ml-auto flex items-center gap-1 md:ml-0">
-          <a
-            href={site.repo}
-            target="_blank"
-            rel="noreferrer"
-            className="hidden min-h-11 items-center gap-2 rounded-s px-3 text-[0.95rem] text-silt transition-colors duration-[160ms] hover:text-foam sm:inline-flex"
-          >
-            <GitHubIcon className="text-[1.1rem]" />
-            <span>Source</span>
-          </a>
           <ThemeToggle />
           {/* On phones the hero's full-width button and the menu offer the download instead. */}
           <span className="hidden sm:block">
@@ -55,7 +46,7 @@ export function Header() {
               Download
             </ButtonLink>
           </span>
-          <MobileMenu links={links} repo={site.repo} />
+          <MobileMenu links={links} />
         </div>
       </Container>
     </header>

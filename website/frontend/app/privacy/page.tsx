@@ -84,7 +84,7 @@ export default function PrivacyPage() {
           items={[
             "It sets no cookies.",
             "It runs no analytics, tracking or advertising scripts.",
-            "It loads nothing from other companies: the fonts, pictures and video all come from this site. Links to GitHub take you there only when you follow them.",
+            "It loads nothing from other companies: the fonts, pictures and video all come from this site.",
           ]}
         />
       </DocSection>
@@ -103,25 +103,11 @@ export default function PrivacyPage() {
             "Passwords for sites and servers are kept in Windows Credential Manager, never in a file.",
             "Cookies that your browser passes on for a download are held in memory only and never written to disk, so after a restart such a download may need its link again.",
             "The browser extension talks only to Tributary on your computer.",
-            "Tributary connects to the sites you download from, and to yt-dlp's releases on GitHub when you ask it to install or update yt-dlp. yt-dlp is never given your cookies or logins.",
+            "Tributary connects to the sites you download from, and to the place yt-dlp is published when you ask it to install or update yt-dlp. yt-dlp is never given your cookies or logins.",
           ]}
         />
       </DocSection>
 
-      <DocSection id="questions" title="Questions">
-        <p className="text-silt">
-          Ask in the project&apos;s{" "}
-          <a
-            href={site.issues}
-            target="_blank"
-            rel="noreferrer"
-            className="text-estuary underline decoration-1 underline-offset-[0.2em] hover:text-foam"
-          >
-            issues on GitHub
-          </a>
-          . Issues are public, so leave out anything personal.
-        </p>
-      </DocSection>
     </>
   );
 }

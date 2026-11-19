@@ -33,7 +33,6 @@ export function softwareApplication(release: Release | null): JsonLdObject {
     softwareRequirements: (release?.requirements.length ? release.requirements : facts.requirements).join("; "),
     isAccessibleForFree: true,
     offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
-    sameAs: site.repo,
   };
 }
 

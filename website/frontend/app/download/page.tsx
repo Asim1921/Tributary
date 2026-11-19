@@ -5,7 +5,7 @@ import { softwareApplication } from "@/lib/jsonld";
 import { getLatestRelease } from "@/lib/release";
 import { facts, site } from "@/lib/site";
 import { ButtonLink } from "@/components/ui/button";
-import { DownloadIcon, GitHubIcon } from "@/components/ui/icons";
+import { DownloadIcon, PlayIcon } from "@/components/ui/icons";
 import { CodeBlock } from "@/components/pages/code-block";
 import { DocSection } from "@/components/pages/doc-section";
 import { ReleasePanel } from "@/components/pages/download/release-panel";
@@ -66,8 +66,8 @@ export default async function DownloadPage() {
           <ButtonLink href={site.downloadPath} size="lg" icon={<DownloadIcon className="text-[1.15em]" />} download>
             Download for Windows
           </ButtonLink>
-          <ButtonLink href={site.repo} variant="secondary" size="lg" icon={<GitHubIcon />} external>
-            View the source
+          <ButtonLink href="/#footage" variant="secondary" size="lg" icon={<PlayIcon />}>
+            Watch the demo
           </ButtonLink>
         </div>
 
