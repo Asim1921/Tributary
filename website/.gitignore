@@ -1,0 +1,15 @@
+node_modules/
+.next/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+downloads/*.exe
+test-results/
+playwright-report/
+artifacts/
+*.tsbuildinfo
+
+.next-*/
+next-env.d.ts

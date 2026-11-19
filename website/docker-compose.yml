@@ -1,0 +1,158 @@
+# Tributary website stack. Run from this folder:  docker compose up -d --build
+name: tributary-site
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  nginx:
+    image: nginx:1.28-alpine
+    restart: unless-stopped
+    <<: *hardening
+    logging: *logging
+    ports:
+      - "${SITE_PORT:-8080}:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/snippets:/etc/nginx/snippets:ro
+      - ./downloads:/srv/downloads:ro
+      - nginx_cache:/var/cache/nginx
+    networks: [edge]
+    depends_on:
+      web:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/healthz >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 256M }
+
+  web:
+    build:
+      context: ./frontend
+    image: tributary-site-web:local
+    restart: unless-stopped
+    <<: *hardening
+    logging: *logging
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+      INTERNAL_API_URL: http://api:8000
+      NEXT_TELEMETRY_DISABLED: "1"
+    networks: [edge]
+    expose: ["3000"]
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    deploy:
+      replicas: 2
+      resources:
+        limits: { cpus: "1.0", memory: 384M }
+
+  api:
+    build:
+      context: ./backend
+    image: tributary-site-api:local
+    restart: unless-stopped
+    <<: *hardening
+    logging: *logging
+    environment:
+      MONGO_URL: mongodb://mongo:27017/${MONGO_DB:-tributary}
+      MONGO_DB: ${MONGO_DB:-tributary}
+      REDIS_URL: redis://redis:6379/0
+      DOWNLOADS_DIR: /srv/downloads
+      COUNT_SALT: ${COUNT_SALT:?Set COUNT_SALT in .env (copy .env.example)}
+      CACHE_TTL_RELEASES: ${CACHE_TTL_RELEASES:-60}
+      CACHE_TTL_STATS: ${CACHE_TTL_STATS:-30}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - ./downloads:/srv/downloads:ro
+    networks: [edge, data]
+    expose: ["8000"]
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).status == 200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    deploy:
+      replicas: 2
+      resources:
+        limits: { cpus: "1.0", memory: 256M }
+
+  mongo:
+    image: mongo:8.0
+    restart: unless-stopped
+    <<: *hardening
+    logging: *logging
+    command: ["mongod", "--bind_ip_all", "--wiredTigerCacheSizeGB", "0.25", "--quiet"]
+    volumes:
+      - mongo_data:/data/db
+      - mongo_config:/data/configdb
+    networks: [data]
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval \"db.adminCommand('ping').ok\" | grep -q 1"]
+      interval: 10s
+      timeout: 8s
+      retries: 6
+      start_period: 20s
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 640M }
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    <<: *hardening
+    logging: *logging
+    command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru", "--save", "60", "1", "--appendonly", "no"]
+    volumes:
+      - redis_data:/data
+    networks: [data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 192M }
+
+networks:
+  edge:
+    driver: bridge
+  data:
+    driver: bridge
+    internal: true
+
+volumes:
+  mongo_data:
+  mongo_config:
+  redis_data:
+  nginx_cache:

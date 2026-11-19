@@ -1,0 +1,45 @@
+{
+  "name": "tributary-site-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The public website for Tributary, a download manager for Windows.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "next dev -p 3100",
+    "build": "next build",
+    "start": "next start -p 3100",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm run lint",
+    "media": "node scripts/make-media.mjs",
+    "size": "node scripts/bundle-size.mjs",
+    "screens": "node scripts/screenshots.mjs",
+    "e2e": "playwright test"
+  },
+  "dependencies": {
+    "@radix-ui/react-accordion": "1.3.1",
+    "@radix-ui/react-toast": "1.3.1",
+    "@radix-ui/react-tooltip": "1.4.1",
+    "@react-three/drei": "10.7.9",
+    "@react-three/fiber": "9.8.2",
+    "motion": "14.14.0",
+    "next": "16.4.6",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "three": "0.187.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.1",
+    "@tailwindcss/postcss": "4.3.5",
+    "@types/node": "22.20.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@types/three": "0.187.0",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.4.6",
+    "tailwindcss": "4.3.5",
+    "typescript": "5.9.3"
+  }
+}

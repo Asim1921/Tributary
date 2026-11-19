@@ -1,0 +1,191 @@
+@import "tailwindcss";
+
+/*
+ * Tributary's site: the page reads like water flowing downhill to the download.
+ * Dark first (the river at night); the light theme is the same river by day.
+ * Every color is a token; components never use a literal color.
+ */
+:root {
+  color-scheme: dark;
+  --riverbed: #05161b;
+  --channel: #0b242b;
+  --bank: #183a42;
+  --current: #2fc4b2;
+  --estuary: #4c9bd1;
+  --foam: #e4f1f0;
+  --silt: #8fa9ac;
+  --on-current: #032622;
+  --ok: #4ade80;
+  --warn: #fdb022;
+  --fault: #f97066;
+  --veil: rgb(5 22 27 / 0.78);
+  --glow: rgb(47 196 178 / 0.16);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --riverbed: #f1f6f5;
+    --channel: #ffffff;
+    --bank: #d3e2e0;
+    --current: #0f766e;
+    --estuary: #134e6f;
+    --foam: #0d2a2e;
+    --silt: #4a6366;
+    --on-current: #ffffff;
+    --ok: #15803d;
+    --warn: #a15c07;
+    --fault: #b42318;
+    --veil: rgb(241 246 245 / 0.82);
+    --glow: rgb(15 118 110 / 0.1);
+  }
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --riverbed: #f1f6f5;
+  --channel: #ffffff;
+  --bank: #d3e2e0;
+  --current: #0f766e;
+  --estuary: #134e6f;
+  --foam: #0d2a2e;
+  --silt: #4a6366;
+  --on-current: #ffffff;
+  --ok: #15803d;
+  --warn: #a15c07;
+  --fault: #b42318;
+  --veil: rgb(241 246 245 / 0.82);
+  --glow: rgb(15 118 110 / 0.1);
+}
+
+@theme inline {
+  --color-riverbed: var(--riverbed);
+  --color-channel: var(--channel);
+  --color-bank: var(--bank);
+  --color-stream: var(--current);
+  --color-estuary: var(--estuary);
+  --color-foam: var(--foam);
+  --color-silt: var(--silt);
+  --color-on-current: var(--on-current);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-fault: var(--fault);
+  --color-veil: var(--veil);
+
+  --font-display: var(--font-bricolage), "Segoe UI", system-ui, sans-serif;
+  --font-text: var(--font-public), "Segoe UI", system-ui, sans-serif;
+  --font-code: var(--font-jetbrains), ui-monospace, "Cascadia Code", Consolas, monospace;
+
+  /* A major third from 17px; the two largest steps scale with the screen. */
+  --text-caption: 0.85rem;
+  --text-caption--line-height: 1.45;
+  --text-body: 1.0625rem;
+  --text-body--line-height: 1.6;
+  --text-lead: 1.328rem;
+  --text-lead--line-height: 1.5;
+  --text-h4: 1.66rem;
+  --text-h4--line-height: 1.25;
+  --text-h3: 2.075rem;
+  --text-h3--line-height: 1.15;
+  --text-h2: clamp(2.075rem, 1.55rem + 1.7vw, 2.594rem);
+  --text-h2--line-height: 1.1;
+  --text-h1: clamp(2.6rem, 1.75rem + 3.6vw, 4.05rem);
+  --text-h1--line-height: 1.04;
+  --text-hero: clamp(2.85rem, 1.7rem + 4.9vw, 5.06rem);
+  --text-hero--line-height: 1;
+
+  --radius-s: 6px;
+  --radius-m: 12px;
+  --radius-l: 20px;
+
+  --ease-flow: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@layer base {
+  html {
+    scroll-padding-top: 5.5rem;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    html {
+      scroll-behavior: smooth;
+    }
+  }
+
+  body {
+    background: var(--riverbed);
+    color: var(--foam);
+    font-family: var(--font-text);
+    font-size: var(--text-body);
+    line-height: 1.6;
+    font-feature-settings: "kern", "liga", "calt";
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-display);
+    text-wrap: balance;
+    letter-spacing: -0.025em;
+  }
+
+  p,
+  li,
+  dd {
+    text-wrap: pretty;
+  }
+
+  ::selection {
+    background: var(--current);
+    color: var(--on-current);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--estuary);
+    outline-offset: 3px;
+    border-radius: 4px;
+  }
+
+  a {
+    color: inherit;
+    text-underline-offset: 0.2em;
+    text-decoration-thickness: 1px;
+  }
+
+  code,
+  kbd,
+  pre {
+    font-family: var(--font-code);
+  }
+
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Visible only to screen readers, until focused (the skip link). */
+  .sr-only-focusable:not(:focus):not(:focus-within) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}

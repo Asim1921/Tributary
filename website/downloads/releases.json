@@ -1,0 +1,25 @@
+{
+  "releases": [
+    {
+      "version": "0.1.0",
+      "file": "Tributary_0.1.0_x64-setup.exe",
+      "size": 5455644,
+      "sha256": "31b8cc0c00144071622a6122489cd18f6a54098c6b2017b19e19f03939241e2b",
+      "published": "2026-11-19",
+      "notes": [
+        "Splits each download across several connections, and resumes after a crash, a shutdown or a dropped connection.",
+        "Takes over downloads from Chrome and Edge, with a right-click menu for links and a download button beside video players.",
+        "Saves video, including HLS, DASH and YouTube through yt-dlp, and joins picture and sound into one file.",
+        "Saves every picture and video on a page, and explores whole websites with the site grabber.",
+        "Queues, a scheduler, a speed limiter and quotas, FTP, server logins and proxies.",
+        "Keeps passwords in Windows Credential Manager. No account and no telemetry."
+      ],
+      "requirements": [
+        "Windows 10 or 11, 64-bit",
+        "Installs for your user only; no administrator rights needed",
+        "Microsoft Edge WebView2 (part of Windows 11; the installer fetches it if it is missing)",
+        "Chrome or Edge for the browser extension (optional)"
+      ]
+    }
+  ]
+}

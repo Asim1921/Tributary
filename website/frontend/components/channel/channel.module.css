@@ -1,0 +1,101 @@
+/*
+ * The channel: one line down the page's left axis on wide screens (the same edge as the hero's
+ * text), which the features join and which ends at the download button. It is decorative:
+ * everything it points at is in the text. With reduced motion it is drawn full and never moves.
+ */
+
+.line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  /* The content column's left edge: the Container's 2rem padding, centred at 1200px. */
+  left: max(2rem, calc(50% - 600px + 2rem));
+  width: 2px;
+  margin-left: -1px;
+  background: color-mix(in oklab, var(--current) 30%, var(--bank));
+  pointer-events: none;
+}
+
+.fill {
+  position: absolute;
+  inset: 0;
+  background: var(--current);
+  transform-origin: 50% 0;
+}
+
+/* A feature's branch, from beside its heading (1rem left of the text) into the channel. */
+.branch {
+  position: absolute;
+  left: -6rem;
+  top: 0.8rem;
+  width: 5rem;
+  height: 7.5rem;
+  pointer-events: none;
+}
+
+/* The last stretch, through the download section's top padding. */
+.leadIn {
+  position: absolute;
+  left: 0;
+  bottom: 100%;
+  height: clamp(4.5rem, 9vw, 8rem);
+  width: 2px;
+  margin-left: -1px;
+  background: color-mix(in oklab, var(--current) 30%, var(--bank));
+  pointer-events: none;
+}
+
+/* The bend, the arrow and the base bar around the download button. */
+.outlet {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 20rem;
+  height: 15rem;
+  pointer-events: none;
+}
+
+.tray {
+  position: relative;
+  margin-top: 0.875rem;
+  width: 100%;
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--current) 30%, var(--bank));
+  overflow: hidden;
+}
+
+.trayFill {
+  position: absolute;
+  inset: 0;
+  background: var(--current);
+  transform-origin: 50% 50%;
+}
+
+.bed {
+  stroke: color-mix(in oklab, var(--current) 30%, var(--bank));
+}
+
+.water {
+  stroke: var(--current);
+}
+
+/* The icon draws its two streams a little lighter than the channel they join. */
+.stream {
+  stroke: var(--current);
+  stroke-opacity: 0.72;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fill,
+  .trayFill {
+    transform: none !important;
+  }
+
+  .water,
+  .stream {
+    stroke-dasharray: none !important;
+    stroke-dashoffset: 0 !important;
+    opacity: 1 !important;
+  }
+}
