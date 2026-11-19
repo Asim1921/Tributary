@@ -14,8 +14,8 @@ log = logging.getLogger("tributary.seed")
 CACHE_KEYS = ("rel:latest", "rel:all")
 
 
-def load_manifest(downloads_dir: Path) -> list[Release]:
-    path = downloads_dir / "releases.json"
+def load_manifest(downloads_dir: Path, path: Path | None = None) -> list[Release]:
+    path = path or downloads_dir / "releases.json"
     if not path.is_file():
         log.warning("no release manifest", extra={"path": str(path)})
         return []
@@ -44,12 +44,22 @@ def file_matches(downloads_dir: Path, release: Release) -> bool:
     return True
 
 
-async def seed_releases(repo: Repository, cache: Cache, downloads_dir: Path) -> int:
-    """Upsert every valid release (idempotent, safe with several replicas). Returns the count seeded."""
-    releases = await asyncio.to_thread(load_manifest, downloads_dir)
+async def seed_releases(
+    repo: Repository,
+    cache: Cache,
+    downloads_dir: Path,
+    manifest_path: Path | None = None,
+    verify_files: bool = True,
+) -> int:
+    """Upsert every valid release (idempotent, safe with several replicas). Returns the count seeded.
+
+    With verify_files=False (installer hosted elsewhere) the manifest alone is trusted: size and
+    SHA-256 come from it and the installer need not exist on disk.
+    """
+    releases = await asyncio.to_thread(load_manifest, downloads_dir, manifest_path)
     seeded = 0
     for release in releases:
-        if await asyncio.to_thread(file_matches, downloads_dir, release):
+        if not verify_files or await asyncio.to_thread(file_matches, downloads_dir, release):
             await repo.upsert_release(release)
             seeded += 1
     if seeded:

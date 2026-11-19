@@ -1,6 +1,6 @@
 /**
  * Release information from the API. Pages are rendered on the server, so this runs there:
- * inside the stack the API is at INTERNAL_API_URL. When it can't be reached (at build time, or
+ * the API is at INTERNAL_API_URL, else API_ORIGIN (Vercel), else the Docker default. When it can't be reached (at build time, or
  * if the API is down), callers get null or an empty list and the page renders without the
  * live figures.
  */
@@ -15,7 +15,9 @@ export type Release = {
   requirements: string[];
 };
 
-const API = process.env.INTERNAL_API_URL || "http://api:8000";
+const API = (
+  process.env.INTERNAL_API_URL || process.env.API_ORIGIN || "http://api:8000"
+).replace(/\/+$/, "");
 const TIMEOUT_MS = 2500;
 
 async function getJson<T>(path: string): Promise<T | null> {

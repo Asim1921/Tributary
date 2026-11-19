@@ -6,6 +6,9 @@
   Takes ../target/release/bundle/nsis/Tributary_<Version>_x64-setup.exe, copies it to
   website/downloads/, computes its size and SHA-256, and upserts the entry for <Version> in
   website/downloads/releases.json (the published date is the installer file's date).
+  The same manifest is also written to website/backend/releases.json: the API project on Vercel
+  only sees the backend folder, so it reads that copy. Commit it; the installer itself stays out
+  of git (upload it to Vercel Blob, see README "Deploying on Vercel").
   Release notes and requirements come from the table below; add an entry there for a new version.
 
 .EXAMPLE
@@ -25,6 +28,7 @@ $fileName  = "Tributary_${Version}_x64-setup.exe"
 $source    = Join-Path $repoRoot "target/release/bundle/nsis/$fileName"
 $downloads = Join-Path $siteRoot 'downloads'
 $manifest  = Join-Path $downloads 'releases.json'
+$apiManifest = Join-Path (Join-Path $siteRoot 'backend') 'releases.json'
 
 $requirements = @(
     'Windows 10 or 11, 64-bit',
@@ -79,10 +83,13 @@ $releases = @($releases) + @([pscustomobject]$entry) |
     Sort-Object { [version]$_.version } -Descending
 
 $json = [ordered]@{ releases = @($releases) } | ConvertTo-Json -Depth 6
-[System.IO.File]::WriteAllText($manifest, $json + "`n", (New-Object System.Text.UTF8Encoding($false)))
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($manifest, $json + "`n", $utf8)
+[System.IO.File]::WriteAllText($apiManifest, $json + "`n", $utf8)
 
 Write-Host "Published $fileName"
 Write-Host "  size      $($item.Length) bytes"
 Write-Host "  sha256    $sha256"
 Write-Host "  published $published"
 Write-Host "  manifest  $manifest"
+Write-Host "  api copy  $apiManifest"

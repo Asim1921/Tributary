@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from .cache import RedisCache
 from .config import Settings
 from .logging_setup import setup_logging
+from .memory import MemoryCache, MemoryRepository
 from .models import VERSION_PATTERN, Release
 from .ports import Cache, Repository
 from .repo import MongoRepository
@@ -29,17 +30,66 @@ def ua_family(user_agent: str) -> str:
     return "windows" if "windows" in user_agent.lower() else "other"
 
 
+APP_KWARGS = dict(title="Tributary website API", docs_url=None, redoc_url=None, openapi_url=None)
+
+
 def create_app(
     settings: Settings | None = None,
     repo: Repository | None = None,
     cache: Cache | None = None,
 ) -> FastAPI:
+    """Build a fresh app (used by the tests). The deployed app is the module-level `app` below."""
+    return configure(FastAPI(**APP_KWARGS), settings, repo, cache)
+
+
+def configure(
+    app: FastAPI,
+    settings: Settings | None = None,
+    repo: Repository | None = None,
+    cache: Cache | None = None,
+) -> FastAPI:
+    """Attach lifespan and routes to `app`. Nothing connects to Mongo or Redis here."""
     settings = settings or Settings()
     setup_logging(settings.log_level)
-    repo = repo or MongoRepository(settings.mongo_url, settings.mongo_db)
-    cache = cache or RedisCache(settings.redis_url)
+    lazy = settings.lazy_startup
+    # No MONGO_URL / MONGODB_URI (or REDIS_URL / KV_URL) in the environment: run on in-memory
+    # stand-ins. Releases come from the manifest; counts last only for this process.
+    mongo_off = repo is None and not settings.mongo_configured
+    redis_off = cache is None and not settings.redis_configured
+    if repo is None:
+        repo = MemoryRepository() if mongo_off else MongoRepository(
+            settings.mongo_url, settings.mongo_db, settings.mongo_timeout_ms or (5000 if lazy else 2000)
+        )
+    if cache is None:
+        cache = MemoryCache() if redis_off else RedisCache(settings.redis_url)
     downloads_dir = Path(settings.downloads_dir)
+    manifest_path = settings.manifest_path
+    redirect_base = settings.download_base_url
     instance = socket.gethostname()
+    if lazy and settings.count_salt == "change-me":
+        log.warning("COUNT_SALT is the default value; set a long random one")
+
+    ready = False
+    ready_lock: asyncio.Lock | None = None
+
+    async def ensure_ready() -> None:
+        """Serverless mode: index and seed once per instance, on first use. Failures retry on a later request."""
+        nonlocal ready, ready_lock
+        if not lazy or ready:
+            return
+        if ready_lock is None:
+            ready_lock = asyncio.Lock()
+        async with ready_lock:
+            if ready:
+                return
+            try:
+                await repo.ensure_indexes()
+                await seed_releases(
+                    repo, cache, downloads_dir, manifest_path, verify_files=redirect_base is None
+                )
+                ready = True
+            except Exception as exc:
+                log.warning("lazy initialisation failed; will retry", extra={"error": type(exc).__name__})
 
     async def initialise() -> None:
         """Connect, index and seed, retrying with backoff while Mongo or Redis come up."""
@@ -51,7 +101,7 @@ def create_app(
                 await repo.ping()
                 await cache.ping()
                 await repo.ensure_indexes()
-                await seed_releases(repo, cache, downloads_dir)
+                await seed_releases(repo, cache, downloads_dir, manifest_path)
                 log.info("startup complete", extra={"attempts": attempt})
                 return
             except asyncio.CancelledError:
@@ -66,6 +116,12 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        if lazy:
+            try:
+                yield
+            finally:
+                await asyncio.gather(repo.close(), cache.close(), return_exceptions=True)
+            return
         task = asyncio.create_task(initialise())
         try:
             await asyncio.wait_for(asyncio.shield(task), timeout=settings.startup_wait_seconds)
@@ -78,13 +134,7 @@ def create_app(
             await asyncio.gather(task, return_exceptions=True)
             await asyncio.gather(repo.close(), cache.close(), return_exceptions=True)
 
-    app = FastAPI(
-        title="Tributary website API",
-        lifespan=lifespan,
-        docs_url=None,
-        redoc_url=None,
-        openapi_url=None,
-    )
+    app.router.lifespan_context = lifespan
 
     # ---- helpers -------------------------------------------------------------------------
 
@@ -148,6 +198,15 @@ def create_app(
         if release is None:
             raise HTTPException(404, "Release not found")
         # The file name comes only from the manifest record (validated at load), never from the request.
+        if redirect_base is not None:
+            try:
+                await count_download(request, release.version)
+            except Exception:
+                log.warning("could not count download", exc_info=True)
+            return Response(
+                status_code=302,
+                headers={"Location": f"{redirect_base}/{release.file}", "Cache-Control": "no-store"},
+            )
         if not (downloads_dir / release.file).is_file():
             log.error("installer file missing", extra={"version": release.version})
             raise HTTPException(404, "Release not found")
@@ -169,15 +228,17 @@ def create_app(
 
     @app.get("/api/health")
     async def health() -> Response:
-        async def probe(fn) -> str:
+        async def probe(fn, off: bool) -> str:
+            if off:
+                return "not configured"
             try:
                 await asyncio.wait_for(fn(), timeout=2)
                 return "ok"
             except Exception:
                 return "down"
 
-        mongo, redis_ = await asyncio.gather(probe(repo.ping), probe(cache.ping))
-        ok = mongo == "ok" and redis_ == "ok"
+        mongo, redis_ = await asyncio.gather(probe(repo.ping, mongo_off), probe(cache.ping, redis_off))
+        ok = "down" not in (mongo, redis_)
         return JSONResponse(
             {"status": "ok" if ok else "degraded", "mongo": mongo, "redis": redis_, "instance": instance},
             status_code=200 if ok else 503,
@@ -186,6 +247,7 @@ def create_app(
 
     @app.get("/api/releases/latest")
     async def releases_latest() -> Response:
+        await ensure_ready()
         release = await latest_release()
         if release is None:
             raise HTTPException(404, "No releases")
@@ -193,21 +255,25 @@ def create_app(
 
     @app.get("/api/releases")
     async def releases() -> Response:
+        await ensure_ready()
         return json_response(json.dumps([r.model_dump() for r in await all_releases()]))
 
     @app.get("/api/download/latest")
     async def download_latest(request: Request) -> Response:
+        await ensure_ready()
         return await serve_installer(request, await latest_release())
 
     @app.get("/api/download/{version}")
     async def download_version(
         request: Request, version: str = PathParam(pattern=VERSION_PATTERN)
     ) -> Response:
+        await ensure_ready()
         release = next((r for r in await all_releases() if r.version == version), None)
         return await serve_installer(request, release)
 
     @app.get("/api/stats")
     async def stats() -> Response:
+        await ensure_ready()
         cached = await cache_get(KEY_STATS)
         if cached is not None:
             return json_response(cached)
@@ -219,3 +285,9 @@ def create_app(
         return json_response(body)
 
     return app
+
+
+# The ASGI app that Vercel (top-level `app` in app/main.py) and the Docker image (`app.main:app`) run.
+# Settings come from the environment; Mongo and Redis are only contacted when a request needs them.
+app = FastAPI(**APP_KWARGS)
+configure(app)

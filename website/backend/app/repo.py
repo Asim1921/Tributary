@@ -7,9 +7,9 @@ from .models import Release, version_key
 
 
 class MongoRepository:
-    def __init__(self, url: str, db_name: str) -> None:
+    def __init__(self, url: str, db_name: str, timeout_ms: int = 2000) -> None:
         self._client: AsyncMongoClient = AsyncMongoClient(
-            url, serverSelectionTimeoutMS=2000, connectTimeoutMS=2000, tz_aware=True
+            url, serverSelectionTimeoutMS=timeout_ms, connectTimeoutMS=timeout_ms, tz_aware=True
         )
         self._db = self._client[db_name]
 
