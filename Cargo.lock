@@ -5052,6 +5052,7 @@ dependencies = [
  "grabber",
  "host",
  "media",
+ "percent-encoding",
  "serde",
  "serde_json",
  "sha2",

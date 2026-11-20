@@ -267,6 +267,8 @@ try {
     ...process.env,
     TRIBUTARY_DATA_DIR: dataDir,
     TRIBUTARY_PIPE: PIPE,
+    // "Get a fresh link" would open the file's page in the real browser.
+    TRIBUTARY_NO_BROWSER: '1',
     WEBVIEW2_USER_DATA_FOLDER: join(dataDir, 'webview'),
     WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${DEBUG_PORT}`,
   };
@@ -833,6 +835,37 @@ try {
     await page.getByRole('button', { name: 'Save' }).click();
     await row.getByText('Complete, verified').waitFor();
     assert.equal(await row.getAttribute('data-mismatch'), null);
+  });
+
+  await step('an expired link carries on with a fresh one from the browser, keeping its progress', async () => {
+    await startDialogFor(`${BASE}/file/16M.fresh?rate=512K&expire_after_ms=1500&token=old`);
+    await page.getByRole('button', { name: 'Start download' }).click();
+    const row = rowFor(page, '16M.fresh');
+    await row.waitFor();
+    await page.waitForFunction(() =>
+      [...document.querySelectorAll('tbody tr')].some((item) => /16M\.fresh.*Downloading [1-9]/.test(item.textContent)),
+    );
+    await row.click();
+    await page.getByRole('button', { name: 'Stop', exact: true }).click();
+    await sleep(1700);
+    // Resumed after the link expired, it's refused, and the list says why.
+    await page.getByRole('button', { name: 'Resume', exact: true }).click();
+    await row.getByText('Link expired').waitFor();
+
+    await row.click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Get a fresh link' }).click();
+    // Added by address, it doesn't know its page, so it says to find it.
+    await page.getByText("doesn't say which page it came from", { exact: false }).waitFor();
+    await page.getByRole('button', { name: 'Close' }).click();
+    await row.getByText('Waiting for a fresh link…').waitFor();
+
+    // The browser hands over the same file at a fresh address: no dialog, it carries on.
+    const reply = await askHost({ type: 'download', url: `${BASE}/file/16M.fresh?token=fresh`, fileName: '16M.fresh' });
+    assert.equal(reply.ok, true);
+    await row.getByText('Complete', { exact: true }).waitFor({ timeout: 30_000 });
+    assert.equal(await page.getByRole('dialog').count(), 0, 'a dialog asked about the fresh link');
+    assert.equal(await sha256(join(downloadDir, '16M.fresh')), expectedSha256('16M.fresh'));
+    assert.equal(await page.locator('tbody tr', { hasText: '16M.fresh' }).count(), 1, 'a second download was added');
   });
 
   await step('a site that publishes no checksum says so, and a mistyped one is refused', async () => {

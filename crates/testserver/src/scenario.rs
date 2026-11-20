@@ -50,6 +50,10 @@ pub struct Scenario {
     pub limit: Option<u32>,
     pub redirects: u32,
     pub change_after: Option<u32>,
+    /// Refuses with 403 once this many milliseconds have passed since the address was
+    /// first asked for, as a signed link that expires does. Another address for the same
+    /// file, say with a different `token`, starts afresh.
+    pub expire_after_ms: Option<u64>,
     pub require_cookie: Option<String>,
     pub require_referer: Option<String>,
     pub filename: Option<String>,
@@ -77,6 +81,7 @@ impl Scenario {
             limit: None,
             redirects: 0,
             change_after: None,
+            expire_after_ms: None,
             require_cookie: None,
             require_referer: None,
             filename: None,
@@ -102,6 +107,9 @@ impl Scenario {
                 "limit" => scenario.limit = Some(number(key, value)?),
                 "redirects" => scenario.redirects = number(key, value)?,
                 "change_after" => scenario.change_after = Some(number(key, value)?),
+                "expire_after_ms" => scenario.expire_after_ms = Some(number(key, value)?),
+                // Only there to make another address for the same file.
+                "token" => {}
                 "require_cookie" => scenario.require_cookie = Some(decode(key, value)?),
                 "require_referer" => scenario.require_referer = Some(decode(key, value)?),
                 "basic" => scenario.basic = Some(decode(key, value)?),

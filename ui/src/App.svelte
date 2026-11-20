@@ -74,7 +74,7 @@
     | { kind: 'shutdown'; seconds: number }
     | { kind: 'login'; id: number }
     | { kind: 'scan'; file: string; problem: string }
-    | { kind: 'info'; message: string }
+    | { kind: 'info'; message: string; title?: string }
     | { kind: 'error'; message: string };
 
   const MAIN_QUEUE = 1;
@@ -474,6 +474,32 @@
         },
       },
       {
+        // Opens the page the file came from; the browser's next file of that name carries on.
+        label: single?.awaitingLink ? 'Stop waiting for a fresh link' : 'Get a fresh link',
+        disabled: !single || single.state === 'running' || single.state === 'completed',
+        run: () => {
+          if (!single) return;
+          const id = single.id;
+          if (single.awaitingLink) {
+            api.stopWaitingForLink(id).catch(showError);
+            return;
+          }
+          api
+            .getFreshLink(id)
+            .then((page) => {
+              if (!page) {
+                dialog = {
+                  kind: 'info',
+                  title: "Find the file's page",
+                  message:
+                    "This download doesn't say which page it came from. Find the file's page in your browser and download it again: Tributary will carry on from where it stopped.",
+                };
+              }
+            })
+            .catch(showError);
+        },
+      },
+      {
         label: 'Properties',
         disabled: !single,
         run: () => {
@@ -782,7 +808,7 @@
     {/snippet}
   </Modal>
 {:else if dialog?.kind === 'info'}
-  <Modal title="Done" onclose={closeDialog}>
+  <Modal title={dialog.title ?? 'Done'} onclose={closeDialog}>
     <p>{dialog.message}</p>
     {#snippet footer()}
       <button type="button" class="primary" onclick={closeDialog}>Close</button>

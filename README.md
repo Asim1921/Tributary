@@ -48,6 +48,10 @@ If Tributary is already running, these go to the running copy.
 - **Marked as from the internet.** Like a browser, Tributary tags each finished file with where it came from, so Windows SmartScreen and Office's Protected View check it before it opens. **Options > Security** can turn this off. Drives that can't hold the tag, such as FAT32 and exFAT, are left as they are.
 - **Notifications.** When downloads finish while Tributary is in the background, Windows shows a notification with **Open** and **Show in folder**. Many files at once, or a whole queue, give one notification rather than one each. A file that doesn't match its checksum, or a download that fails, is said too. **Options > Downloads** can turn this off. Windows only shows them for the installed app, because they go by its Start menu entry.
 
+## When a link expires
+
+Many sites give links that only work for a while. If one stops working before a download finishes, the list says **Link expired**. Right-click it and choose **Get a fresh link**: the page the file came from opens in your browser, and the next time the browser hands Tributary a file of the same name, the download carries on from where it stopped, with the browser's new link and cookies, instead of starting again. If the server says the file itself has changed, it starts again so the result is never a mix. A download added by its address alone doesn't know its page, so Tributary asks you to find it.
+
 ## Video
 
 The extension shows a panel in the corner of any video player on a page, and lists what it finds in its toolbar popup. Any HLS (`.m3u8`) or DASH (`.mpd`) address also works in **Add URL**, and so does the address of a page with a video on it.

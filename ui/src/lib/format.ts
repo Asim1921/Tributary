@@ -75,6 +75,8 @@ const STATE_LABELS: Record<DownloadState, string> = {
 };
 
 export function statusText(download: Download): string {
+  if (download.awaitingLink && download.state !== 'running') return 'Waiting for a fresh link…';
+  if (download.state === 'failed' && download.linkExpired) return 'Link expired';
   // A video saved as two parts is done once its sound is joined in.
   if (download.state === 'completed' && download.addingSound) return 'Adding sound…';
   if (download.state === 'completed' && download.finishing) return download.finishing;

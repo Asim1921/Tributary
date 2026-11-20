@@ -35,6 +35,10 @@ export interface Download {
   checking?: boolean;
   /** What's being done to a finished video right now, such as `Converting to MP3…`. */
   finishing?: string | null;
+  /** It failed because its link no longer works, which a fresh one would fix. */
+  linkExpired?: boolean;
+  /** Waiting for the browser to hand over a fresh link. */
+  awaitingLink?: boolean;
 }
 
 export interface Checksum {

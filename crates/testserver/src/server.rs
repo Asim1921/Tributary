@@ -94,6 +94,8 @@ pub struct Record {
 
 #[derive(Default)]
 struct Counters {
+    /// When the address was first asked for.
+    first_seen: Option<Instant>,
     visits: u32,
     drops: u32,
     active: u32,
@@ -136,8 +138,18 @@ impl State {
     fn visit(&self, target: &str) -> u32 {
         let mut counters = self.counters.lock().unwrap_or_else(PoisonError::into_inner);
         let entry = counters.entry(target.to_owned()).or_default();
+        entry.first_seen.get_or_insert_with(Instant::now);
         entry.visits += 1;
         entry.visits
+    }
+
+    /// How long ago the address was first asked for.
+    fn age(&self, target: &str) -> Duration {
+        let counters = self.counters.lock().unwrap_or_else(PoisonError::into_inner);
+        counters
+            .get(target)
+            .and_then(|entry| entry.first_seen)
+            .map_or(Duration::ZERO, |first| first.elapsed())
     }
 
     /// Takes a response slot for this URL, unless `limit` are already in use.
@@ -617,6 +629,13 @@ async fn serve_file(
             format!("Digest realm=\"{DIGEST_REALM}\", nonce=\"{DIGEST_NONCE}\", qop=\"auth\"");
         let headers = [("WWW-Authenticate", challenge)];
         return send_small(stream, head, 401, &headers, b"login required\n").await;
+    }
+
+    if scenario
+        .expire_after_ms
+        .is_some_and(|limit| state.age(&head.target) > Duration::from_millis(limit))
+    {
+        return send_small(stream, head, 403, &[], b"this link has expired\n").await;
     }
 
     if let Some(status) = scenario.fail.filter(|_| visit <= scenario.fail_times) {

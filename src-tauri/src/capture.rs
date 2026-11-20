@@ -241,6 +241,12 @@ pub fn receive_from(
     if files.is_empty() {
         return Err("there's nothing here that can be downloaded".to_owned());
     }
+    if let (false, [file]) = (batch, files.as_slice())
+        && !file.is_stream()
+        && crate::refresh::carry_on_with(app, file)?
+    {
+        return Ok(());
+    }
 
     // A stream always gets its dialog, because there's a quality to choose and it may
     // have to be refused. Added directly, only its playlist's text would be saved.

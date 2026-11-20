@@ -361,6 +361,61 @@ async fn a_checksum_published_beside_a_file_is_found() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn an_expired_link_fails_and_a_fresh_one_carries_on() {
+    let fixture = fixture().await;
+    // The link expires while the download is stopped, as a signed link does.
+    let id = fixture
+        .engine
+        .add(fixture.new_download("/file/16M.bin?rate=512K&expire_after_ms=1000&token=old"))
+        .unwrap();
+    fixture.wait_for_progress(id, MIB).await;
+    fixture.engine.pause(id).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    fixture.engine.resume(id, &[]).unwrap();
+    let failed = fixture.engine.wait(id).await.unwrap();
+    assert_eq!(failed.state, State::Failed);
+    assert!(
+        failed.error.as_deref().unwrap_or_default().contains("403"),
+        "{:?}",
+        failed.error
+    );
+    let kept = failed.downloaded;
+    assert!(kept > 0 && kept < 16 * MIB, "kept {kept} bytes");
+
+    // The same file at a fresh address carries on from where it stopped.
+    fixture
+        .engine
+        .edit(
+            id,
+            DownloadEdit {
+                url: Some(fixture.server.url("/file/16M.bin?token=fresh")),
+                ..DownloadEdit::default()
+            },
+        )
+        .unwrap();
+    fixture.engine.resume(id, &[]).unwrap();
+    let done = fixture.engine.wait(id).await.unwrap();
+    assert_completed(&done, 1, 16 * MIB);
+
+    let fresh: u64 = fixture
+        .server
+        .records()
+        .iter()
+        .filter(|record| record.target.contains("token=fresh") && record.status == 206)
+        .filter_map(|record| range_of(record))
+        .filter(|range| *range != "bytes=0-0")
+        .filter_map(|range| {
+            let (start, end) = range.strip_prefix("bytes=")?.split_once('-')?;
+            Some(end.parse::<u64>().ok()? - start.parse::<u64>().ok()? + 1)
+        })
+        .sum();
+    assert!(
+        fresh <= 16 * MIB - kept + MIB,
+        "asked the fresh link for {fresh} bytes after keeping {kept}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn an_empty_file_works() {
     let fixture = fixture().await;
     assert_completed(&fixture.download("/file/0.bin").await, 1, 0);

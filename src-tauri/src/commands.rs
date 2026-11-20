@@ -49,6 +49,8 @@ pub struct AppState {
     pub video_extras: Mutex<crate::video::VideoExtras>,
     /// The videos of the list being chosen from: each one's address and title.
     pub video_list: Mutex<Vec<(String, String)>>,
+    /// Downloads waiting for the browser to hand over a fresh link.
+    pub awaiting_link: Mutex<crate::refresh::Awaiting>,
     /// Finished files being checked against their checksums.
     pub checking: Mutex<HashSet<i64>>,
     /// Downloads waiting to be told of in a Windows notification.
@@ -59,6 +61,12 @@ pub struct AppState {
 impl AppState {
     pub fn video_choices(&self) -> MutexGuard<'_, Vec<Quality>> {
         self.video_choices
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub fn awaiting_link(&self) -> MutexGuard<'_, crate::refresh::Awaiting> {
+        self.awaiting_link
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
     }
@@ -302,6 +310,10 @@ pub struct DownloadView {
     checking: bool,
     /// What's being done to a finished video right now, such as `Converting to MP3…`.
     finishing: Option<&'static str>,
+    /// The download failed because its link no longer works, which a fresh one would fix.
+    link_expired: bool,
+    /// Waiting for the browser to hand over a fresh link.
+    awaiting_link: bool,
 }
 
 /// A checksum as the window shows it.
@@ -365,6 +377,11 @@ fn sound_of(state: &AppState, id: DownloadId) -> Option<Download> {
 
 impl From<Download> for DownloadView {
     fn from(download: Download) -> Self {
+        let link_expired = download.state == State::Failed
+            && download
+                .error
+                .as_deref()
+                .is_some_and(crate::refresh::link_expired);
         Self {
             id: download.id.0,
             url: download.url,
@@ -393,6 +410,8 @@ impl From<Download> for DownloadView {
             checksum_matches: download.checksum_matches,
             checking: false,
             finishing: None,
+            link_expired,
+            awaiting_link: false,
         }
     }
 }
@@ -610,9 +629,11 @@ pub async fn list_downloads(state: Managed<'_, AppState>) -> Result<Vec<Download
         .map(|(download, sound)| {
             let checking = state.is_checking(download.id.0);
             let finishing = state.finishing_label(download.id.0);
+            let awaiting_link = state.awaiting_link().contains(download.id.0);
             DownloadView {
                 checking,
                 finishing,
+                awaiting_link,
                 ..DownloadView::from(download).with_sound(sound.as_ref())
             }
         })

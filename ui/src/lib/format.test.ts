@@ -144,6 +144,15 @@ describe('statusText', () => {
     expect(statusText({ ...download, size: null })).toBe('Downloading');
   });
 
+  it('says when a link has expired, and when a fresh one is awaited', () => {
+    const failed = { ...download, state: 'failed' as const };
+    expect(statusText({ ...failed, linkExpired: true })).toBe('Link expired');
+    expect(statusText({ ...failed, linkExpired: true, awaitingLink: true })).toBe(
+      'Waiting for a fresh link…',
+    );
+    expect(statusText({ ...download, awaitingLink: true })).toBe('Downloading 25.0%');
+  });
+
   it('says how a checksum check went', () => {
     const done = { ...download, state: 'completed' as const };
     const sum = { algorithm: 'SHA-256', hex: 'ab' };

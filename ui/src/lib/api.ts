@@ -55,6 +55,8 @@ export const onUpdateReady = (handler: (update: UpdateInfo) => void): Promise<Un
 export const inspectList = (url: string) => invoke<ListView>('inspect_list', { url });
 export const addList = (chosen: number[], destDir: string, later: boolean) =>
   invoke<number>('add_list', { chosen, destDir, later });
+export const getFreshLink = (id: number) => invoke<string | null>('get_fresh_link', { id });
+export const stopWaitingForLink = (id: number) => invoke<void>('stop_waiting_for_link', { id });
 export const findChecksum = (url: string, fileName?: string) =>
   invoke<Checksum | null>('find_checksum', { url, fileName });
 export const setChecksum = (id: number, checksum: string | null) =>

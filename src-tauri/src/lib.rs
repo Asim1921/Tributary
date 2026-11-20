@@ -6,6 +6,7 @@ mod commands;
 mod data;
 mod finishing;
 mod notices;
+mod refresh;
 mod rules;
 mod scanner;
 mod secrets;
@@ -483,6 +484,7 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
         joining: Mutex::default(),
         video_extras: Mutex::default(),
         video_list: Mutex::default(),
+        awaiting_link: Mutex::default(),
         checking: Mutex::default(),
         notices: Mutex::default(),
         grabber: Grabber::open(data_dir.join("projects.json")),
@@ -621,6 +623,8 @@ pub fn run() {
             commands::discard_capture,
             commands::find_checksum,
             video::inspect_list,
+            refresh::get_fresh_link,
+            refresh::stop_waiting_for_link,
             video::add_list,
             updates::check_for_update,
             updates::waiting_update,
