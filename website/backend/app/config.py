@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     # Installer hosted elsewhere (Vercel Blob, any HTTPS folder): downloads answer 302 to
     # DOWNLOAD_BASE_URL/<file>. Unset keeps the X-Accel-Redirect hand-off to nginx.
     download_base_url: str | None = None
+    # The site's public address, for absolute links such as the updater's. Without it, the
+    # address the request came in on is used.
+    public_url: str | None = None
     # Release manifest. Default: downloads_dir/releases.json, or backend/releases.json when
     # DOWNLOAD_BASE_URL is set (the API project on Vercel only sees the backend folder).
     releases_file: str | None = None

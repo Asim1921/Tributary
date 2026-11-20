@@ -26,6 +26,11 @@ KEY_STATS = "stats"
 PUBLIC_CACHE = "public, max-age=5"
 
 
+def version_key(version: str) -> tuple[int, ...]:
+    """A version such as 0.10.2 as numbers, so 0.10 sorts after 0.9."""
+    return tuple(int(part) for part in version.split("."))
+
+
 def ua_family(user_agent: str) -> str:
     return "windows" if "windows" in user_agent.lower() else "other"
 
@@ -270,6 +275,36 @@ def configure(
         await ensure_ready()
         release = next((r for r in await all_releases() if r.version == version), None)
         return await serve_installer(request, release)
+
+    @app.get("/api/updates/{target}/{arch}/{current}")
+    async def updates(
+        request: Request, target: str, arch: str, current: str = PathParam(pattern=VERSION_PATTERN)
+    ) -> Response:
+        """What the app's updater asks. 204 means there's nothing newer for it."""
+        await ensure_ready()
+        release = await latest_release()
+        up_to_date = Response(status_code=204, headers={"Cache-Control": "no-store"})
+        if (
+            release is None
+            or not release.signature
+            or (target, arch) != ("windows", "x86_64")
+            or version_key(release.version) <= version_key(current)
+        ):
+            return up_to_date
+        if redirect_base is not None:
+            url = f"{redirect_base}/{release.file}"
+        else:
+            base = (settings.public_url or str(request.base_url)).rstrip("/")
+            url = f"{base}/api/download/{release.version}"
+        body = {
+            "version": release.version,
+            "notes": "\n".join(release.notes),
+            "pub_date": f"{release.published}T00:00:00Z",
+            "url": url,
+            "signature": release.signature,
+        }
+        return Response(json.dumps(body), media_type="application/json",
+                        headers={"Cache-Control": "no-store"})
 
     @app.get("/api/stats")
     async def stats() -> Response:

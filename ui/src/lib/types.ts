@@ -111,6 +111,7 @@ export interface Settings {
   showStartDialog: boolean;
   showCompleteDialog: boolean;
   notifyInBackground: boolean;
+  checkForUpdates: boolean;
   markDownloads: boolean;
   closeToTray: boolean;
   startWithWindows: boolean;
@@ -313,4 +314,10 @@ export interface Queue {
   after: AfterAction;
   active: boolean;
   files: number[];
+}
+
+/** A newer release, fetched and checked, waiting to be installed. */
+export interface UpdateInfo {
+  version: string;
+  notes: string;
 }

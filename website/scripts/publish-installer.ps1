@@ -10,6 +10,8 @@
   only sees the backend folder, so it reads that copy. Commit it; the installer itself stays out
   of git (upload it to Vercel Blob, see README "Deploying on Vercel").
   Release notes and requirements come from the table below; add an entry there for a new version.
+  If the build left an updater signature (<installer>.sig, made when TAURI_SIGNING_PRIVATE_KEY
+  is set), it is recorded too, and the app's updater is offered this release.
 
 .EXAMPLE
   ./scripts/publish-installer.ps1 -Version 0.1.0
@@ -38,6 +40,13 @@ $requirements = @(
 )
 
 $notesByVersion = @{
+    '0.2.0' = @(
+        'Updates itself: a newer version is fetched in the background, checked against its signature, and installed when you say so.',
+        'Checks downloads against the MD5, SHA-1, SHA-256 or SHA-512 a site gives, and can find one published beside the file.',
+        'Marks downloads as coming from the internet, as browsers do, so Windows checks them before they open.',
+        'Saves just the sound of a video, as M4A or MP3, and puts subtitles and the cover picture into videos.',
+        'Shows a Windows notification when downloads finish in the background, one for a whole batch or queue.'
+    )
     '0.1.0' = @(
         'Splits each download across several connections, and resumes after a crash, a shutdown or a dropped connection.',
         'Takes over downloads from Chrome and Edge, with a right-click menu for links and a download button beside video players.',
@@ -72,6 +81,10 @@ $entry = [ordered]@{
     published    = $published
     notes        = @($notesByVersion[$Version])
     requirements = $requirements
+}
+$signatureFile = "$source.sig"
+if (Test-Path -LiteralPath $signatureFile -PathType Leaf) {
+    $entry.signature = (Get-Content -LiteralPath $signatureFile -Raw).Trim()
 }
 
 $releases = @()

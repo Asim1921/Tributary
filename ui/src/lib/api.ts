@@ -21,6 +21,7 @@ import type {
   Settings,
   StateEvent,
   VideoDetails,
+  UpdateInfo,
 } from './types';
 
 /** What the app says when a server wants a login it doesn't have. */
@@ -44,6 +45,12 @@ export const removeDownload = (id: number, deleteFile: boolean) =>
   invoke<void>('remove_download', { id, deleteFile });
 export const editDownload = (id: number, edit: EditRequest) =>
   invoke<void>('edit_download', { id, edit });
+export const checkForUpdate = () => invoke<UpdateInfo | null>('check_for_update');
+export const waitingUpdate = () => invoke<UpdateInfo | null>('waiting_update');
+export const appVersion = () => invoke<string>('app_version');
+export const restartToUpdate = () => invoke<void>('restart_to_update');
+export const onUpdateReady = (handler: (update: UpdateInfo) => void): Promise<UnlistenFn> =>
+  listen<UpdateInfo>('update-ready', (event) => handler(event.payload));
 export const findChecksum = (url: string, fileName?: string) =>
   invoke<Checksum | null>('find_checksum', { url, fileName });
 export const setChecksum = (id: number, checksum: string | null) =>

@@ -17,6 +17,9 @@ class Release(BaseModel):
     published: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
     notes: list[str] = []
     requirements: list[str] = []
+    # The updater's minisign signature of the installer (the text of its .sig file). A release
+    # without one is never offered to the app's updater.
+    signature: str | None = Field(None, pattern=r"^[A-Za-z0-9+/=]+$", max_length=2048)
 
 
 class Manifest(BaseModel):

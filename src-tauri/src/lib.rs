@@ -12,6 +12,7 @@ mod secrets;
 mod settings;
 mod site_grabber;
 mod system;
+mod updates;
 mod video;
 mod ytdlp;
 
@@ -488,6 +489,8 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     app.state::<AppState>().attach_site_logins();
     build_tray(app)?;
 
+    app.manage(Mutex::new(updates::Pending::default()));
+    updates::watch(app.handle().clone());
     capture::serve(app.handle().clone());
     video::finish_leftovers(app.handle());
     watch_clipboard(app.handle().clone());
@@ -546,6 +549,7 @@ pub fn run() {
             }
             handle_arguments(app, arguments);
         }))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(
@@ -615,6 +619,10 @@ pub fn run() {
             commands::import_data,
             commands::discard_capture,
             commands::find_checksum,
+            updates::check_for_update,
+            updates::waiting_update,
+            updates::app_version,
+            updates::restart_to_update,
             commands::set_checksum,
             commands::add_batch,
             commands::extension_folder,

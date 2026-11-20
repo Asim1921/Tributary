@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Tributary",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "app.tributary.desktop",
   "build": {
     "beforeDevCommand": "npm run ui:dev",
@@ -28,7 +28,9 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": [
+      "nsis"
+    ],
     "category": "Utility",
     "shortDescription": "A fast, resumable download manager",
     "icon": [
@@ -52,6 +54,19 @@
       "nsis": {
         "installMode": "currentUser",
         "installerHooks": "nsis-hooks.nsh"
+      },
+      "signCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/sign.ps1 %1"
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY4MDI1NkI2OTc4QjBBNzEKUldSeENvdVh0bFlDK0t5MnlmVGJYZ0pyQ3NEZ3NZWjlnTU5ZSS9VUVdKUFk3TGtxOXAyU3pyZ3MK",
+      "endpoints": [
+        "https://tributary-olive.vercel.app/api/updates/{{target}}/{{arch}}/{{current_version}}"
+      ],
+      "windows": {
+        "installMode": "passive"
       }
     }
   }

@@ -304,6 +304,8 @@ fn settings_reply(state: &AppState) -> Value {
         "forceKey": settings.force_key,
         "skipKey": settings.skip_key,
         "videoPanel": settings.video_panel,
+        // An extension older than the app reloads itself to pick up its new files.
+        "appVersion": env!("CARGO_PKG_VERSION"),
     })
 }
 

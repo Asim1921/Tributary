@@ -31,6 +31,7 @@ import {
   usableLinks,
   wildcardMatch,
   worthSaving,
+  shouldReload,
 } from './rules.js';
 
 describe('mediaKind', () => {
@@ -772,5 +773,18 @@ describe('pageMediaBatch', () => {
 
   it('offers nothing for a page that is not on the web', () => {
     expect(pageMediaBatch({ images: [picture('a')] }, 'file:///C:/a.html')).toEqual([]);
+  });
+});
+
+describe('shouldReload', () => {
+  it('reloads once when the app is newer than the extension', () => {
+    expect(shouldReload('0.2.0', '0.1.0', undefined)).toBe(true);
+    expect(shouldReload('0.2.0', '0.1.0', '0.2.0')).toBe(false);
+  });
+
+  it('leaves a matching or unknown version alone', () => {
+    expect(shouldReload('0.2.0', '0.2.0', undefined)).toBe(false);
+    expect(shouldReload(undefined, '0.1.0', undefined)).toBe(false);
+    expect(shouldReload('', '0.1.0', undefined)).toBe(false);
   });
 });

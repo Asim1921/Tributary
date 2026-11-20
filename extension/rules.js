@@ -449,3 +449,11 @@ export function usableLinks(urls) {
     return true;
   });
 }
+
+/**
+ * Whether the extension should reload itself to pick up the files a newer app installed.
+ * Only once for each version, so a copy loaded from somewhere else can't reload forever.
+ */
+export function shouldReload(appVersion, ownVersion, reloadedFor) {
+  return Boolean(appVersion) && appVersion !== ownVersion && reloadedFor !== appVersion;
+}

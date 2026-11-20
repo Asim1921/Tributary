@@ -55,6 +55,52 @@ async def test_releases_from_manifest(nodb):
     assert [r["version"] for r in (await nodb.get("/api/releases")).json()] == ["0.2.0", "0.1.0"]
 
 
+@pytest.fixture
+async def signed(clean_env, tmp_path: Path):
+    """No database, with a signed 0.2.0 and an unsigned 0.1.0."""
+    manifest = tmp_path / "releases.json"
+    manifest.write_text(json.dumps({"releases": [
+        release_entry(), release_entry("0.2.0", signature="dW50cnVzdGVkIGNvbW1lbnQ="),
+    ]}))
+    settings = Settings(downloads_dir=str(tmp_path / "none"), releases_file=str(manifest),
+                        download_base_url=BASE, count_salt="s")
+    app = create_app(settings)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+            yield c
+
+
+async def test_an_older_app_is_offered_the_newest_signed_release(signed):
+    r = await signed.get("/api/updates/windows/x86_64/0.1.0")
+    assert r.status_code == 200 and r.headers["cache-control"] == "no-store"
+    assert r.json() == {
+        "version": "0.2.0",
+        "notes": "First release.",
+        "pub_date": "2026-11-19T00:00:00Z",
+        "url": f"{BASE}/{FILE_NAME}",
+        "signature": "dW50cnVzdGVkIGNvbW1lbnQ=",
+    }
+
+
+async def test_an_up_to_date_app_hears_nothing(signed):
+    for path in [
+        "/api/updates/windows/x86_64/0.2.0",
+        "/api/updates/windows/x86_64/0.10.0",  # newer, compared as numbers, not text
+        "/api/updates/linux/x86_64/0.1.0",
+        "/api/updates/windows/aarch64/0.1.0",
+    ]:
+        r = await signed.get(path)
+        assert r.status_code == 204, path
+
+
+async def test_an_unsigned_release_is_never_offered(nodb):
+    assert (await nodb.get("/api/updates/windows/x86_64/0.0.1")).status_code == 204
+
+
+async def test_a_malformed_version_is_refused(signed):
+    assert (await signed.get("/api/updates/windows/x86_64/latest")).status_code == 422
+
+
 async def test_download_redirect_and_stats(nodb):
     r = await nodb.get("/api/download/0.1.0")
     assert r.status_code == 302 and r.headers["location"] == f"{BASE}/{FILE_NAME}"

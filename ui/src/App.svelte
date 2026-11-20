@@ -17,6 +17,7 @@
   import Sidebar from './components/Sidebar.svelte';
   import StartDialog from './components/StartDialog.svelte';
   import Toolbar from './components/Toolbar.svelte';
+  import UpdateBar from './components/UpdateBar.svelte';
   import VideoDialog from './components/VideoDialog.svelte';
   import * as api from './lib/api';
   import { resolveColumns, sortRows, type SortOrder } from './lib/columns';
@@ -47,6 +48,7 @@
     DownloadRow,
     EditRequest,
     Settings,
+    UpdateInfo,
   } from './lib/types';
 
   type Dialog =
@@ -121,6 +123,11 @@
       if (problem) dialog = { kind: 'scan', file, problem };
     });
     void api.onVideoProblem(showError);
+    void api.onUpdateReady((ready) => (update = ready));
+    api
+      .waitingUpdate()
+      .then((ready) => (update = ready ?? update))
+      .catch(() => {});
     // Listening comes first. The app may have been started just to receive a file.
     api
       .onCapture((event) => captures.push(event))
@@ -204,6 +211,17 @@
       dialog = null;
     }
   });
+
+  /** A newer release waiting to be installed, until the user says later. */
+  let update = $state<UpdateInfo | null>(null);
+
+  async function restartToUpdate() {
+    try {
+      await api.restartToUpdate();
+    } catch (error) {
+      showError(error);
+    }
+  }
 
   function showError(error: unknown) {
     dialog = { kind: 'error', message: String(error) };
@@ -508,6 +526,9 @@
 />
 
 <div class="app">
+  {#if update}
+    <UpdateBar {update} onrestart={restartToUpdate} onlater={() => (update = null)} />
+  {/if}
   {#if settings}
     <Toolbar
       buttons={toolbarButtons}

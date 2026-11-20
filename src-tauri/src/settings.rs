@@ -85,6 +85,8 @@ pub struct Settings {
     pub show_complete_dialog: bool,
     /// Shows a Windows notification when downloads finish while Tributary is out of sight.
     pub notify_in_background: bool,
+    /// Looks for a newer release once a day.
+    pub check_for_updates: bool,
     /// Tags finished files as coming from the internet, as browsers do, so Windows
     /// SmartScreen and Office's Protected View check them before they're opened.
     pub mark_downloads: bool,
@@ -156,6 +158,7 @@ impl Default for Settings {
             show_start_dialog: true,
             show_complete_dialog: true,
             notify_in_background: true,
+            check_for_updates: true,
             mark_downloads: true,
             close_to_tray: true,
             start_with_windows: false,
@@ -352,6 +355,7 @@ mod tests {
         // Someone updating keeps the protection browsers give, without having to find it.
         assert!(settings.mark_downloads);
         assert!(settings.notify_in_background);
+        assert!(settings.check_for_updates);
     }
 
     #[test]

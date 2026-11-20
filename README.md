@@ -94,6 +94,25 @@ On a page full of photos or posts, such as a public profile, open the extension'
 - Downloads, queues and settings are in `%APPDATA%\app.tributary.desktop`.
 - Passwords are in Windows Credential Manager. Cookies are held in memory only, so a captured download may need its link again after a restart.
 
+## Updates
+
+Tributary looks for a newer version a minute after it starts and once a day after that. A new version is fetched in the background and checked against the signature it was released with, then a bar above the list offers **Restart to update**. It never restarts while files are downloading or a video is being finished. **Options > General** shows the version you have, can check at once, and can turn the daily check off.
+
+After an update, the browser extension reloads itself the next time it talks to Tributary, so the new features appear without visiting `chrome://extensions`.
+
+## Making a release
+
+`website/scripts/release.ps1 -Version X.Y.Z` sets the version everywhere, builds the installer, signs the update with the key in `D:\Tools\tributary-keys\updater.key`, and records it in both `releases.json` files. Keep a copy of that folder somewhere safe: without the key, installed copies can't be updated, and everyone would have to reinstall by hand once. Uploading the installer to Vercel Blob and pushing are left to you.
+
+### Signing the installer
+
+Windows warns about an installer with no publisher. Once you have a code-signing certificate, the build signs everything it makes:
+
+- a `.pfx` file: set `TRIBUTARY_SIGN_CERT` to its path and `TRIBUTARY_SIGN_PASSWORD` to its password;
+- Azure Trusted Signing: set `TRIBUTARY_AZURE_SIGN` to `endpoint|account|profile` and sign in with the Azure CLI.
+
+Without either, `src-tauri/scripts/sign.ps1` does nothing and the installer is built unsigned.
+
 ## Building
 
 You need Rust, Node.js and the Visual Studio C++ Build Tools.

@@ -17,6 +17,7 @@ import {
   responseLength,
   shouldCapture,
   usableLinks,
+  shouldReload,
 } from './rules.js';
 
 const HOST = 'app.tributary.capture';
@@ -30,12 +31,22 @@ const handled = new Set();
 
 const ask = (message) => chrome.runtime.sendNativeMessage(HOST, message);
 
+/** Reloads the extension once the app has been updated, so its new files take over. */
+async function reloadIfUpdated(appVersion) {
+  const own = chrome.runtime.getManifest().version;
+  const { reloadedFor } = await chrome.storage.local.get('reloadedFor');
+  if (!shouldReload(appVersion, own, reloadedFor)) return;
+  await chrome.storage.local.set({ reloadedFor: appVersion });
+  chrome.runtime.reload();
+}
+
 async function refreshSettings() {
   settingsAt = Date.now();
   try {
     const reply = await ask({ type: 'settings' });
     if (reply?.ok) {
       await chrome.storage.local.set({ settings: reply });
+      await reloadIfUpdated(reply.appVersion);
       return reply;
     }
   } catch {

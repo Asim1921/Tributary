@@ -2,6 +2,8 @@
   import { untrack } from 'svelte';
 
   import {
+    appVersion,
+    checkForUpdate,
     deleteSiteLogin,
     extensionFolder,
     installYtdlp,
@@ -24,6 +26,29 @@
   }
 
   let { settings, onsave, onexport, onimport, onclose }: Props = $props();
+
+  let version = $state('');
+  let looking = $state(false);
+  let looked = $state<string | null>(null);
+  appVersion()
+    .then((found) => (version = found))
+    .catch(() => {});
+
+  /** Looks for a newer release now. One found shows in the bar above the list. */
+  async function lookForUpdate() {
+    looking = true;
+    looked = null;
+    try {
+      const found = await checkForUpdate();
+      looked = found
+        ? `Version ${found.version} is ready to install.`
+        : "You have the newest version.";
+    } catch (error) {
+      looked = `Couldn't check: ${error}`;
+    } finally {
+      looking = false;
+    }
+  }
 
   type Tab =
     | 'general'
@@ -212,6 +237,17 @@
 
   <div class="panel">
     {#if tab === 'general'}
+      <div class="about">
+        <span>Tributary {version}</span>
+        <button type="button" disabled={looking} onclick={lookForUpdate}>
+          {looking ? 'Looking…' : 'Check for updates'}
+        </button>
+        {#if looked}<span class="note" role="status">{looked}</span>{/if}
+      </div>
+      <label class="check">
+        <input type="checkbox" bind:checked={draft.checkForUpdates} />
+        Check for updates automatically
+      </label>
       <label class="field">
         Theme
         <select bind:value={draft.theme}>
@@ -663,6 +699,13 @@
 </Modal>
 
 <style>
+  .about {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+
   .tabs {
     display: flex;
     flex-wrap: wrap;

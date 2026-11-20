@@ -862,6 +862,8 @@ try {
     assert.equal(reply.forceKey, 'ctrl');
     assert.equal(reply.skipKey, 'alt');
     assert.equal(reply.videoPanel, true);
+    // The extension compares this with its own, to reload itself after an update.
+    assert.match(reply.appVersion, /^\d+\.\d+\.\d+$/);
 
     // This is shown to be picked in the browser, so it has to be an ordinary path.
     const folder = await page.evaluate(() => window.__TAURI_INTERNALS__.invoke('extension_folder'));

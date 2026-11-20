@@ -47,7 +47,7 @@ async def test_latest_release(client):
     r = await client.get("/api/releases/latest")
     assert r.status_code == 200
     body = r.json()
-    assert set(body) == {"version", "file", "size", "sha256", "published", "notes", "requirements"}
+    assert set(body) == {"version", "file", "size", "sha256", "published", "notes", "requirements", "signature"}
     assert body["version"] == "0.1.0" and body["file"] == FILE_NAME and body["size"] == len(INSTALLER)
     assert r.headers["content-type"] == "application/json"
 
