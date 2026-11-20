@@ -3,7 +3,14 @@
 
   import { YTDLP_MISSING, inspectVideo, installYtdlp, pickFolder, suggestCategory } from '../lib/api';
   import { describeVideoChoice } from '../lib/format';
-  import { defaultSubtitle, holdsCover, subtitleLabel } from '../lib/video';
+  import {
+    clock,
+    defaultSubtitle,
+    holdsCover,
+    parseClock,
+    sectionProblem,
+    subtitleLabel,
+  } from '../lib/video';
   import type { AddVideoRequest, VideoDetails } from '../lib/types';
   import Modal from './Modal.svelte';
 
@@ -15,10 +22,12 @@
     page?: boolean;
     defaultFolder: string;
     onsubmit: (request: AddVideoRequest) => void;
+    /** The address turned out to be a list of videos, to choose from. */
+    onlist?: () => void;
     onclose: () => void;
   }
 
-  let { url, captureToken, suggestedName, page, defaultFolder, onsubmit, onclose }: Props =
+  let { url, captureToken, suggestedName, page, defaultFolder, onsubmit, onlist, onclose }: Props =
     $props();
 
   let details = $state<VideoDetails | null>(null);
@@ -32,6 +41,10 @@
   let subtitle = $state(-1);
   let cover = $state(false);
   let mp3 = $state(false);
+  let partOnly = $state(false);
+  let from = $state('0:00');
+  let to = $state('');
+  let exact = $state(false);
 
   // The check finishes after the dialog opens, and must never overwrite what's been typed.
   let nameEdited = false;
@@ -39,6 +52,7 @@
 
   const choice = $derived(details?.choices[chosen]);
   const audioOnly = $derived(choice?.audioOnly ?? false);
+  const partProblem = $derived(partOnly ? sectionProblem(from, to, choice?.seconds ?? 0) : null);
   const offersSubtitles = $derived(!audioOnly && (details?.subtitles?.length ?? 0) > 0);
   /** Where the cover and subtitles end up, for the note below them. */
   const extension = $derived(audioOnly && mp3 ? 'mp3' : (choice?.extension ?? ''));
@@ -104,6 +118,10 @@
       subtitles: offersSubtitles && subtitle >= 0 ? [subtitle] : [],
       cover: (details?.hasCover ?? false) && cover,
       mp3: audioOnly && (details?.canJoin ?? false) && mp3,
+      section:
+        partOnly && !partProblem
+          ? { from: parseClock(from) ?? 0, to: parseClock(to) ?? 0, exact }
+          : undefined,
     });
   }
 </script>
@@ -125,6 +143,11 @@
     </p>
   {:else if problem}
     <p class="refused" role="alert">{problem}</p>
+    {#if problem.includes('list of videos') && onlist}
+      <p>
+        <button type="button" class="primary" onclick={onlist}>Choose videos from this list</button>
+      </p>
+    {/if}
   {:else if !details}
     <p>Reading the video…</p>
   {:else}
@@ -162,6 +185,38 @@
           {/each}
         </select>
       </label>
+    {/if}
+
+    {#if details.canJoin}
+      <label class="check">
+        <input
+          type="checkbox"
+          bind:checked={partOnly}
+          onchange={() => {
+            if (partOnly && !to) to = clock(choice?.seconds ?? 0);
+          }}
+        />
+        Save only part of it
+      </label>
+      {#if partOnly}
+        <div class="pair">
+          <label class="field">
+            From
+            <input type="text" bind:value={from} placeholder="0:00" />
+          </label>
+          <label class="field">
+            To
+            <input type="text" bind:value={to} placeholder={clock(choice?.seconds ?? 0)} />
+          </label>
+        </div>
+        {#if !audioOnly}
+          <label class="check">
+            <input type="checkbox" bind:checked={exact} />
+            Cut exactly (slower, because the picture is encoded again)
+          </label>
+        {/if}
+        {#if partProblem}<p class="error-text" role="alert">{partProblem}</p>{/if}
+      {/if}
     {/if}
 
     {#if details.hasCover}
@@ -222,13 +277,17 @@
   {#snippet footer()}
     <button type="button" onclick={onclose}>{problem ? 'Close' : 'Cancel'}</button>
     {#if !problem}
-      <button type="button" disabled={!details || !name.trim()} onclick={() => submit(true)}>
+      <button
+        type="button"
+        disabled={!details || !name.trim() || !!partProblem}
+        onclick={() => submit(true)}
+      >
         Download later
       </button>
       <button
         type="button"
         class="primary"
-        disabled={!details || !name.trim()}
+        disabled={!details || !name.trim() || !!partProblem}
         onclick={() => submit(false)}
       >
         Start download
@@ -264,6 +323,12 @@
 
   .field-block {
     margin-bottom: 12px;
+  }
+
+  .pair {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
   }
 
   .field-block .field {

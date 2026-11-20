@@ -22,7 +22,11 @@ import { dirname, join } from 'node:path';
 const args = process.argv.slice(2);
 const log = process.env.FAKE_YTDLP_LOG || join(dirname(new URL(import.meta.url).pathname.replace(/^\//, '')), 'fake-ytdlp.log');
 
-const required = ['--ignore-config', '--no-playlist', '--dump-single-json'];
+// A list is read with --flat-playlist instead of --no-playlist, and capped.
+const listing = args.includes('--flat-playlist');
+const required = listing
+  ? ['--ignore-config', '--flat-playlist', '--dump-single-json', '--playlist-end']
+  : ['--ignore-config', '--no-playlist', '--dump-single-json'];
 const separator = args.indexOf('--');
 // A referer is only ever the value of its option, before the separator.
 const at = args.indexOf('--referer');
@@ -30,7 +34,8 @@ const referer = at === -1 ? null : args[at + 1];
 const refererFits = at === -1 || (at + 1 < separator && /^https?:\/\//.test(referer ?? ''));
 const properly =
   required.every((option) => args.includes(option)) && separator === args.length - 2 && refererFits;
-const leaky = args.some((argument) => /cookie|--exec|--config/i.test(argument));
+const leaky =
+  args.some((argument) => /cookie|--exec|--config/i.test(argument)) || (listing && args.includes('--no-playlist'));
 
 if (!properly || leaky) {
   console.error(`ERROR: unexpected command line: ${args.join(' ')}`);
@@ -84,6 +89,25 @@ const stream = {
   width: 3840,
   tbr: 9000,
 };
+
+if (listing) {
+  if (page.searchParams.get('case') !== 'playlist') {
+    console.log(JSON.stringify({ title: 'Not a list', duration: 6, formats: [picture, sound] }));
+    process.exit(0);
+  }
+  console.log(
+    JSON.stringify({
+      _type: 'playlist',
+      title: 'Fake list',
+      entries: [
+        { url: `${base}/reel/a`, title: 'First talk', duration: 6 },
+        { url: `${base}/reel/b`, title: 'Second talk', duration: 6 },
+        { url: `${base}/reel/c`, title: '[Private video]' },
+      ],
+    }),
+  );
+  process.exit(0);
+}
 
 if (page.pathname === '/embedded-player') {
   if (!referer || page.searchParams.get('case') === 'stuck') {

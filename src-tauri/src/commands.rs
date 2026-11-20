@@ -47,6 +47,8 @@ pub struct AppState {
     pub joining: Mutex<HashMap<i64, &'static str>>,
     /// What the video dialog offers beyond the qualities.
     pub video_extras: Mutex<crate::video::VideoExtras>,
+    /// The videos of the list being chosen from: each one's address and title.
+    pub video_list: Mutex<Vec<(String, String)>>,
     /// Finished files being checked against their checksums.
     pub checking: Mutex<HashSet<i64>>,
     /// Downloads waiting to be told of in a Windows notification.
@@ -57,6 +59,12 @@ pub struct AppState {
 impl AppState {
     pub fn video_choices(&self) -> MutexGuard<'_, Vec<Quality>> {
         self.video_choices
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub fn video_list(&self) -> MutexGuard<'_, Vec<(String, String)>> {
+        self.video_list
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
     }
@@ -858,7 +866,7 @@ enum Unread {
 
 /// Reads each video's page in turn and saves its best quality. Whatever couldn't be saved,
 /// such as a video that needs a login, is told in one message at the end.
-async fn read_pages_in_turn(
+pub(crate) async fn read_pages_in_turn(
     app: AppHandle,
     pages: Vec<Captured>,
     folder: Option<PathBuf>,

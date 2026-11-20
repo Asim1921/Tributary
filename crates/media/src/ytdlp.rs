@@ -103,6 +103,86 @@ fn subtitles(page: &Value) -> Vec<Subtitle> {
     found
 }
 
+/// A list of videos, such as a playlist or a channel's videos, as yt-dlp lists it without
+/// reading each video.
+#[derive(Debug, Clone, PartialEq)]
+pub struct List {
+    pub title: Option<String>,
+    pub entries: Vec<Entry>,
+}
+
+/// One video in a list.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Entry {
+    pub url: String,
+    pub title: String,
+    pub seconds: Option<f64>,
+    /// False for a video the list says is private, deleted or for members only. It's shown,
+    /// but not chosen, and would be refused if it were.
+    pub available: bool,
+}
+
+/// The most videos taken from one list.
+pub const MAX_LIST_ENTRIES: usize = 500;
+
+/// Titles sites give a video that's gone or hidden.
+const UNAVAILABLE_TITLES: [&str; 3] = ["[private video]", "[deleted video]", "[unavailable video]"];
+
+/// Reads yt-dlp's `--flat-playlist --dump-single-json` output for a list of videos.
+pub fn parse_list(json: &str) -> Result<List, Error> {
+    let page: Value = serde_json::from_str(json)
+        .map_err(|_| Error::Invalid("yt-dlp's answer isn't readable".into()))?;
+    let Some(entries) = page.get("entries").and_then(Value::as_array) else {
+        return Err(Error::Invalid("this address isn't a list of videos".into()));
+    };
+    // A channel's own page lists its tabs (videos, shorts, live) rather than videos.
+    if !entries.is_empty()
+        && entries
+            .iter()
+            .all(|entry| text(entry, "_type") == Some("playlist"))
+    {
+        return Err(Error::Invalid(
+            "this is a channel's page, which lists its tabs rather than its videos. Open its Videos tab and use that address".into(),
+        ));
+    }
+
+    let entries: Vec<Entry> = entries
+        .iter()
+        .filter(|entry| text(entry, "_type") != Some("playlist"))
+        .filter_map(|entry| {
+            let url = text(entry, "url")
+                .or_else(|| text(entry, "webpage_url"))
+                .filter(|url| url.starts_with("https://") || url.starts_with("http://"))?;
+            let title = text(entry, "title")
+                .map(str::trim)
+                .filter(|title| !title.is_empty())
+                .unwrap_or(url);
+            let hidden = text(entry, "availability")
+                .is_some_and(|state| NEEDS_ACCOUNT.contains(&state))
+                || UNAVAILABLE_TITLES.contains(&title.to_ascii_lowercase().as_str());
+            Some(Entry {
+                url: url.to_owned(),
+                title: title.to_owned(),
+                seconds: number(entry, "duration").filter(|seconds| *seconds > 0.0),
+                available: !hidden,
+            })
+        })
+        .take(MAX_LIST_ENTRIES)
+        .collect();
+    if entries.is_empty() {
+        return Err(Error::Invalid(
+            "the list has no videos Tributary can read".into(),
+        ));
+    }
+    Ok(List {
+        title: text(&page, "title")
+            .map(str::trim)
+            .filter(|title| !title.is_empty())
+            .map(str::to_owned),
+        entries,
+    })
+}
+
 /// What to call a sound saved on its own, beside the pictures offered.
 fn audio_only_label(bits: Option<u64>, extension: &str) -> String {
     let kind = extension.to_ascii_uppercase();
@@ -868,6 +948,77 @@ mod tests {
                 ("pt-BR", "pt-BR", "https://s.test/auto?lang=pt", true),
             ]
         );
+    }
+
+    #[test]
+    fn a_playlist_lists_its_videos_without_reading_them() {
+        let answer = json!({
+            "_type": "playlist", "title": " Talks ",
+            "entries": [
+                { "url": "https://v.test/watch?v=1", "title": "First", "duration": 61.0 },
+                { "url": "https://v.test/watch?v=2", "title": "[Private video]" },
+                { "url": "https://v.test/watch?v=3", "title": "Members", "availability": "subscriber_only" },
+                { "url": "javascript:alert(1)", "title": "Not a video" },
+                { "webpage_url": "https://v.test/watch?v=4", "title": "  " },
+                { "_type": "playlist", "url": "https://v.test/list2", "title": "A list inside" }
+            ]
+        });
+
+        let list = parse_list(&answer.to_string()).unwrap();
+
+        assert_eq!(list.title.as_deref(), Some("Talks"));
+        let seen: Vec<(&str, &str, Option<f64>, bool)> = list
+            .entries
+            .iter()
+            .map(|entry| {
+                (
+                    entry.url.as_str(),
+                    entry.title.as_str(),
+                    entry.seconds,
+                    entry.available,
+                )
+            })
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("https://v.test/watch?v=1", "First", Some(61.0), true),
+                ("https://v.test/watch?v=2", "[Private video]", None, false),
+                ("https://v.test/watch?v=3", "Members", None, false),
+                (
+                    "https://v.test/watch?v=4",
+                    "https://v.test/watch?v=4",
+                    None,
+                    true
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_long_list_is_cut_short() {
+        let entries: Vec<Value> = (0..MAX_LIST_ENTRIES + 20)
+            .map(|index| json!({ "url": format!("https://v.test/{index}"), "title": "x" }))
+            .collect();
+        let list = parse_list(&json!({ "entries": entries }).to_string()).unwrap();
+        assert_eq!(list.entries.len(), MAX_LIST_ENTRIES);
+    }
+
+    #[test]
+    fn a_channels_own_page_points_to_its_videos_tab() {
+        let answer = json!({ "_type": "playlist", "entries": [
+            { "_type": "playlist", "url": "https://v.test/@a/videos" },
+            { "_type": "playlist", "url": "https://v.test/@a/shorts" }
+        ]});
+        let problem = parse_list(&answer.to_string()).unwrap_err().to_string();
+        assert!(problem.contains("Videos tab"), "{problem}");
+    }
+
+    #[test]
+    fn something_that_is_not_a_list_is_refused() {
+        assert!(parse_list(&page(standard())).is_err());
+        assert!(parse_list(r#"{ "entries": [] }"#).is_err());
+        assert!(parse_list("not json").is_err());
     }
 
     #[test]

@@ -246,6 +246,8 @@ export interface AddVideoRequest {
   subtitles?: number[];
   cover?: boolean;
   mp3?: boolean;
+  /** Keeps only this part, in seconds. */
+  section?: { from: number; to: number; exact: boolean };
 }
 
 export interface CaptureEvent {
@@ -320,4 +322,10 @@ export interface Queue {
 export interface UpdateInfo {
   version: string;
   notes: string;
+}
+
+/** The videos of a list, such as a playlist, as read without reading each one. */
+export interface ListView {
+  title: string | null;
+  entries: { title: string; seconds: number | null; available: boolean }[];
 }

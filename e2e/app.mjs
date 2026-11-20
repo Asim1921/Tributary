@@ -1622,6 +1622,52 @@ try {
     assert.equal(await sha256(join(downloadDir, 'Plain sound.m4a')), await sha256(join(videoDir, 'snd.m4a')));
   });
 
+  await step('only part of a video can be saved, cut exactly, with its sound', async () => {
+    await lookForVideo('?case=extras');
+    await page.getByRole('radio', { name: '240p' }).waitFor();
+    await page.getByLabel('Subtitles').selectOption({ label: 'None' });
+    await page.getByLabel('Save only part of it').check();
+    await page.getByLabel('From', { exact: true }).fill('0:02');
+    await page.getByLabel('To', { exact: true }).fill('0:01');
+    await page.getByText('The end has to come after the start.').waitFor();
+    assert.ok(await page.getByRole('button', { name: 'Start download' }).isDisabled());
+    await page.getByLabel('To', { exact: true }).fill('0:04');
+    await page.getByLabel('Cut exactly', { exact: false }).check();
+    await saveVideo('Just a part');
+
+    const part = join(downloadDir, 'Just a part.mp4');
+    await rowFor(page, 'Just a part.mp4').getByText('Complete', { exact: true }).waitFor({ timeout: 30_000 });
+    const { kinds, seconds } = probe(part);
+    assert.deepEqual(kinds, ['audio', 'video']);
+    assert.ok(Math.abs(seconds - 2) < 0.3, `lasts ${seconds} seconds`);
+  });
+
+  await step('a playlist offers its videos, and saves the ones chosen one at a time', async () => {
+    await lookForVideo('?case=playlist');
+    await page.getByText('list of videos, not one video', { exact: false }).waitFor();
+    await page.getByRole('button', { name: 'Choose videos from this list' }).click();
+    await page.getByRole('heading', { name: 'Videos in Fake list' }).waitFor();
+
+    assert.equal(await page.getByRole('checkbox').count(), 3);
+    // A private video is shown, but can't be chosen.
+    assert.ok(await page.getByRole('checkbox', { name: /Private video/ }).isDisabled());
+    await page.getByText('2 of 3 chosen').waitFor();
+    await page.getByRole('checkbox', { name: /Second talk/ }).uncheck();
+    await shot(page, '53-playlist');
+
+    const folder = join(downloadDir, 'from a list');
+    await page.getByLabel('Folder').fill(folder);
+    await page.getByRole('button', { name: 'Download 1 video' }).click();
+    await page.getByRole('dialog').waitFor({ state: 'hidden' });
+
+    await rowFor(page, 'Post a.mp4').getByText('Complete', { exact: true }).waitFor({ timeout: 30_000 });
+    assert.deepEqual(readdirSync(folder), ['Post a.mp4']);
+    // The list was read once, then only the chosen video's own page.
+    const lines = readFileSync(fakeLog, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    assert.ok(lines.some((line) => line.includes('--flat-playlist')));
+    assert.ok(!lines.some((line) => line.at(-1).endsWith('/reel/b')), 'an unchosen video was read');
+  });
+
   await step('protected, live, login-only and list-only pages are refused, and nothing is saved', async () => {
     const before = await page.locator('tbody tr').count();
 

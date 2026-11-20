@@ -41,7 +41,7 @@ pub enum Error {
     )]
     NoVideo,
     #[error(
-        "this address is a list of videos, not one video. Open the video you want and use the button beside its player, or paste that video's own address"
+        "this address is a list of videos, not one video. Choose videos from the list, or open the one you want and use the button beside its player"
     )]
     Playlist,
     #[error("the stream couldn't be read: {0}")]

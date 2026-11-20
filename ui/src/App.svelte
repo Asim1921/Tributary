@@ -12,6 +12,7 @@
   import Modal from './components/Modal.svelte';
   import OptionsDialog from './components/OptionsDialog.svelte';
   import ProgressDialog from './components/ProgressDialog.svelte';
+  import PlaylistDialog from './components/PlaylistDialog.svelte';
   import PropertiesDialog from './components/PropertiesDialog.svelte';
   import SchedulerDialog from './components/SchedulerDialog.svelte';
   import Sidebar from './components/Sidebar.svelte';
@@ -62,6 +63,7 @@
         gallery?: boolean;
       }
     | { kind: 'video'; url: string; token?: number; fileName?: string | null; page?: boolean }
+    | { kind: 'list'; url: string }
     | { kind: 'progress'; id: number }
     | { kind: 'properties'; id: number }
     | { kind: 'complete'; id: number }
@@ -626,11 +628,24 @@
     page={dialog.page}
     {defaultFolder}
     onsubmit={addVideo}
+    onlist={() => {
+      if (dialog?.kind === 'video') dialog = { kind: 'list', url: dialog.url };
+    }}
     onclose={() => {
       const token = dialog?.kind === 'video' ? dialog.token : undefined;
       closeDialog();
       if (token !== undefined) void api.discardCapture(token);
     }}
+  />
+{:else if dialog?.kind === 'list'}
+  <PlaylistDialog
+    url={dialog.url}
+    {defaultFolder}
+    onsaved={() => {
+      closeDialog();
+      void downloads.refresh();
+    }}
+    onclose={closeDialog}
   />
 {:else if dialog?.kind === 'batch'}
   <BatchDialog

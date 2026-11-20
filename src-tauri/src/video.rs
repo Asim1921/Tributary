@@ -19,7 +19,9 @@ use url::Url;
 
 use crate::capture::Captured;
 use crate::commands::{AddRequest, AppState, add_download_now};
-use crate::finishing::{self, FinishPlan, PlannedSubtitle, beside, move_file, put_extras_beside};
+use crate::finishing::{
+    self, FinishPlan, PlannedSubtitle, Section, beside, move_file, put_extras_beside,
+};
 use crate::ytdlp;
 
 const FFMPEG_FILE: &str = "ffmpeg.exe";
@@ -108,6 +110,9 @@ pub struct AddVideoRequest {
     /// Turns sound saved on its own into MP3.
     #[serde(default)]
     mp3: bool,
+    /// Keeps only this part.
+    #[serde(default)]
+    section: Option<Section>,
 }
 
 /// Where to find ffmpeg. A chosen path is the only one tried, so a mistake there shows
@@ -461,6 +466,19 @@ pub async fn add_video(
     if request.mp3 && ffmpeg_for(&state).is_none() {
         return Err("Making an MP3 needs ffmpeg. Set it up under Options, Video.".to_owned());
     }
+    if let Some(section) = request.section {
+        if ffmpeg_for(&state).is_none() {
+            return Err(
+                "Saving only part of a video needs ffmpeg. Set it up under Options, Video."
+                    .to_owned(),
+            );
+        }
+        if !section.fits(quality.video.seconds) {
+            return Err(
+                "The part chosen has to start before it ends, within the video.".to_owned(),
+            );
+        }
+    }
     let (plan, missed) = fetch_extras(&state, &request, quality.audio_only).await;
 
     let captured = request
@@ -500,6 +518,88 @@ pub async fn add_video(
         );
     }
     Ok(())
+}
+
+/// A list of videos, as the window shows it. The addresses stay here in Rust.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListView {
+    title: Option<String>,
+    entries: Vec<ListEntryView>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListEntryView {
+    title: String,
+    seconds: Option<f64>,
+    /// False for a video the list says is private, deleted or for members only.
+    available: bool,
+}
+
+/// Reads which videos a list holds, such as a playlist, without reading each one.
+#[tauri::command]
+pub async fn inspect_list(state: Managed<'_, AppState>, url: String) -> Result<ListView, String> {
+    let program = ytdlp::program_for(&state).ok_or_else(|| ytdlp::MISSING.to_owned())?;
+    let list = ytdlp::list(&program, url.trim())
+        .await
+        .map_err(|problem| problem.to_string())?;
+    *state.video_list() = list
+        .entries
+        .iter()
+        .map(|entry| (entry.url.clone(), entry.title.clone()))
+        .collect();
+    Ok(ListView {
+        title: list.title,
+        entries: list
+            .entries
+            .into_iter()
+            .map(|entry| ListEntryView {
+                title: entry.title,
+                seconds: entry.seconds,
+                available: entry.available,
+            })
+            .collect(),
+    })
+}
+
+/// Saves the chosen videos of a list, each at its best quality. They're read from their
+/// pages one at a time, a few seconds apart, like the videos of a page of pictures, and
+/// any that can't be saved are named together in one message at the end. Returns how many
+/// were chosen.
+#[tauri::command]
+pub async fn add_list(
+    app: AppHandle,
+    state: Managed<'_, AppState>,
+    chosen: Vec<usize>,
+    dest_dir: PathBuf,
+    later: bool,
+) -> Result<usize, String> {
+    let entries = state.video_list().clone();
+    let pages: Vec<Captured> = chosen
+        .iter()
+        .filter_map(|index| entries.get(*index))
+        .map(|(url, title)| Captured {
+            url: url.clone(),
+            page: true,
+            video: true,
+            file_name: Some(title.clone()),
+            // A list's own folder isn't remembered as the last one used.
+            gallery: true,
+            ..Captured::default()
+        })
+        .collect();
+    if pages.is_empty() {
+        return Err("No videos were chosen.".to_owned());
+    }
+    let count = pages.len();
+    tauri::async_runtime::spawn(crate::commands::read_pages_in_turn(
+        app,
+        pages,
+        Some(dest_dir),
+        later,
+    ));
+    Ok(count)
 }
 
 /// A name no other fetched file has.
@@ -547,6 +647,7 @@ async fn fetch_extras(
         mp3: request.mp3 && audio_only,
         audio_only,
         title,
+        section: request.section,
         ..FinishPlan::default()
     };
     let mut missed = Vec::new();

@@ -129,9 +129,42 @@ async fn read_limited(stream: Option<impl AsyncRead + Unpin>, limit: u64) -> Vec
 pub async fn inspect(program: &Path, address: &str, referer: Option<&str>) -> Result<Page, Error> {
     let url = check_page(address)?;
     let referer = referer_for(&url, referer);
+    let answer = run(program, arguments(&url, referer.as_ref())).await?;
+    ytdlp::parse(&answer)
+}
 
+/// Asks yt-dlp which videos a list holds, such as a playlist or a channel's videos, without
+/// reading each one. That's done one at a time later, for the videos chosen.
+pub async fn list(program: &Path, address: &str) -> Result<ytdlp::List, Error> {
+    let url = check_page(address)?;
+    let answer = run(program, list_arguments(&url)).await?;
+    ytdlp::parse_list(&answer)
+}
+
+/// The command line for reading a list. As for one video, the address comes after `--`
+/// and nothing reads a configuration or cookie file.
+fn list_arguments(url: &Url) -> Vec<String> {
+    [
+        "--ignore-config",
+        "--flat-playlist",
+        "--no-warnings",
+        "--dump-single-json",
+        "--socket-timeout",
+        "20",
+        "--playlist-end",
+        &ytdlp::MAX_LIST_ENTRIES.to_string(),
+        "--",
+        url.as_str(),
+    ]
+    .iter()
+    .map(|argument| (*argument).to_owned())
+    .collect()
+}
+
+/// Runs yt-dlp with these arguments and returns what it printed, or why it couldn't.
+async fn run(program: &Path, arguments: Vec<String>) -> Result<String, Error> {
     let mut child = Command::new(program)
-        .args(arguments(&url, referer.as_ref()))
+        .args(arguments)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -157,12 +190,11 @@ pub async fn inspect(program: &Path, address: &str, referer: Option<&str>) -> Re
             "yt-dlp took too long to read this page".into(),
         ));
     };
-
     let succeeded = status.is_ok_and(|status| status.success());
     if !succeeded {
         return Err(ytdlp::explain_failure(&String::from_utf8_lossy(&complaint)));
     }
-    ytdlp::parse(&String::from_utf8_lossy(&answer))
+    Ok(String::from_utf8_lossy(&answer).into_owned())
 }
 
 /// The checksum a release lists for a file.
@@ -314,6 +346,26 @@ mod tests {
         assert!(all.contains("--no-playlist"));
         // yt-dlp has said this one will stop working.
         assert!(!all.contains("--no-call-home"));
+    }
+
+    #[test]
+    fn a_list_is_read_without_cookies_or_configuration() {
+        let all = list_arguments(&Url::parse("https://x.test/playlist?list=1").unwrap());
+
+        assert!(all.contains(&"--ignore-config".to_owned()));
+        assert!(all.contains(&"--flat-playlist".to_owned()));
+        assert!(!all.join(" ").to_ascii_lowercase().contains("cookie"));
+        assert!(!all.join(" ").contains("--exec"));
+        // The address is last, after the end of the options.
+        assert_eq!(
+            &all[all.len() - 2..],
+            ["--", "https://x.test/playlist?list=1"]
+        );
+        let at = all
+            .iter()
+            .position(|argument| argument == "--playlist-end")
+            .unwrap();
+        assert_eq!(all[at + 1], "500");
     }
 
     #[test]

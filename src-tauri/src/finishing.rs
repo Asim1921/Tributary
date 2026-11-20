@@ -23,7 +23,7 @@ const DELETE_WAIT: Duration = Duration::from_millis(100);
 /// What's left to do to a downloaded video, saved with the download so it survives a
 /// restart. Subtitles and the cover were fetched when the video was added, into
 /// Tributary's own folder, because their addresses can expire.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct FinishPlan {
     /// Turns sound saved on its own into MP3.
@@ -34,6 +34,30 @@ pub struct FinishPlan {
     pub cover: Option<PathBuf>,
     /// Written into the file, so players show it.
     pub title: Option<String>,
+    /// Only this part of it is kept.
+    pub section: Option<Section>,
+}
+
+/// The part of a video to keep, in seconds from its start.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Section {
+    pub from: f64,
+    pub to: f64,
+    /// Cut at exactly these times, which means encoding the picture again. Otherwise the
+    /// cut is at the nearest keyframe before `from`, which is fast and loses nothing.
+    pub exact: bool,
+}
+
+impl Section {
+    /// Whether this makes sense for something `seconds` long, or of unknown length.
+    pub fn fits(&self, seconds: f64) -> bool {
+        self.from.is_finite()
+            && self.to.is_finite()
+            && self.from >= 0.0
+            && self.to > self.from
+            && (seconds <= 0.0 || self.from < seconds)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,13 +80,15 @@ impl FinishPlan {
     }
 
     pub fn is_empty(&self) -> bool {
-        !self.mp3 && self.subtitles.is_empty() && self.cover.is_none()
+        !self.mp3 && self.subtitles.is_empty() && self.cover.is_none() && self.section.is_none()
     }
 
     /// What the list says while this is done.
     pub fn label(&self) -> &'static str {
         if self.mp3 {
             "Converting to MP3…"
+        } else if self.section.is_some() {
+            "Cutting the part chosen…"
         } else if !self.subtitles.is_empty() {
             "Adding subtitles…"
         } else {
@@ -160,7 +186,17 @@ fn arguments(
 
     let mut arguments: Vec<OsString> = vec!["-y".into(), "-loglevel".into(), "error".into()];
     let mut inputs = 0;
-    let mut input = |arguments: &mut Vec<OsString>, path: &Path| {
+    let section = plan.section;
+    let mut input = |arguments: &mut Vec<OsString>, path: &Path, timed: bool| {
+        // Seeking each timed input keeps picture, sound and subtitles together.
+        if let (Some(section), true) = (section, timed) {
+            arguments.extend([
+                "-ss".into(),
+                format!("{:.3}", section.from).into(),
+                "-to".into(),
+                format!("{:.3}", section.to).into(),
+            ]);
+        }
         arguments.push("-i".into());
         arguments.push(path.into());
         inputs += 1;
@@ -170,15 +206,15 @@ fn arguments(
         arguments.extend(items.iter().map(OsString::from));
     }
 
-    input(&mut arguments, video);
-    let sound_input = sound.map(|sound| input(&mut arguments, sound));
+    input(&mut arguments, video, true);
+    let sound_input = sound.map(|sound| input(&mut arguments, sound, true));
     let subtitle_inputs: Vec<usize> = subtitles
         .iter()
-        .map(|subtitle| input(&mut arguments, &subtitle.path))
+        .map(|subtitle| input(&mut arguments, &subtitle.path, true))
         .collect();
     let cover_input = cover
         .filter(|_| !cover_as_attachment)
-        .map(|cover| input(&mut arguments, cover));
+        .map(|cover| input(&mut arguments, cover, false));
 
     // What goes in, in order: the picture, the sound, the subtitles, then the cover.
     if mp3 {
@@ -204,6 +240,18 @@ fn arguments(
         push(&mut arguments, &["-c:a", "libmp3lame", "-q:a", "2"]);
     } else {
         push(&mut arguments, &["-c", "copy"]);
+        // An exact cut encodes the picture again, since a copy can only start at a
+        // keyframe. WebM can't hold H.264, so it keeps the keyframe cut.
+        let exact = section.is_some_and(|section| section.exact);
+        if exact && has_picture && container != "webm" {
+            push(
+                &mut arguments,
+                &[
+                    "-c:v:0", "libx264", "-preset", "veryfast", "-crf", "18", "-c:a", "aac",
+                    "-b:a", "192k",
+                ],
+            );
+        }
     }
     for (index, subtitle) in subtitles.iter().enumerate() {
         push(
@@ -381,7 +429,7 @@ pub fn finish_files(
         (room.subtitles && !plan.subtitles.is_empty()) || (room.cover && plan.cover.is_some());
 
     // Nothing for ffmpeg to do: the extras simply go beside the video.
-    if sound.is_none() && !plan.mp3 && !anything_inside {
+    if sound.is_none() && !plan.mp3 && plan.section.is_none() && !anything_inside {
         put_extras_beside(video, plan, false)?;
         let size = fs::metadata(video)
             .map_err(|error| format!("the video can't be read: {error}"))?
@@ -468,6 +516,7 @@ mod tests {
                 .collect(),
             cover: cover.map(PathBuf::from),
             title: Some("A film".to_owned()),
+            section: None,
         }
     }
 
@@ -566,6 +615,83 @@ mod tests {
              -c:a libmp3lame -q:a 2 -c:v:0 mjpeg -disposition:v:0 attached_pic \
              -id3v2_version 3 -metadata title=A film song.mp3"
         );
+    }
+
+    #[test]
+    fn a_section_seeks_every_timed_input_but_not_the_cover() {
+        let plan = FinishPlan {
+            section: Some(Section {
+                from: 2.0,
+                to: 4.5,
+                exact: false,
+            }),
+            ..plan_with(&[("en", "en.vtt")], Some("c.jpg"))
+        };
+        let arguments = text(&arguments(
+            Path::new("v.mp4"),
+            Some(Path::new("a.m4a")),
+            &plan,
+            true,
+            Path::new("out.mp4"),
+        ));
+        assert!(arguments.contains(
+            "-ss 2.000 -to 4.500 -i v.mp4 -ss 2.000 -to 4.500 -i a.m4a \
+             -ss 2.000 -to 4.500 -i en.vtt -i c.jpg"
+        ));
+        assert!(!arguments.contains("libx264"), "a keyframe cut copies");
+        assert_eq!(plan.label(), "Cutting the part chosen…");
+    }
+
+    #[test]
+    fn an_exact_cut_encodes_the_picture_where_the_file_allows() {
+        let exact = FinishPlan {
+            section: Some(Section {
+                from: 1.0,
+                to: 3.0,
+                exact: true,
+            }),
+            ..FinishPlan::default()
+        };
+        let mp4 = text(&arguments(
+            Path::new("v.mp4"),
+            None,
+            &exact,
+            true,
+            Path::new("o.mp4"),
+        ));
+        assert!(mp4.contains("-c copy -c:v:0 libx264 -preset veryfast -crf 18 -c:a aac"));
+        let webm = text(&arguments(
+            Path::new("v.webm"),
+            None,
+            &exact,
+            true,
+            Path::new("o.webm"),
+        ));
+        assert!(!webm.contains("libx264"));
+        // Sound alone cuts precisely enough without encoding again.
+        let sound = text(&arguments(
+            Path::new("s.m4a"),
+            None,
+            &exact,
+            false,
+            Path::new("o.m4a"),
+        ));
+        assert!(!sound.contains("libx264"));
+    }
+
+    #[test]
+    fn a_section_must_make_sense() {
+        let section = |from, to| Section {
+            from,
+            to,
+            exact: false,
+        };
+        assert!(section(0.0, 5.0).fits(10.0));
+        assert!(section(3.0, 50.0).fits(0.0), "of unknown length");
+        assert!(!section(5.0, 5.0).fits(10.0));
+        assert!(!section(-1.0, 5.0).fits(10.0));
+        assert!(!section(12.0, 15.0).fits(10.0));
+        assert!(!section(f64::NAN, 5.0).fits(10.0));
     }
 
     #[test]
