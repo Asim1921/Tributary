@@ -118,6 +118,51 @@ pub fn finish(part: &Path, folder: &Path, name: &str) -> io::Result<PathBuf> {
     ))
 }
 
+/// Tags a finished file as downloaded from the internet, as browsers do, so Windows
+/// SmartScreen and Office's Protected View check it before it's opened. Drives that
+/// can't hold the extra stream, such as FAT32 and exFAT, are skipped without complaint.
+pub fn mark_from_internet(path: &Path, host_url: &str, referrer: Option<&str>) {
+    let _ = std::fs::write(zone_stream(path), zone_identifier(host_url, referrer));
+}
+
+/// Gives `to` the same internet tag as `from`, if `from` has one. For a file that's
+/// rewritten into a new one, such as a video joined with its sound.
+pub fn copy_mark(from: &Path, to: &Path) {
+    if let Ok(mark) = std::fs::read(zone_stream(from)) {
+        let _ = std::fs::write(zone_stream(to), mark);
+    }
+}
+
+/// The hidden stream Windows keeps a file's origin in.
+fn zone_stream(path: &Path) -> PathBuf {
+    let mut stream = path.as_os_str().to_owned();
+    stream.push(":Zone.Identifier");
+    PathBuf::from(stream)
+}
+
+/// What Windows reads: the internet zone, then where the file came from.
+fn zone_identifier(host_url: &str, referrer: Option<&str>) -> String {
+    let mut text = String::from("[ZoneTransfer]\r\nZoneId=3\r\n");
+    if let Some(referrer) = referrer.and_then(shareable_address) {
+        text.push_str(&format!("ReferrerUrl={referrer}\r\n"));
+    }
+    if let Some(host) = shareable_address(host_url) {
+        text.push_str(&format!("HostUrl={host}\r\n"));
+    }
+    text
+}
+
+/// A web address with any login taken out of it, or nothing for anything else.
+fn shareable_address(address: &str) -> Option<String> {
+    let mut url = reqwest::Url::parse(address).ok()?;
+    if !matches!(url.scheme(), "http" | "https" | "ftp") {
+        return None;
+    }
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    Some(url.to_string())
+}
+
 /// Moves a finished `.part` file over an earlier version of the same download. Only a
 /// sync queue does this, and only for a file it downloaded itself.
 pub fn replace(part: &Path, target: &Path) -> io::Result<()> {
@@ -209,6 +254,79 @@ mod tests {
 
         let elapsed = began.elapsed().as_secs_f64();
         assert!(elapsed < 5.0, "took {elapsed:.1}s: the file wasn't sparse");
+    }
+
+    #[test]
+    fn a_marked_file_says_it_came_from_the_internet() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("setup.exe");
+        fs::write(&path, b"program").unwrap();
+
+        mark_from_internet(
+            &path,
+            "https://user:secret@example.com/files/setup.exe?v=2",
+            Some("https://example.com/download"),
+        );
+
+        let mut stream = path.as_os_str().to_owned();
+        stream.push(":Zone.Identifier");
+        assert_eq!(
+            fs::read_to_string(stream).unwrap(),
+            "[ZoneTransfer]\r\nZoneId=3\r\n\
+             ReferrerUrl=https://example.com/download\r\n\
+             HostUrl=https://example.com/files/setup.exe?v=2\r\n"
+        );
+        // The file itself is untouched.
+        assert_eq!(fs::read(&path).unwrap(), b"program");
+    }
+
+    #[test]
+    fn only_web_addresses_are_named_in_the_mark() {
+        assert_eq!(
+            zone_identifier("ftp://me:pw@files.example/a.zip", Some("not an address")),
+            "[ZoneTransfer]\r\nZoneId=3\r\nHostUrl=ftp://files.example/a.zip\r\n"
+        );
+        assert_eq!(
+            zone_identifier("file:///C:/a.zip", Some("javascript:alert(1)")),
+            "[ZoneTransfer]\r\nZoneId=3\r\n"
+        );
+    }
+
+    #[test]
+    fn a_rewritten_file_keeps_its_mark() {
+        let folder = tempfile::tempdir().unwrap();
+        let (old, new, plain) = (
+            folder.path().join("a.mp4"),
+            folder.path().join("a.joining.mp4"),
+            folder.path().join("b.mp4"),
+        );
+        for path in [&old, &new, &plain] {
+            fs::write(path, b"video").unwrap();
+        }
+        mark_from_internet(&old, "https://a.example/v.mp4", None);
+
+        copy_mark(&old, &new);
+        copy_mark(&plain, &new.with_extension("other"));
+
+        let read = |path: &Path| {
+            let mut stream = path.as_os_str().to_owned();
+            stream.push(":Zone.Identifier");
+            fs::read_to_string(stream).ok()
+        };
+        assert_eq!(read(&new), read(&old));
+        assert!(read(&new).unwrap().contains("ZoneId=3"));
+        // A file that was never marked doesn't hand on a mark.
+        assert_eq!(read(&new.with_extension("other")), None);
+    }
+
+    #[test]
+    fn marking_a_missing_file_does_no_harm() {
+        let folder = tempfile::tempdir().unwrap();
+        mark_from_internet(
+            &folder.path().join("gone").join("a.zip"),
+            "https://a.example/",
+            None,
+        );
     }
 
     #[test]

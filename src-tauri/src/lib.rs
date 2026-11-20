@@ -4,6 +4,8 @@ mod after_queue;
 mod capture;
 mod commands;
 mod data;
+mod finishing;
+mod notices;
 mod rules;
 mod scanner;
 mod secrets;
@@ -45,7 +47,7 @@ const DROP_TARGET_WINDOW: &str = "droptarget";
 
 /// Passed when Windows starts the app at sign-in, so it opens in the tray.
 const MINIMIZED_FLAG: &str = "--minimized";
-const MAIN_WINDOW: &str = "main";
+pub(crate) const MAIN_WINDOW: &str = "main";
 
 /// Keeps data in another folder, so automated tests never touch real downloads.
 const DATA_DIR_VARIABLE: &str = "TRIBUTARY_DATA_DIR";
@@ -130,6 +132,7 @@ async fn carry_out(handle: AppHandle, invocation: Invocation) {
             url: add.url,
             file_name: add.name,
             folder: add.folder,
+            checksum: add.checksum,
             ..Captured::default()
         };
         if file.is_stream() && (add.later || add.silent) {
@@ -306,6 +309,42 @@ fn scan_finished_file(app: &AppHandle, id: DownloadId) {
     });
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChecksumPayload {
+    id: i64,
+    matches: bool,
+}
+
+/// Checks a finished file against the checksum it was given, if it was given one. The list
+/// says "Checking…" meanwhile, and a mismatch plays the failure sound.
+pub(crate) fn check_checksum(app: &AppHandle, id: DownloadId) {
+    let state = app.state::<AppState>();
+    let ready = state
+        .engine
+        .get(id)
+        .is_ok_and(|download| download.checksum.is_some() && download.state == State::Completed);
+    if !ready || !state.start_checking(id.0) {
+        return;
+    }
+    let _ = app.emit("queues-changed", ());
+
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = handle.state::<AppState>();
+        let result = state.engine.verify_checksum(id).await;
+        state.finish_checking(id.0);
+        notices::finished(&handle, id);
+        if let Ok(Some(matches)) = result {
+            if !matches {
+                play_event_sound(&handle, |sounds| &sounds.failed);
+            }
+            let _ = handle.emit("checksum-finished", ChecksumPayload { id: id.0, matches });
+        }
+        let _ = handle.emit("queues-changed", ());
+    });
+}
+
 /// Plays the sound the user chose for an event, if any.
 fn play_event_sound(app: &AppHandle, choose: impl Fn(&Sounds) -> &str) {
     if let Ok(settings) = app.state::<AppState>().settings.lock() {
@@ -369,6 +408,12 @@ fn forward_events(app: AppHandle, engine: &Engine) {
                     );
                 }
                 Ok(Event::State { id, state }) => {
+                    // Noted before the window hears it's finished, so the window waits for
+                    // the answer rather than calling the file done.
+                    if state == State::Completed {
+                        check_checksum(&app, id);
+                        video::finish_if_ready(&app, id);
+                    }
                     let _ = app.emit(
                         "download-state",
                         StatePayload {
@@ -379,11 +424,14 @@ fn forward_events(app: AppHandle, engine: &Engine) {
                     match state {
                         State::Completed => {
                             play_event_sound(&app, |sounds| &sounds.complete);
+                            notices::completed(&app, id);
                             scan_finished_file(&app, id);
-                            video::join_if_ready(&app, id);
                             quit_if_asked(&app, id);
                         }
-                        State::Failed => play_event_sound(&app, |sounds| &sounds.failed),
+                        State::Failed => {
+                            play_event_sound(&app, |sounds| &sounds.failed);
+                            notices::failed(&app, id);
+                        }
                         State::Running | State::Paused => {}
                     }
                 }
@@ -392,6 +440,7 @@ fn forward_events(app: AppHandle, engine: &Engine) {
                 }
                 Ok(Event::QueueFinished { id }) => {
                     play_event_sound(&app, |sounds| &sounds.queue);
+                    notices::queue_finished(&app, id);
                     run_after_action(&app, id);
                     let _ = app.emit("queues-changed", ());
                 }
@@ -431,12 +480,16 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
         quit_after: Mutex::default(),
         video_choices: Mutex::default(),
         joining: Mutex::default(),
+        video_extras: Mutex::default(),
+        checking: Mutex::default(),
+        notices: Mutex::default(),
         grabber: Grabber::open(data_dir.join("projects.json")),
     });
     app.state::<AppState>().attach_site_logins();
     build_tray(app)?;
 
     capture::serve(app.handle().clone());
+    video::finish_leftovers(app.handle());
     watch_clipboard(app.handle().clone());
     site_grabber::watch_schedule(app.handle().clone());
 
@@ -561,6 +614,8 @@ pub fn run() {
             commands::export_data,
             commands::import_data,
             commands::discard_capture,
+            commands::find_checksum,
+            commands::set_checksum,
             commands::add_batch,
             commands::extension_folder,
             commands::add_dropped_link,

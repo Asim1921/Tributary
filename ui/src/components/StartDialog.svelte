@@ -1,7 +1,8 @@
 <script lang="ts">
   import { untrack } from 'svelte';
 
-  import { LOGIN_NEEDED, inspectUrl, pickFolder, suggestCategory } from '../lib/api';
+  import { LOGIN_NEEDED, findChecksum, inspectUrl, pickFolder, suggestCategory } from '../lib/api';
+  import { NOT_A_CHECKSUM, looksLikeChecksum } from '../lib/checksum';
   import { formatBytes } from '../lib/format';
   import type { AddRequest, Category, FileInfo, Queue } from '../lib/types';
   import Modal from './Modal.svelte';
@@ -44,6 +45,10 @@
   let username = $state('');
   let password = $state('');
   let rememberLogin = $state(false);
+  let checksum = $state('');
+  let finding = $state(false);
+  let found = $state<string | null>(null);
+  const checksumOk = $derived(looksLikeChecksum(checksum));
 
   // The check finishes after the dialog opens, and must never overwrite what's been typed.
   let nameEdited = false;
@@ -98,6 +103,25 @@
     }
   }
 
+  /** Looks for a checksum the site publishes beside the file. */
+  async function find() {
+    finding = true;
+    found = null;
+    try {
+      const result = await findChecksum(url, fileName || undefined);
+      if (result) {
+        checksum = result.hex;
+        found = `Found the ${result.algorithm} checksum the site publishes for this file.`;
+      } else {
+        found = "The site doesn't publish a checksum beside this file.";
+      }
+    } catch (error) {
+      found = `Couldn't look for one: ${error}`;
+    } finally {
+      finding = false;
+    }
+  }
+
   function submit(later: boolean) {
     onsubmit({
       url,
@@ -111,6 +135,7 @@
       password: password || undefined,
       rememberLogin,
       captureToken,
+      checksum: checksum.trim() || undefined,
     });
   }
 </script>
@@ -212,10 +237,39 @@
     <input type="text" bind:value={description} placeholder="Optional" />
   </label>
 
+  <div class="field-block">
+    <label class="field" for="start-checksum">Checksum</label>
+    <div class="folder-row">
+      <input
+        id="start-checksum"
+        type="text"
+        bind:value={checksum}
+        placeholder="Optional: the MD5, SHA-1, SHA-256 or SHA-512 the site gives"
+        spellcheck="false"
+        autocomplete="off"
+      />
+      <button type="button" disabled={finding} onclick={find}>
+        {finding ? 'Looking…' : 'Find'}
+      </button>
+    </div>
+    {#if !checksumOk}
+      <p class="error-text found" role="alert">{NOT_A_CHECKSUM}</p>
+    {:else if found}
+      <p class="note found" role="status">{found}</p>
+    {/if}
+  </div>
+
   {#snippet footer()}
     <button type="button" onclick={onclose}>Cancel</button>
-    <button type="button" disabled={checking} onclick={() => submit(true)}>Download later</button>
-    <button type="button" class="primary" disabled={checking} onclick={() => submit(false)}>
+    <button type="button" disabled={checking || !checksumOk} onclick={() => submit(true)}>
+      Download later
+    </button>
+    <button
+      type="button"
+      class="primary"
+      disabled={checking || !checksumOk}
+      onclick={() => submit(false)}
+    >
       Start download
     </button>
   {/snippet}
@@ -256,6 +310,10 @@
 
   .field-block .field {
     margin-bottom: 4px;
+  }
+
+  .found {
+    margin: 4px 0 0;
   }
 
   .pair {

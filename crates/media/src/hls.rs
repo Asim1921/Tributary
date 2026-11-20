@@ -192,6 +192,7 @@ where
             video,
             audio,
             headers: None,
+            audio_only,
         });
     }
     Ok(qualities)
@@ -219,6 +220,7 @@ where
             video: track(&base, &playlist, false)?,
             audio: None,
             headers: None,
+            audio_only: false,
         }]),
     }
 }

@@ -329,6 +329,9 @@ mod tests {
             is_stream: false,
             parts_done: 0,
             companion: None,
+            checksum: None,
+            checksum_matches: None,
+            finish_plan: None,
         }
     }
 

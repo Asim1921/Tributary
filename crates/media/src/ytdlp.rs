@@ -25,6 +25,91 @@ pub struct Page {
     /// An HLS stream holding better qualities than any plain file, for Tributary to read
     /// itself. Reading it refuses an encrypted stream, as any HLS address does.
     pub stream: Option<Stream>,
+    /// Subtitles people wrote, then automatic ones, each group by name.
+    pub subtitles: Vec<Subtitle>,
+    /// The video's cover picture.
+    pub thumbnail: Option<String>,
+}
+
+/// A subtitle track a page offers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Subtitle {
+    /// The language code the site gives, such as `en` or `pt-BR`.
+    pub language: String,
+    /// What it's called, such as `English`.
+    pub name: String,
+    pub url: String,
+    /// `vtt`, `srt` or `ass`, which ffmpeg can all read.
+    pub extension: String,
+    /// Made by speech recognition rather than written by someone.
+    pub automatic: bool,
+}
+
+/// Subtitle formats ffmpeg can put into a video, best first.
+const SUBTITLE_FORMATS: [&str; 3] = ["vtt", "srt", "ass"];
+
+/// The most subtitles offered, so a page can't fill the dialog.
+const MAX_SUBTITLES: usize = 80;
+
+/// The subtitles a page offers, in a format that can go into a video.
+fn subtitles(page: &Value) -> Vec<Subtitle> {
+    let mut found = Vec::new();
+    for (key, automatic) in [("subtitles", false), ("automatic_captions", true)] {
+        let Some(languages) = page.get(key).and_then(Value::as_object) else {
+            continue;
+        };
+        let mut these: Vec<Subtitle> = languages
+            .iter()
+            // A live stream's chat replay is listed as a subtitle, but isn't one.
+            .filter(|(language, _)| language.as_str() != "live_chat")
+            .filter_map(|(language, entries)| {
+                let entries = entries.as_array()?;
+                let entry = SUBTITLE_FORMATS.iter().find_map(|wanted| {
+                    entries
+                        .iter()
+                        .find(|entry| text(entry, "ext") == Some(*wanted))
+                })?;
+                let url = text(entry, "url").filter(|url| url.starts_with("http"))?;
+                let name = text(entry, "name")
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or(language);
+                Some(Subtitle {
+                    language: language.clone(),
+                    name: name.to_owned(),
+                    url: url.to_owned(),
+                    extension: text(entry, "ext")?.to_owned(),
+                    automatic,
+                })
+            })
+            .collect();
+        if automatic {
+            // YouTube offers its automatic captions translated by machine into every
+            // language, marked with `tlang` in the address. Only the video's own are worth
+            // offering, where those can be told apart.
+            let own: Vec<Subtitle> = these
+                .iter()
+                .filter(|subtitle| !subtitle.url.contains("tlang="))
+                .cloned()
+                .collect();
+            if !own.is_empty() {
+                these = own;
+            }
+        }
+        these.sort_by_key(|subtitle| subtitle.name.to_lowercase());
+        found.extend(these);
+    }
+    found.truncate(MAX_SUBTITLES);
+    found
+}
+
+/// What to call a sound saved on its own, beside the pictures offered.
+fn audio_only_label(bits: Option<u64>, extension: &str) -> String {
+    let kind = extension.to_ascii_uppercase();
+    match bits {
+        Some(bits) => format!("Audio only, {} kbps ({kind})", bits / 1000),
+        None => format!("Audio only ({kind})"),
+    }
 }
 
 /// A stream's address, and the only headers to send for it.
@@ -350,22 +435,39 @@ pub fn parse(json: &str) -> Result<Page, Error> {
             video: track(item, seconds, video_extension),
             audio,
             headers,
+            audio_only: false,
         });
     }
 
-    // Sound alone, for a page that has no picture.
-    if qualities.is_empty()
-        && let Some(sound) = sounds.iter().max_by(|a, b| a.bitrate.total_cmp(&b.bitrate))
-    {
+    // Sound alone: the only choice for a page with no picture, or the last one beside the
+    // pictures, for anyone who only wants to listen. Beside pictures, M4A comes first,
+    // because it plays everywhere.
+    let best = |a: &&&Candidate, b: &&&Candidate| a.bitrate.total_cmp(&b.bitrate);
+    let alone = if qualities.is_empty() {
+        sounds.iter().max_by(best)
+    } else {
+        sounds
+            .iter()
+            .filter(|sound| sound.extension == "m4a")
+            .max_by(best)
+            .or_else(|| sounds.iter().max_by(best))
+    };
+    if let Some(sound) = alone {
         let bits = Some((sound.bitrate * 1000.0) as u64).filter(|bits| *bits > 0);
+        let label = if qualities.is_empty() {
+            crate::audio_label(bits)
+        } else {
+            audio_only_label(bits, sound.extension)
+        };
         qualities.push(Quality {
-            label: crate::audio_label(bits),
+            label,
             width: None,
             height: None,
             bandwidth: bits,
             video: track(sound, seconds, sound.extension),
             audio: None,
             headers: Some(safe_headers(sound.headers)),
+            audio_only: true,
         });
     }
 
@@ -391,6 +493,10 @@ pub fn parse(json: &str) -> Result<Page, Error> {
             .filter(|title| !title.trim().is_empty()),
         qualities,
         stream,
+        subtitles: subtitles(&page),
+        thumbnail: text(&page, "thumbnail")
+            .filter(|url| url.starts_with("http"))
+            .map(str::to_owned),
     })
 }
 
@@ -517,7 +623,17 @@ mod tests {
             .iter()
             .map(|item| item.label.as_str())
             .collect();
-        assert_eq!(labels, ["2160p", "1440p", "1080p", "720p", "480p"]);
+        assert_eq!(
+            labels,
+            [
+                "2160p",
+                "1440p",
+                "1080p",
+                "720p",
+                "480p",
+                "Audio only, 128 kbps (M4A)"
+            ]
+        );
         // Two formats of the same sharpness are one choice, the one that plays everywhere.
         assert_eq!(found.qualities[2].video.parts[0].url, "https://v.test/137");
         assert_eq!(
@@ -536,7 +652,10 @@ mod tests {
             .iter()
             .map(|item| item.label.as_str())
             .collect();
-        assert_eq!(labels, ["2160p", "1080p", "720p"]);
+        assert_eq!(
+            labels,
+            ["2160p", "1080p", "720p", "Audio only, 128 kbps (M4A)"]
+        );
         assert_eq!(found.title.as_deref(), Some("A film"));
     }
 
@@ -631,7 +750,7 @@ mod tests {
             .iter()
             .map(|item| item.label.as_str())
             .collect();
-        assert_eq!(labels.len(), 3);
+        assert_eq!(labels.len(), 4);
         assert!(labels.contains(&"1080p60"));
         assert!(labels.contains(&"1080p HDR"));
         assert!(labels.contains(&"1080p"));
@@ -651,8 +770,111 @@ mod tests {
             sound("s", "m4a", 128.0),
         ]))
         .unwrap();
-        assert_eq!(found.qualities.len(), 1);
+        assert_eq!(found.qualities.len(), 2);
         assert_eq!(found.qualities[0].label, "720p");
+        assert!(found.qualities[1].audio_only);
+    }
+
+    #[test]
+    fn sound_alone_is_offered_last_as_m4a_where_it_can_be() {
+        let found = parse(&page(standard())).unwrap();
+
+        let alone = found.qualities.last().unwrap();
+        assert!(alone.audio_only);
+        // The WebM sound has the higher rate, but M4A plays everywhere.
+        assert_eq!(alone.video.parts[0].url, "https://v.test/a-m4a");
+        assert_eq!(alone.video.extension, "m4a");
+        assert_eq!(alone.audio, None);
+        assert_eq!(alone.bandwidth, Some(128_000));
+        assert!(
+            found
+                .qualities
+                .iter()
+                .rev()
+                .skip(1)
+                .all(|quality| !quality.audio_only)
+        );
+
+        // Without M4A, the best of what there is.
+        let found = parse(&page(vec![
+            picture("p720", 720, "webm", "vp9", 2000.0),
+            sound("opus", "webm", 160.0),
+            sound("low", "webm", 64.0),
+        ]))
+        .unwrap();
+        assert_eq!(
+            found.qualities.last().unwrap().label,
+            "Audio only, 160 kbps (WEBM)"
+        );
+    }
+
+    #[test]
+    fn a_page_with_no_sound_of_its_own_offers_no_sound_alone() {
+        let mut whole = picture("whole", 720, "mp4", "avc1", 2000.0);
+        whole["acodec"] = json!("mp4a.40.2");
+        let found = parse(&page(vec![whole])).unwrap();
+
+        assert_eq!(found.qualities.len(), 1);
+        assert!(!found.qualities[0].audio_only);
+    }
+
+    #[test]
+    fn subtitles_and_the_cover_are_read() {
+        let mut answer: Value = serde_json::from_str(&page(standard())).unwrap();
+        answer["thumbnail"] = json!("https://i.test/cover.webp");
+        answer["subtitles"] = json!({
+            "fr": [
+                { "ext": "json3", "url": "https://s.test/fr.json3", "name": "French" },
+                { "ext": "srt", "url": "https://s.test/fr.srt", "name": "French" },
+                { "ext": "vtt", "url": "https://s.test/fr.vtt", "name": "French" }
+            ],
+            "en": [{ "ext": "vtt", "url": "https://s.test/en.vtt", "name": "English" }],
+            "live_chat": [{ "ext": "json", "url": "https://s.test/chat.json" }],
+            "de": [{ "ext": "ttml", "url": "https://s.test/de.ttml", "name": "German" }],
+            "es": [{ "ext": "srt", "url": "file:///C:/es.srt", "name": "Spanish" }]
+        });
+        answer["automatic_captions"] = json!({
+            "en": [{ "ext": "vtt", "url": "https://s.test/auto?lang=en", "name": "English" }],
+            "af": [{ "ext": "vtt", "url": "https://s.test/auto?lang=en&tlang=af", "name": "Afrikaans" }],
+            "pt-BR": [{ "ext": "srt", "url": "https://s.test/auto?lang=pt", "name": "" }]
+        });
+
+        let found = parse(&answer.to_string()).unwrap();
+
+        assert_eq!(
+            found.thumbnail.as_deref(),
+            Some("https://i.test/cover.webp")
+        );
+        let listed: Vec<(&str, &str, &str, bool)> = found
+            .subtitles
+            .iter()
+            .map(|item| {
+                (
+                    item.language.as_str(),
+                    item.name.as_str(),
+                    item.url.as_str(),
+                    item.automatic,
+                )
+            })
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                // Written ones first, by name, each in the best format ffmpeg reads.
+                ("en", "English", "https://s.test/en.vtt", false),
+                ("fr", "French", "https://s.test/fr.vtt", false),
+                // Then automatic ones, without the machine translations.
+                ("en", "English", "https://s.test/auto?lang=en", true),
+                ("pt-BR", "pt-BR", "https://s.test/auto?lang=pt", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_page_without_subtitles_or_a_cover_has_none() {
+        let found = parse(&page(standard())).unwrap();
+        assert!(found.subtitles.is_empty());
+        assert_eq!(found.thumbnail, None);
     }
 
     #[test]

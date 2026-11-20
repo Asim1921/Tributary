@@ -5,6 +5,7 @@
 //! database never claims bytes the file doesn't have.
 
 mod auth;
+pub mod checksum;
 mod disk;
 mod engine;
 mod error;
@@ -20,6 +21,8 @@ mod transfer;
 mod wildcard;
 
 pub use auth::Login;
+pub use checksum::Checksum;
+pub use disk::{copy_mark, mark_from_internet};
 pub use engine::{
     Config, DownloadEdit, Engine, Event, FetchedPage, FileInfo, ManualProxy, NetworkOptions,
     NewDownload, ProxyMode, QueueInfo, ServerLimit,

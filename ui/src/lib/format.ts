@@ -77,9 +77,25 @@ const STATE_LABELS: Record<DownloadState, string> = {
 export function statusText(download: Download): string {
   // A video saved as two parts is done once its sound is joined in.
   if (download.state === 'completed' && download.addingSound) return 'Adding sound…';
+  if (download.state === 'completed' && download.finishing) return download.finishing;
+  if (download.state === 'completed' && download.checking) return 'Checking…';
+  if (download.state === 'completed' && download.checksumMatches === false) {
+    return "Checksum doesn't match";
+  }
+  if (download.state === 'completed' && download.checksumMatches === true) return 'Complete, verified';
   const value = percent(download);
   if (download.state === 'completed' || value === null) return STATE_LABELS[download.state];
   return `${STATE_LABELS[download.state]} ${value.toFixed(1)}%`;
+}
+
+/** How a download's checksum check went, for its properties. */
+export function checksumText(download: Download): string {
+  if (!download.checksum) return 'None given';
+  const kind = download.checksum.algorithm;
+  if (download.checking) return `${kind}: checking…`;
+  if (download.checksumMatches === true) return `${kind}: matches`;
+  if (download.checksumMatches === false) return `${kind}: doesn't match`;
+  return `${kind}: checked when the download finishes`;
 }
 
 /** The best available name, for a download whose server hasn't been asked yet too. */

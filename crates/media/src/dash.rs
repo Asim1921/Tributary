@@ -465,6 +465,7 @@ pub(crate) fn read(url: &str, xml: &str) -> Result<Vec<Quality>, Error> {
                 video: item.track.clone(),
                 audio: None,
                 headers: None,
+                audio_only: true,
             })
             .collect());
     }
@@ -479,6 +480,7 @@ pub(crate) fn read(url: &str, xml: &str) -> Result<Vec<Quality>, Error> {
             video: item.track.clone(),
             audio: audio.clone(),
             headers: None,
+            audio_only: false,
         })
         .collect())
 }

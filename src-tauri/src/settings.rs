@@ -83,6 +83,11 @@ pub struct Settings {
     pub theme: Theme,
     pub show_start_dialog: bool,
     pub show_complete_dialog: bool,
+    /// Shows a Windows notification when downloads finish while Tributary is out of sight.
+    pub notify_in_background: bool,
+    /// Tags finished files as coming from the internet, as browsers do, so Windows
+    /// SmartScreen and Office's Protected View check them before they're opened.
+    pub mark_downloads: bool,
     pub close_to_tray: bool,
     pub start_with_windows: bool,
     pub columns: Vec<Column>,
@@ -150,6 +155,8 @@ impl Default for Settings {
             theme: Theme::default(),
             show_start_dialog: true,
             show_complete_dialog: true,
+            notify_in_background: true,
+            mark_downloads: true,
             close_to_tray: true,
             start_with_windows: false,
             columns: Vec::new(),
@@ -342,6 +349,9 @@ mod tests {
 
         assert_eq!(settings.connections, 4);
         assert!(settings.show_complete_dialog);
+        // Someone updating keeps the protection browsers give, without having to find it.
+        assert!(settings.mark_downloads);
+        assert!(settings.notify_in_background);
     }
 
     #[test]

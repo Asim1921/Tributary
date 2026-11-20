@@ -23,7 +23,7 @@ Hold **Ctrl** while clicking to force a download into Tributary, or **Alt** to l
 ## Command line
 
 ```
-tributary --add URL [--folder FOLDER] [--name NAME] [--silent] [--later] [--quit-when-done]
+tributary --add URL [--folder FOLDER] [--name NAME] [--checksum HASH] [--silent] [--later] [--quit-when-done]
 tributary --start-queue
 tributary --minimized
 ```
@@ -33,6 +33,7 @@ tributary --minimized
 | `--add URL` | Adds a download. Without `--silent`, you're asked first. |
 | `--folder FOLDER` | Where to save it. |
 | `--name NAME` | What to call it. |
+| `--checksum HASH` | The file's MD5, SHA-1, SHA-256 or SHA-512, checked once it's in. `sha256:` in front is optional. |
 | `--silent` | Starts with no questions. A video stream saves its best quality. |
 | `--later` | Puts it in the main queue instead of starting it. |
 | `--start-queue` | Starts the main queue. |
@@ -40,6 +41,12 @@ tributary --minimized
 | `--quit-when-done` | Closes the app when this download finishes. Needs `--add` and `--silent`. The app stays open if the download fails, another one is running, or virus scanning is on. |
 
 If Tributary is already running, these go to the running copy.
+
+## Checking downloads
+
+- **Checksums.** Paste the MD5, SHA-1, SHA-256 or SHA-512 a site gives for a file into the **Checksum** box of the start dialog, or press **Find** to have Tributary look for one published beside the file, as `file.iso.sha256` or in a `SHA256SUMS` list. The file is checked once it's in: the list says **Complete, verified**, or **Checksum doesn't match** in red. A checksum can be added or corrected later in **Properties**, and is checked at once. Nothing is sent to the site but plain requests for those lists.
+- **Marked as from the internet.** Like a browser, Tributary tags each finished file with where it came from, so Windows SmartScreen and Office's Protected View check it before it opens. **Options > Security** can turn this off. Drives that can't hold the tag, such as FAT32 and exFAT, are left as they are.
+- **Notifications.** When downloads finish while Tributary is in the background, Windows shows a notification with **Open** and **Show in folder**. Many files at once, or a whole queue, give one notification rather than one each. A file that doesn't match its checksum, or a download that fails, is said too. **Options > Downloads** can turn this off. Windows only shows them for the installed app, because they go by its Start menu entry.
 
 ## Video
 
@@ -54,6 +61,8 @@ The extension shows a panel in the corner of any video player on a page, and lis
 - **A site being free to watch doesn't make its videos free to copy.** Sites that stream films without their owners' permission aren't supported. For free films, public-domain collections such as the Internet Archive's work well.
 - **Videos in a playlist** download one at a time: open the video and use the button beside its player. The button also works in YouTube's miniplayer and on the previews that play on its home page. A playlist's own page isn't downloaded as a whole.
 - **Protected, live, paid and login-only videos are refused.** Anything that declares encryption or DRM won't be saved, and neither will members-only or private videos. yt-dlp is never given your cookies or logins.
+- **Sound alone** is offered as the last quality, as M4A where the site has it. With ffmpeg set up, it can be made into an MP3 instead.
+- **Subtitles and the cover picture.** Where a site lists subtitles, the dialog offers them, written ones in your Windows language first. Automatic captions are offered too, but never chosen for you. **Add the cover picture** puts the video's thumbnail in the file, as music players show it. Both go inside the video with ffmpeg: MP4 and MKV take subtitles and a cover, WebM takes subtitles only, and MP3 and M4A take a cover. Whatever a file can't hold, or everything if ffmpeg isn't set up, is saved beside it, as `Film.en.vtt` and `Film.jpg`. They're fetched when the video is added, without cookies, because their links can expire before a video saved for later starts.
 - **Some videos keep picture and sound apart**, as YouTube and Facebook do. The sound is downloaded out of sight, in Tributary's own folder, and joined into the video with [ffmpeg](https://ffmpeg.org): the list shows one item, which reads **Adding sound…** while they're joined, and you get one file. If ffmpeg isn't installed, or can't join them, the sound is put beside the video instead, so nothing is lost. Set ffmpeg's location under **Options**, **Video**, if it isn't found automatically.
 
 ## Saving every picture and video on a page

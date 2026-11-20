@@ -61,6 +61,9 @@ pub struct Captured {
     /// Only set from the command line.
     #[serde(skip)]
     pub folder: Option<PathBuf>,
+    /// What the file's checksum should be. Only set from the command line.
+    #[serde(skip)]
+    pub checksum: Option<String>,
     /// The queue a video saved for later goes to. Only the app sets this.
     #[serde(skip)]
     pub queue: Option<i64>,
@@ -105,7 +108,7 @@ impl Captured {
 pub enum Request {
     Ping,
     Settings,
-    Download(Captured),
+    Download(Box<Captured>),
     Batch {
         items: Vec<Captured>,
         #[serde(default)]
@@ -313,7 +316,7 @@ fn answer(app: &AppHandle, message: &[u8]) -> Value {
     let result = match request {
         Request::Ping => Ok(()),
         Request::Settings => return settings_reply(&app.state::<AppState>()),
-        Request::Download(file) => receive(app, vec![file], false),
+        Request::Download(file) => receive(app, vec![*file], false),
         Request::Batch {
             items,
             title,
@@ -429,12 +432,16 @@ mod tests {
 
     #[test]
     fn a_page_cannot_set_the_download_folder() {
-        // The folder is only for the command line, so a message can't choose it.
+        // The folder and checksum are only for the command line, so a message can't set them.
         let message = br#"{ "type": "download", "url": "https://x.test/a.zip",
-            "folder": "C:\\Windows\\System32" }"#;
+            "folder": "C:\\Windows\\System32",
+            "checksum": "md5:00000000000000000000000000000000" }"#;
 
         match serde_json::from_slice::<Request>(message).unwrap() {
-            Request::Download(file) => assert_eq!(file.folder, None),
+            Request::Download(file) => {
+                assert_eq!(file.folder, None);
+                assert_eq!(file.checksum, None);
+            }
             other => panic!("read as {other:?}"),
         }
     }

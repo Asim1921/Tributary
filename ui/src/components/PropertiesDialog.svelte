@@ -2,7 +2,8 @@
   import { untrack } from 'svelte';
 
   import { pickFolder } from '../lib/api';
-  import { displayName, formatBytes, formatDate, statusText } from '../lib/format';
+  import { NOT_A_CHECKSUM, looksLikeChecksum } from '../lib/checksum';
+  import { checksumText, displayName, formatBytes, formatDate, statusText } from '../lib/format';
   import type { DownloadRow, EditRequest } from '../lib/types';
   import Modal from './Modal.svelte';
 
@@ -18,6 +19,8 @@
   let url = $state(untrack(() => row.url));
   let folder = $state(untrack(() => row.destDir));
   let description = $state(untrack(() => row.description ?? ''));
+  let checksum = $state(untrack(() => row.checksum?.hex ?? ''));
+  const checksumOk = $derived(looksLikeChecksum(checksum));
 
   const running = $derived(row.state === 'running');
   const completed = $derived(row.state === 'completed');
@@ -32,6 +35,7 @@
       url: url === row.url ? undefined : url,
       destDir: folder === row.destDir ? undefined : folder,
       description: description === (row.description ?? '') ? undefined : description,
+      checksum: checksum.trim() === (row.checksum?.hex ?? '') ? undefined : checksum.trim(),
     });
   }
 </script>
@@ -53,6 +57,10 @@
     {#if row.finalPath}
       <dt>Saved to</dt>
       <dd class="selectable">{row.finalPath}</dd>
+    {/if}
+    {#if row.checksum}
+      <dt>Checksum</dt>
+      <dd class:error-text={row.checksumMatches === false}>{checksumText(row)}</dd>
     {/if}
   </dl>
 
@@ -78,13 +86,30 @@
     <input type="text" bind:value={description} disabled={running} />
   </label>
 
+  <label class="field">
+    Checksum
+    <input
+      type="text"
+      bind:value={checksum}
+      disabled={running}
+      placeholder="Optional: the MD5, SHA-1, SHA-256 or SHA-512 the site gives"
+      spellcheck="false"
+      autocomplete="off"
+    />
+  </label>
+  {#if !checksumOk}
+    <p class="error-text" role="alert">{NOT_A_CHECKSUM}</p>
+  {/if}
+
   {#if running}
     <p class="note">Stop the download to change these.</p>
   {/if}
 
   {#snippet footer()}
     <button type="button" onclick={onclose}>Cancel</button>
-    <button type="button" class="primary" disabled={running} onclick={save}>Save</button>
+    <button type="button" class="primary" disabled={running || !checksumOk} onclick={save}>
+      Save
+    </button>
   {/snippet}
 </Modal>
 

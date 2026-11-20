@@ -1,14 +1,15 @@
 //! What the window can ask the app to do, and the shapes it sends and receives.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use engine::{
-    Download, DownloadEdit, DownloadId, Engine, Login, ManualProxy, Moment, NetworkOptions,
-    NewDownload, ProxyMode, Queue, QueueId, QueueInfo, QueueKind, Quota, ServerLimit, State,
+    Checksum, Download, DownloadEdit, DownloadId, Engine, Login, ManualProxy, Moment,
+    NetworkOptions, NewDownload, ProxyMode, Queue, QueueId, QueueInfo, QueueKind, Quota,
+    ServerLimit, State,
 };
 use media::{Part, Quality};
 use serde::{Deserialize, Serialize};
@@ -42,8 +43,14 @@ pub struct AppState {
     pub quit_after: Mutex<HashSet<i64>>,
     /// What the video dialog is offering.
     pub video_choices: Mutex<Vec<Quality>>,
-    /// Videos having their picture and sound joined.
-    pub joining: Mutex<HashSet<i64>>,
+    /// Videos being finished, and what the list says meanwhile.
+    pub joining: Mutex<HashMap<i64, &'static str>>,
+    /// What the video dialog offers beyond the qualities.
+    pub video_extras: Mutex<crate::video::VideoExtras>,
+    /// Finished files being checked against their checksums.
+    pub checking: Mutex<HashSet<i64>>,
+    /// Downloads waiting to be told of in a Windows notification.
+    pub notices: Mutex<crate::notices::Notices>,
     pub grabber: Grabber,
 }
 
@@ -54,13 +61,30 @@ impl AppState {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn joining(&self) -> MutexGuard<'_, HashSet<i64>> {
+    pub fn video_extras(&self) -> MutexGuard<'_, crate::video::VideoExtras> {
+        self.video_extras
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn joining(&self) -> MutexGuard<'_, HashMap<i64, &'static str>> {
         self.joining.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Notes that a video's joining has begun. False if it already had.
-    pub fn start_joining(&self, id: i64) -> bool {
-        self.joining().insert(id)
+    /// Notes that a video's finishing has begun, and what the list should say meanwhile.
+    /// False if it already had.
+    pub fn start_joining(&self, id: i64, label: &'static str) -> bool {
+        let mut joining = self.joining();
+        if joining.contains_key(&id) {
+            return false;
+        }
+        joining.insert(id, label);
+        true
+    }
+
+    /// What the list says about a video while it's being finished.
+    pub fn finishing_label(&self, id: i64) -> Option<&'static str> {
+        self.joining().get(&id).copied()
     }
 
     pub fn finish_joining(&self, id: i64) {
@@ -69,6 +93,27 @@ impl AppState {
 
     pub fn is_joining(&self) -> bool {
         !self.joining().is_empty()
+    }
+
+    fn checking(&self) -> MutexGuard<'_, HashSet<i64>> {
+        self.checking.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Notes that a file's checksum is being checked. False if it already was.
+    pub fn start_checking(&self, id: i64) -> bool {
+        self.checking().insert(id)
+    }
+
+    pub fn finish_checking(&self, id: i64) {
+        self.checking().remove(&id);
+    }
+
+    pub fn is_checking(&self, id: i64) -> bool {
+        self.checking().contains(&id)
+    }
+
+    pub fn notices(&self) -> MutexGuard<'_, crate::notices::Notices> {
+        self.notices.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     pub fn quit_after(&self, id: i64) {
@@ -174,6 +219,7 @@ pub fn apply_to_engine(engine: &Engine, settings: &Settings) -> Result<(), engin
     );
     engine.set_connections(settings.connections);
     engine.set_temp_dir(settings.temp_dir.clone());
+    engine.set_mark_from_internet(settings.mark_downloads);
     engine.set_speed_limit(
         settings
             .speed_limit_enabled
@@ -240,6 +286,46 @@ pub struct DownloadView {
     part_of: Option<i64>,
     /// Whether this video's sound is still to be joined in.
     adding_sound: bool,
+    /// What the finished file's checksum should be.
+    checksum: Option<ChecksumView>,
+    /// Whether the finished file matched it, once checked.
+    checksum_matches: Option<bool>,
+    /// Whether the finished file is being checked right now.
+    checking: bool,
+    /// What's being done to a finished video right now, such as `Converting to MP3…`.
+    finishing: Option<&'static str>,
+}
+
+/// A checksum as the window shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChecksumView {
+    /// Such as `SHA-256`.
+    algorithm: &'static str,
+    hex: String,
+}
+
+impl From<Checksum> for ChecksumView {
+    fn from(checksum: Checksum) -> Self {
+        Self {
+            algorithm: checksum.algorithm.label(),
+            hex: checksum.hex,
+        }
+    }
+}
+
+/// What someone typed in a checksum box isn't a checksum.
+const NOT_A_CHECKSUM: &str = "That isn't a checksum Tributary can check. Paste the MD5, SHA-1, \
+     SHA-256 or SHA-512 code the site gives for the file.";
+
+/// Reads a checksum someone typed or pasted. Blank means none.
+pub fn parse_checksum(text: Option<String>) -> Result<Option<Checksum>, String> {
+    match blank_to_none(text) {
+        None => Ok(None),
+        Some(text) => Checksum::parse(&text)
+            .map(Some)
+            .ok_or_else(|| NOT_A_CHECKSUM.to_owned()),
+    }
 }
 
 impl DownloadView {
@@ -295,6 +381,10 @@ impl From<Download> for DownloadView {
             adding_sound: download
                 .companion
                 .is_some_and(|companion| companion.0 > download.id.0),
+            checksum: download.checksum.map(ChecksumView::from),
+            checksum_matches: download.checksum_matches,
+            checking: false,
+            finishing: None,
         }
     }
 }
@@ -326,12 +416,18 @@ pub struct AddRequest {
     remember_login: bool,
     /// Stands for a file captured from the browser, with its cookies.
     capture_token: Option<u64>,
+    /// What the finished file's checksum should be, as typed or pasted.
+    #[serde(default)]
+    checksum: Option<String>,
     /// The parts of a stream. Only the app sets these, never the window.
     #[serde(skip)]
     parts: Option<Vec<Part>>,
     /// One of a page's gallery. Only the app sets this.
     #[serde(skip)]
     gallery: bool,
+    /// What to do to a video once it's in. Only the app sets this.
+    #[serde(skip)]
+    finish_plan: Option<String>,
 }
 
 impl AddRequest {
@@ -350,8 +446,10 @@ impl AddRequest {
             password: None,
             remember_login: false,
             capture_token: None,
+            checksum: file.checksum,
             parts: None,
             gallery,
+            finish_plan: None,
         }
     }
 
@@ -377,6 +475,12 @@ impl AddRequest {
     /// Saved to this queue rather than the main one, if one is given. For after `later`.
     pub fn in_queue(mut self, queue: Option<i64>) -> Self {
         self.queue_id = queue.or(self.queue_id);
+        self
+    }
+
+    /// A video to finish in some way once it's in.
+    pub fn with_finish_plan(mut self, plan: Option<String>) -> Self {
+        self.finish_plan = plan;
         self
     }
 
@@ -495,7 +599,15 @@ pub async fn list_downloads(state: Managed<'_, AppState>) -> Result<Vec<Download
     Ok(downloads
         .into_iter()
         .zip(sounds)
-        .map(|(download, sound)| DownloadView::from(download).with_sound(sound.as_ref()))
+        .map(|(download, sound)| {
+            let checking = state.is_checking(download.id.0);
+            let finishing = state.finishing_label(download.id.0);
+            DownloadView {
+                checking,
+                finishing,
+                ..DownloadView::from(download).with_sound(sound.as_ref())
+            }
+        })
         .collect())
 }
 
@@ -575,6 +687,8 @@ pub async fn add_download(
     state: Managed<'_, AppState>,
     request: AddRequest,
 ) -> Result<i64, String> {
+    // Checked first, so a mistake doesn't use up a capture and the cookies it came with.
+    parse_checksum(request.checksum.clone())?;
     let headers = request
         .capture_token
         .and_then(|token| state.pending().take(token))
@@ -582,6 +696,44 @@ pub async fn add_download(
         .map(|file| file.headers())
         .unwrap_or_default();
     add_download_now(&state, request, headers)
+}
+
+/// Looks for a checksum the site publishes beside a file.
+#[tauri::command]
+pub async fn find_checksum(
+    state: Managed<'_, AppState>,
+    url: String,
+    file_name: Option<String>,
+) -> Result<Option<ChecksumView>, String> {
+    let url = url.trim();
+    let from_address = url_file_name(url);
+    let names = [
+        file_name.as_deref().unwrap_or_default(),
+        from_address.as_str(),
+    ];
+    Ok(state
+        .engine
+        .find_checksum(url, &names)
+        .await
+        .map(ChecksumView::from))
+}
+
+/// Sets what a download's checksum should be, or none, and checks a finished file at once.
+#[tauri::command]
+pub async fn set_checksum(
+    app: AppHandle,
+    state: Managed<'_, AppState>,
+    id: i64,
+    checksum: Option<String>,
+) -> Result<(), String> {
+    let checksum = parse_checksum(checksum)?;
+    state
+        .engine
+        .set_checksum(DownloadId(id), checksum.as_ref())
+        .map_err(text)?;
+    crate::check_checksum(&app, DownloadId(id));
+    let _ = app.emit("queues-changed", ());
+    Ok(())
 }
 
 /// Forgets a captured file the user decided against.
@@ -804,6 +956,7 @@ pub fn add_download_now(
 ) -> Result<i64, String> {
     let url = request.url.trim().to_owned();
     let file_name = blank_to_none(request.file_name);
+    let checksum = parse_checksum(request.checksum)?;
 
     // A download added without a dialog is sorted by its address alone.
     let name_for_rules = file_name.clone().unwrap_or_else(|| url_file_name(&url));
@@ -833,6 +986,8 @@ pub fn add_download_now(
             category,
             login,
             parts: request.parts,
+            checksum,
+            finish_plan: request.finish_plan,
         })
         .map_err(text)?;
 
@@ -1205,6 +1360,9 @@ mod tests {
             is_stream: false,
             parts_done: 0,
             companion: companion.map(DownloadId),
+            checksum: None,
+            checksum_matches: None,
+            finish_plan: None,
         }
     }
 

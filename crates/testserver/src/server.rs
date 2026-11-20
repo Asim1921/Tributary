@@ -458,7 +458,15 @@ async fn respond(state: &State, stream: &mut TcpStream, head: &RequestHead) -> S
             send_small(stream, head, 200, &headers, VIDEO_PAGE.as_bytes()).await
         }
         _ => {
+            if let Some(text) = checksum_list(path) {
+                let headers = [("Content-Type", "text/plain".to_owned())];
+                return send_small(stream, head, 200, &headers, text.as_bytes()).await;
+            }
             if let Some(name) = path.strip_prefix("/file/") {
+                return serve_file(state, stream, head, name, query).await;
+            }
+            // The same files, beside a `SHA256SUMS` list of some of them.
+            if let Some(name) = path.strip_prefix("/sums/") {
                 return serve_file(state, stream, head, name, query).await;
             }
             if let Some((name, piece_query)) = streams::dash_piece(path, query) {
@@ -482,6 +490,29 @@ async fn respond(state: &State, stream: &mut TcpStream, head: &RequestHead) -> S
             }
         }
     }
+}
+
+/// Checksums published beside test files, as many sites publish theirs: a `.sha256` file
+/// beside each `/file/` file (of its plain content, with no options), and a BSD-style
+/// `SHA256SUMS` list in `/sums/` of `1M.bin`, `2M.bin` and `3M.bin`.
+fn checksum_list(path: &str) -> Option<String> {
+    let sum = |name: &str| {
+        Scenario::parse(name, "")
+            .ok()
+            .map(|file| content::sha256(file.seed, file.size))
+    };
+    if let Some(name) = path
+        .strip_prefix("/file/")
+        .and_then(|name| name.strip_suffix(".sha256"))
+    {
+        return sum(name).map(|hex| format!("{hex} *{name}\n"));
+    }
+    (path == "/sums/SHA256SUMS").then(|| {
+        ["1M.bin", "2M.bin", "3M.bin"]
+            .iter()
+            .filter_map(|name| sum(name).map(|hex| format!("SHA256 ({name}) = {hex}\n")))
+            .collect()
+    })
 }
 
 async fn serve_site(

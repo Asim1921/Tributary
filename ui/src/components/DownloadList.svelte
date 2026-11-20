@@ -103,6 +103,7 @@
           class:selected={selected.has(row.id)}
           aria-selected={selected.has(row.id)}
           data-state={row.state}
+          data-mismatch={row.checksumMatches === false || undefined}
           onclick={(event) => {
             event.stopPropagation();
             onrowclick(row.id, event);
@@ -213,7 +214,8 @@
     background: var(--selected);
   }
 
-  tr[data-state='failed'] td {
+  tr[data-state='failed'] td,
+  tr[data-mismatch] td {
     color: var(--danger);
   }
 

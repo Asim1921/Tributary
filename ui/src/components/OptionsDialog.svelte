@@ -277,6 +277,10 @@
         <input type="checkbox" bind:checked={draft.showCompleteDialog} />
         Show a message when a download finishes
       </label>
+      <label class="check">
+        <input type="checkbox" bind:checked={draft.notifyInBackground} />
+        Show a Windows notification when downloads finish while Tributary is in the background
+      </label>
 
       <button
         type="button"
@@ -510,6 +514,11 @@
       </button>
       {#if loginProblem}<p class="error-text">{loginProblem}</p>{/if}
     {:else if tab === 'security'}
+      <label class="check">
+        <input type="checkbox" bind:checked={draft.markDownloads} />
+        Mark downloads as coming from the internet, so Windows checks them before they open
+        (recommended)
+      </label>
       <label class="check">
         <input type="checkbox" bind:checked={draft.scanEnabled} />
         Scan finished downloads for viruses

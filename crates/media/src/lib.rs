@@ -94,6 +94,8 @@ pub struct Quality {
     /// The request headers to send, when the source says exactly which. `None` leaves it
     /// to whatever the browser sent.
     pub headers: Option<Vec<(String, String)>>,
+    /// Sound with no picture.
+    pub audio_only: bool,
 }
 
 impl Quality {
@@ -411,6 +413,7 @@ mod tests {
             },
             audio: None,
             headers: None,
+            audio_only: false,
         };
 
         assert_eq!(quality.estimated_bytes(), Some(10_000_000));

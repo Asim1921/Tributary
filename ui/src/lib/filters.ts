@@ -11,8 +11,18 @@ export function shownDownloads<T extends Pick<Download, 'partOf'>>(downloads: T[
 }
 
 /** Whether a download has just finished for good, with nothing left to join in. */
-export function finishedForGood(download: Pick<Download, 'state' | 'addingSound' | 'partOf'>): boolean {
-  return download.state === 'completed' && !download.addingSound && (download.partOf ?? null) === null;
+export function finishedForGood(
+  download: Pick<Download, 'state' | 'addingSound' | 'partOf' | 'checking' | 'finishing'>,
+): boolean {
+  // A file being checked against its checksum, or a video still being finished, isn't
+  // done until that's over.
+  return (
+    download.state === 'completed' &&
+    !download.addingSound &&
+    !download.checking &&
+    !download.finishing &&
+    (download.partOf ?? null) === null
+  );
 }
 
 export type Filter =

@@ -27,6 +27,20 @@ export interface Download {
   partOf?: number | null;
   /** Whether this video's sound is still to be joined in. */
   addingSound?: boolean;
+  /** What the finished file's checksum should be. */
+  checksum?: Checksum | null;
+  /** Whether the finished file matched its checksum, once checked. */
+  checksumMatches?: boolean | null;
+  /** Whether the finished file is being checked against its checksum right now. */
+  checking?: boolean;
+  /** What's being done to a finished video right now, such as `Converting to MP3…`. */
+  finishing?: string | null;
+}
+
+export interface Checksum {
+  /** Such as `SHA-256`. */
+  algorithm: string;
+  hex: string;
 }
 
 /** A download plus the live figures that only exist while it runs. */
@@ -68,12 +82,16 @@ export interface AddRequest {
   password?: string;
   rememberLogin?: boolean;
   captureToken?: number;
+  /** What the finished file's checksum should be, as pasted. */
+  checksum?: string;
 }
 
 export interface EditRequest {
   url?: string;
   destDir?: string;
   description?: string;
+  /** A new checksum, or empty for none. Left out, it stays as it is. */
+  checksum?: string;
 }
 
 export type Theme = 'system' | 'light' | 'dark';
@@ -92,6 +110,8 @@ export interface Settings {
   theme: Theme;
   showStartDialog: boolean;
   showCompleteDialog: boolean;
+  notifyInBackground: boolean;
+  markDownloads: boolean;
   closeToTray: boolean;
   startWithWindows: boolean;
   columns: ColumnSetting[];
@@ -195,12 +215,23 @@ export interface VideoChoice {
   seconds: number;
   extension: string;
   separateAudio: boolean;
+  /** Sound with no picture. */
+  audioOnly?: boolean;
+}
+
+export interface SubtitleChoice {
+  language: string;
+  name: string;
+  /** Made by speech recognition rather than written by someone. */
+  automatic: boolean;
 }
 
 export interface VideoDetails {
   choices: VideoChoice[];
   canJoin: boolean;
   suggestedName: string;
+  subtitles?: SubtitleChoice[];
+  hasCover?: boolean;
 }
 
 export interface AddVideoRequest {
@@ -210,6 +241,10 @@ export interface AddVideoRequest {
   name: string;
   later: boolean;
   captureToken?: number;
+  /** Which of the offered subtitles to save, by position. */
+  subtitles?: number[];
+  cover?: boolean;
+  mp3?: boolean;
 }
 
 export interface CaptureEvent {

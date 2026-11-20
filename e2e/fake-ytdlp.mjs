@@ -8,6 +8,7 @@
 //   private   a video that needs an account
 //   playlist  an address that names a list and no one video, like a playlist's own page
 //   broken    a complaint nobody planned for
+//   extras    the normal video, with written and automatic subtitles and a cover picture
 //
 // An embedded player (`/embedded-player`) answers only with `--referer`, as players embedded
 // in another site do, unless its case is `stuck`, when it never answers. Its host page
@@ -171,6 +172,28 @@ switch (page.searchParams.get('case')) {
   }
   case 'playlist':
     console.log(JSON.stringify({ _type: 'playlist', id: 'PLtest', title: 'A list', entries: [] }));
+    break;
+  case 'extras':
+    // As YouTube lists them: written subtitles in several formats, automatic ones with
+    // their machine translations, and a cover.
+    console.log(
+      JSON.stringify({
+        title: 'Film with extras',
+        duration: 6,
+        formats: [picture, sound],
+        thumbnail: `${base}/static/cover.jpg`,
+        subtitles: {
+          en: [
+            { ext: 'json3', url: `${base}/static/subs.json3`, name: 'English' },
+            { ext: 'vtt', url: `${base}/static/subs.en.vtt`, name: 'English' },
+          ],
+        },
+        automatic_captions: {
+          en: [{ ext: 'vtt', url: `${base}/static/subs.en.vtt?kind=asr`, name: 'English' }],
+          fr: [{ ext: 'vtt', url: `${base}/static/subs.en.vtt?kind=asr&tlang=fr`, name: 'French' }],
+        },
+      }),
+    );
     break;
   case 'private':
     fail('[youtube] x: Private video. Sign in if you\'ve been granted access to this video');

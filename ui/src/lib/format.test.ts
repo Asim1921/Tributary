@@ -41,6 +41,7 @@ import {
   percent,
   secondsLeft,
   statusText,
+  checksumText,
 } from './format';
 import type { Download, DownloadRow } from './types';
 
@@ -136,8 +137,26 @@ describe('statusText', () => {
   it('is plain when complete or when the size is unknown', () => {
     expect(statusText({ ...download, state: 'completed' })).toBe('Complete');
     expect(statusText({ ...download, state: 'completed', addingSound: true })).toBe('Adding sound…');
+    expect(statusText({ ...download, state: 'completed', finishing: 'Converting to MP3…' })).toBe(
+      'Converting to MP3…',
+    );
     expect(statusText({ ...download, state: 'running', addingSound: true })).toBe('Downloading 25.0%');
     expect(statusText({ ...download, size: null })).toBe('Downloading');
+  });
+
+  it('says how a checksum check went', () => {
+    const done = { ...download, state: 'completed' as const };
+    const sum = { algorithm: 'SHA-256', hex: 'ab' };
+    expect(statusText({ ...done, checksum: sum, checking: true })).toBe('Checking…');
+    expect(statusText({ ...done, checksum: sum, checksumMatches: true })).toBe('Complete, verified');
+    expect(statusText({ ...done, checksum: sum, checksumMatches: false })).toBe("Checksum doesn't match");
+    expect(statusText({ ...download, checksum: sum, checksumMatches: false })).toBe('Downloading 25.0%');
+
+    expect(checksumText(done)).toBe('None given');
+    expect(checksumText({ ...done, checksum: sum })).toBe('SHA-256: checked when the download finishes');
+    expect(checksumText({ ...done, checksum: sum, checking: true })).toBe('SHA-256: checking…');
+    expect(checksumText({ ...done, checksum: sum, checksumMatches: true })).toBe('SHA-256: matches');
+    expect(checksumText({ ...done, checksum: sum, checksumMatches: false })).toBe("SHA-256: doesn't match");
   });
 });
 

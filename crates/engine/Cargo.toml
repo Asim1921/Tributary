@@ -9,6 +9,7 @@ publish.workspace = true
 base64 = "0.22"
 bytes = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+futures-util = "0.3"
 md-5 = "0.10"
 media = { path = "../media" }
 percent-encoding = "2"
@@ -18,6 +19,7 @@ percent-encoding = "2"
 reqwest = { version = "0.13", default-features = false, features = ["native-tls", "socks", "system-proxy"] }
 rusqlite = { version = "0.41", features = ["bundled"] }
 serde_json.workspace = true
+sha1 = "0.10"
 sha2.workspace = true
 thiserror = "2"
 tokio.workspace = true

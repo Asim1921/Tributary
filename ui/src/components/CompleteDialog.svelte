@@ -18,6 +18,14 @@
 <Modal title="Download complete" onclose={() => onclose(hideInFuture)}>
   <p><strong>{displayName(row)}</strong> ({formatBytes(row.size)})</p>
   <p class="note selectable">{row.finalPath}</p>
+  {#if row.checksum && row.checksumMatches === true}
+    <p>The {row.checksum.algorithm} checksum matches: this is the file the site published.</p>
+  {:else if row.checksum && row.checksumMatches === false}
+    <p class="error-text" role="alert">
+      The {row.checksum.algorithm} checksum doesn't match. The file may be damaged, or not the
+      one the site meant. Download it again before opening it.
+    </p>
+  {/if}
   <label class="check">
     <input type="checkbox" bind:checked={hideInFuture} />
     Don't show this again

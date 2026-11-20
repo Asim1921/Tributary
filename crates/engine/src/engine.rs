@@ -18,6 +18,7 @@ use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 
 use crate::auth::{Authenticator, Login};
+use crate::checksum::{self, Checksum};
 use crate::disk::{self, PartFile};
 use crate::error::Error;
 use crate::ftp::{self, FtpTarget};
@@ -48,6 +49,13 @@ const MAX_TEXT_BYTES: usize = 32 << 20;
 /// Headers that must never be saved. They're kept in memory while the program runs.
 /// After a restart, the caller has to supply them again.
 const SECRET_HEADERS: [&str; 3] = ["cookie", "authorization", "proxy-authorization"];
+
+/// The most read from a place a checksum might be published. Lists of every file in a
+/// release are a few kilobytes.
+const MAX_CHECKSUM_LIST_BYTES: usize = 256 << 10;
+
+/// How long each place a checksum might be published gets to answer.
+const CHECKSUM_LOOKUP_TIME: Duration = Duration::from_secs(8);
 
 /// How often the scheduler looks at the queues.
 const SCHEDULER_INTERVAL: Duration = Duration::from_secs(1);
@@ -108,6 +116,10 @@ pub struct NewDownload {
     pub login: Option<Login>,
     /// Makes this a stream: these parts are joined in order into one file.
     pub parts: Option<Vec<Part>>,
+    /// What the finished file's checksum should be.
+    pub checksum: Option<Checksum>,
+    /// What the app still has to do to the file once it's finished, in its own words.
+    pub finish_plan: Option<String>,
 }
 
 /// A proxy the user has set up by hand.
@@ -227,6 +239,8 @@ struct LiveOptions {
     server_limits: Vec<ServerLimit>,
     client: Client,
     ftp_passive: bool,
+    /// Tags finished files as coming from the internet.
+    mark_from_internet: bool,
 }
 
 impl LiveOptions {
@@ -321,6 +335,7 @@ impl Engine {
             server_limits: Vec::new(),
             client,
             ftp_passive: network.ftp_passive,
+            mark_from_internet: true,
         };
         Ok(Self {
             inner: Arc::new(Inner {
@@ -553,6 +568,63 @@ impl Engine {
         self.inner.live().temp_dir = temp_dir;
     }
 
+    /// Sets what a download's checksum should be, or that it has none. Any earlier check
+    /// is forgotten.
+    pub fn set_checksum(&self, id: DownloadId, checksum: Option<&Checksum>) -> Result<(), Error> {
+        self.get(id)?;
+        self.inner.store.set_checksum(id, checksum)?;
+        Ok(())
+    }
+
+    /// Checks a finished file against its checksum and saves the result. `None` if there's
+    /// nothing to check: no checksum, or not finished yet.
+    pub async fn verify_checksum(&self, id: DownloadId) -> Result<Option<bool>, Error> {
+        let download = self.get(id)?;
+        let (Some(checksum), Some(path), State::Completed) =
+            (download.checksum, download.final_path, download.state)
+        else {
+            return Ok(None);
+        };
+        // A large file takes a while to read, so keep it off the async threads.
+        let algorithm = checksum.algorithm;
+        let actual = tokio::task::spawn_blocking(move || checksum::hash_file(&path, algorithm))
+            .await
+            .map_err(|error| Error::Io(std::io::Error::other(error)))??;
+        let matches = checksum.matches(&actual);
+        self.inner.store.set_checksum_matches(id, matches)?;
+        Ok(Some(matches))
+    }
+
+    /// Looks for a checksum published beside a file, as `file.iso.sha256` or in a
+    /// `SHA256SUMS` list, giving the first found for any of `names`. No cookies or logins
+    /// are sent, and each place gets a few seconds.
+    pub async fn find_checksum(&self, url: &str, names: &[&str]) -> Option<Checksum> {
+        let lookups = checksum::list_addresses(url)
+            .into_iter()
+            .map(|address| async move {
+                let text = tokio::time::timeout(
+                    CHECKSUM_LOOKUP_TIME,
+                    self.request(&address, &[], None, read_checksum_list),
+                )
+                .await
+                .ok()?
+                .ok()?;
+                checksum::find_in_list(&text, names)
+            });
+        // The places are tried together, and the nearest to the file wins.
+        futures_util::future::join_all(lookups)
+            .await
+            .into_iter()
+            .flatten()
+            .next()
+    }
+
+    /// Sets whether finished files are tagged as coming from the internet, as browsers
+    /// tag theirs, so Windows checks them before they're opened. On by default.
+    pub fn set_mark_from_internet(&self, mark: bool) {
+        self.inner.live().mark_from_internet = mark;
+    }
+
     /// Asks the server about a file without downloading it.
     pub async fn inspect(
         &self,
@@ -621,6 +693,12 @@ impl Engine {
         if let Some(parts) = &parts {
             self.inner.store.set_stream_parts(id, parts)?;
         }
+        if let Some(checksum) = &new.checksum {
+            self.inner.store.set_checksum(id, Some(checksum))?;
+        }
+        if let Some(plan) = &new.finish_plan {
+            self.inner.store.set_finish_plan(id, Some(plan))?;
+        }
         if !secret.is_empty() {
             self.inner.secrets().insert(id, secret);
         }
@@ -653,6 +731,27 @@ impl Engine {
     /// Records that a finished file was replaced by one of a different size.
     pub fn file_replaced(&self, id: DownloadId, size: u64) -> Result<(), Error> {
         Ok(self.inner.store.set_size(id, size)?)
+    }
+
+    /// Records that a finished file became another one, at another path.
+    pub fn file_moved(&self, id: DownloadId, path: &Path, size: u64) -> Result<(), Error> {
+        Ok(self.inner.store.set_final_file(id, path, size)?)
+    }
+
+    /// Sets or clears what the app still has to do to a file once it's finished.
+    pub fn set_finish_plan(&self, id: DownloadId, plan: Option<&str>) -> Result<(), Error> {
+        Ok(self.inner.store.set_finish_plan(id, plan)?)
+    }
+
+    /// Reads a small file, such as a picture, of at most `limit` bytes.
+    pub async fn fetch_bytes(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+        limit: usize,
+    ) -> Result<Vec<u8>, String> {
+        self.request(url, headers, None, |response| read_small(response, limit))
+            .await
     }
 
     /// Reads a small text file, such as a playlist.
@@ -848,6 +947,52 @@ async fn read_body(response: &mut Response) -> Result<String, Problem> {
         data.extend_from_slice(&chunk);
         if data.len() > MAX_TEXT_BYTES {
             return Err(Problem::Fatal("the file is too large to read".to_owned()));
+        }
+    }
+    Ok(String::from_utf8_lossy(&data).into_owned())
+}
+
+/// Reads a small body whole, refusing one larger than `limit`.
+async fn read_small(mut response: Response, limit: usize) -> Result<Vec<u8>, Problem> {
+    let status = response.status();
+    if !status.is_success() {
+        return Err(Problem::from_status(status, response.headers()));
+    }
+    let too_large = || Problem::Fatal("the file is larger than expected".to_owned());
+    if response
+        .content_length()
+        .is_some_and(|length| length > limit as u64)
+    {
+        return Err(too_large());
+    }
+    let mut data = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(Problem::from_request)? {
+        data.extend_from_slice(&chunk);
+        if data.len() > limit {
+            return Err(too_large());
+        }
+    }
+    Ok(data)
+}
+
+/// Reads a published checksum list. Anything larger than a list could be is left unread,
+/// since some servers answer an unknown address with a whole file or a large page.
+async fn read_checksum_list(mut response: Response) -> Result<String, Problem> {
+    let too_large = || Problem::Fatal("too large to be a checksum list".to_owned());
+    if !response.status().is_success() {
+        return Err(Problem::Fatal(response.status().to_string()));
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_CHECKSUM_LIST_BYTES as u64)
+    {
+        return Err(too_large());
+    }
+    let mut data = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(Problem::from_request)? {
+        data.extend_from_slice(&chunk);
+        if data.len() > MAX_CHECKSUM_LIST_BYTES {
+            return Err(too_large());
         }
     }
     Ok(String::from_utf8_lossy(&data).into_owned())
@@ -1225,7 +1370,15 @@ async fn attempt(
     drop(job);
 
     let size = remote.size.unwrap_or(transferred);
-    conclude(ended, &download, path, file_name, size).await
+    conclude(
+        ended,
+        &download,
+        path,
+        file_name,
+        size,
+        live.mark_from_internet,
+    )
+    .await
 }
 
 /// One pass at a stream. There's no file on a server to check first, so it starts from
@@ -1302,7 +1455,15 @@ async fn attempt_stream(
 
     let size = job.position().bytes;
     drop(job);
-    conclude(ended, &download, path, file_name, size).await
+    conclude(
+        ended,
+        &download,
+        path,
+        file_name,
+        size,
+        live.mark_from_internet,
+    )
+    .await
 }
 
 /// Decides where `.part` files go, and makes sure the folders exist.
@@ -1335,6 +1496,15 @@ fn prepare_folders(
     Ok(path)
 }
 
+/// The page a download was found on, if it came with one.
+fn referrer(download: &Download) -> Option<String> {
+    download
+        .headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("referer"))
+        .map(|(_, value)| value.clone())
+}
+
 /// Turns the end of a transfer into a result, moving a finished file into place.
 async fn conclude(
     ended: Ended,
@@ -1342,6 +1512,7 @@ async fn conclude(
     path: PathBuf,
     file_name: String,
     size: u64,
+    mark_from_internet: bool,
 ) -> Result<Attempt, String> {
     match ended {
         Ended::Finished => {
@@ -1351,12 +1522,18 @@ async fn conclude(
                 .final_path
                 .clone()
                 .filter(|_| download.replace_on_finish);
+            let origin = mark_from_internet.then(|| (download.url.clone(), referrer(download)));
             let target = tokio::task::spawn_blocking(move || {
-                match replacing {
+                let target = match replacing {
                     Some(target) => disk::replace(&path, &target).map(|()| target),
                     None => disk::finish(&path, &dest_dir, &file_name),
                 }
-                .map_err(|error| format!("could not finish the file: {error}"))
+                .map_err(|error| format!("could not finish the file: {error}"))?;
+                // Tagged before anyone hears it's finished, so it's never opened untagged.
+                if let Some((url, referrer)) = origin {
+                    disk::mark_from_internet(&target, &url, referrer.as_deref());
+                }
+                Ok::<_, String>(target)
             })
             .await
             .map_err(|error| error.to_string())??;

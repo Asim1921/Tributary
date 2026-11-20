@@ -3,6 +3,7 @@
 
   import { YTDLP_MISSING, inspectVideo, installYtdlp, pickFolder, suggestCategory } from '../lib/api';
   import { describeVideoChoice } from '../lib/format';
+  import { defaultSubtitle, holdsCover, subtitleLabel } from '../lib/video';
   import type { AddVideoRequest, VideoDetails } from '../lib/types';
   import Modal from './Modal.svelte';
 
@@ -27,12 +28,23 @@
   let folder = $state(untrack(() => defaultFolder));
   let installing = $state(false);
   let installProblem = $state<string | null>(null);
+  /** The subtitles chosen, by position, or -1 for none. */
+  let subtitle = $state(-1);
+  let cover = $state(false);
+  let mp3 = $state(false);
 
   // The check finishes after the dialog opens, and must never overwrite what's been typed.
   let nameEdited = false;
   let folderEdited = false;
 
   const choice = $derived(details?.choices[chosen]);
+  const audioOnly = $derived(choice?.audioOnly ?? false);
+  const offersSubtitles = $derived(!audioOnly && (details?.subtitles?.length ?? 0) > 0);
+  /** Where the cover and subtitles end up, for the note below them. */
+  const extension = $derived(audioOnly && mp3 ? 'mp3' : (choice?.extension ?? ''));
+  const extrasBeside = $derived(
+    !details?.canJoin || (cover && !holdsCover(extension)) || extension === 'ts',
+  );
 
   async function check() {
     problem = null;
@@ -40,6 +52,7 @@
       const found = await inspectVideo(url, suggestedName ?? undefined, captureToken, page);
       details = found;
       if (!nameEdited) name = found.suggestedName;
+      subtitle = defaultSubtitle(found.subtitles ?? []);
 
       const first = found.choices[0];
       const suggestion = await suggestCategory(`${found.suggestedName}.${first?.extension}`, url);
@@ -74,8 +87,24 @@
     }
   }
 
+  /** Choosing sound alone offers its cover, which is what music players show. */
+  function choose() {
+    cover = audioOnly && (details?.hasCover ?? false);
+    if (!audioOnly) mp3 = false;
+  }
+
   function submit(later: boolean) {
-    onsubmit({ url, choice: chosen, destDir: folder, name, later, captureToken });
+    onsubmit({
+      url,
+      choice: chosen,
+      destDir: folder,
+      name,
+      later,
+      captureToken,
+      subtitles: offersSubtitles && subtitle >= 0 ? [subtitle] : [],
+      cover: (details?.hasCover ?? false) && cover,
+      mp3: audioOnly && (details?.canJoin ?? false) && mp3,
+    });
   }
 </script>
 
@@ -103,12 +132,55 @@
       <legend>Quality</legend>
       {#each details.choices as item, index (index)}
         <label class="check">
-          <input type="radio" name="quality" value={index} bind:group={chosen} />
+          <input
+            type="radio"
+            name="quality"
+            value={index}
+            bind:group={chosen}
+            onchange={choose}
+          />
           {item.label}
           <span class="muted">{describeVideoChoice(item)}</span>
         </label>
       {/each}
     </fieldset>
+
+    {#if audioOnly && details.canJoin}
+      <label class="check">
+        <input type="checkbox" bind:checked={mp3} />
+        Convert to MP3
+      </label>
+    {/if}
+
+    {#if offersSubtitles}
+      <label class="field">
+        Subtitles
+        <select bind:value={subtitle}>
+          <option value={-1}>None</option>
+          {#each details.subtitles ?? [] as item, index (index)}
+            <option value={index}>{subtitleLabel(item)}</option>
+          {/each}
+        </select>
+      </label>
+    {/if}
+
+    {#if details.hasCover}
+      <label class="check">
+        <input type="checkbox" bind:checked={cover} />
+        Add the cover picture
+      </label>
+    {/if}
+
+    {#if (cover || (offersSubtitles && subtitle >= 0)) && extrasBeside}
+      <p class="note">
+        {#if !details.canJoin}
+          Without ffmpeg, the subtitles and cover are saved beside the file. Set up ffmpeg in
+          Options to have them put inside it.
+        {:else}
+          This kind of file can't hold everything chosen, so what doesn't fit is saved beside it.
+        {/if}
+      </p>
+    {/if}
 
     {#if page}
       <p class="note">

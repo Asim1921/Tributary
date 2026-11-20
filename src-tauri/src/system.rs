@@ -176,6 +176,8 @@ pub struct CommandLineAdd {
     pub silent: bool,
     /// Closes the app once this download has finished.
     pub quit_when_done: bool,
+    /// What the finished file's checksum should be.
+    pub checksum: Option<String>,
 }
 
 /// Reads the arguments, without the program's own name.
@@ -199,6 +201,15 @@ pub fn parse_arguments(arguments: &[String]) -> Result<Invocation, String> {
             "--later" => add.later = true,
             "--silent" => add.silent = true,
             "--quit-when-done" => add.quit_when_done = true,
+            "--checksum" => {
+                let text = value("--checksum")?;
+                if engine::Checksum::parse(&text).is_none() {
+                    return Err(format!(
+                        "--checksum {text} isn't an MD5, SHA-1, SHA-256 or SHA-512 checksum"
+                    ));
+                }
+                add.checksum = Some(text);
+            }
             "--start-queue" => invocation.start_queue = true,
             "--minimized" => {}
             other => return Err(format!("unknown option {other}")),
@@ -323,8 +334,34 @@ mod tests {
                 later: false,
                 silent: true,
                 quit_when_done: false,
+                checksum: None,
             })
         );
+    }
+
+    #[test]
+    fn a_checksum_can_be_given_on_the_command_line() {
+        let sum = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        let invocation = parse_arguments(&arguments(&[
+            "--add",
+            "https://x.test/a.iso",
+            "--checksum",
+            &format!("sha256:{sum}"),
+        ]))
+        .unwrap();
+        assert_eq!(
+            invocation.add.unwrap().checksum,
+            Some(format!("sha256:{sum}"))
+        );
+
+        // Anything else is refused before a download is added.
+        let refused = parse_arguments(&arguments(&[
+            "--add",
+            "https://x.test/a.iso",
+            "--checksum",
+            "abc",
+        ]));
+        assert!(refused.unwrap_err().contains("--checksum abc"));
     }
 
     #[test]
@@ -373,6 +410,7 @@ mod tests {
     #[test]
     fn bad_command_lines_are_refused() {
         assert!(parse_arguments(&arguments(&["--add"])).is_err());
+        assert!(parse_arguments(&arguments(&["--add", "https://x.test/a", "--checksum"])).is_err());
         assert!(parse_arguments(&arguments(&["--nonsense"])).is_err());
     }
 

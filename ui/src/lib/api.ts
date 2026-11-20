@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { open, save } from '@tauri-apps/plugin-dialog';
 
 import type {
+  Checksum,
   AddRequest,
   AddVideoRequest,
   CaptureEvent,
@@ -43,6 +44,10 @@ export const removeDownload = (id: number, deleteFile: boolean) =>
   invoke<void>('remove_download', { id, deleteFile });
 export const editDownload = (id: number, edit: EditRequest) =>
   invoke<void>('edit_download', { id, edit });
+export const findChecksum = (url: string, fileName?: string) =>
+  invoke<Checksum | null>('find_checksum', { url, fileName });
+export const setChecksum = (id: number, checksum: string | null) =>
+  invoke<void>('set_checksum', { id, checksum });
 export const openFile = (id: number) => invoke<void>('open_file', { id });
 export const showInFolder = (id: number) => invoke<void>('show_in_folder', { id });
 export const dragFiles = (ids: number[]) => invoke<void>('drag_files', { ids });

@@ -10,6 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use media::Part;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
+use crate::checksum::Checksum;
 use crate::error::Error;
 use crate::remote::Remote;
 use crate::scheduler::{Queue, QueueFile, QueueId, QueueKind};
@@ -23,7 +24,7 @@ const SETTINGS: &str = "
 
 /// Each entry upgrades the database by one version, tracked in `PRAGMA user_version`.
 /// Add new entries to the end. Never change an entry that has been released.
-const MIGRATIONS: [&str; 4] = [
+const MIGRATIONS: [&str; 5] = [
     "
     CREATE TABLE IF NOT EXISTS downloads (
         id            INTEGER PRIMARY KEY,
@@ -79,6 +80,11 @@ const MIGRATIONS: [&str; 4] = [
     ALTER TABLE downloads ADD COLUMN parts_done INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE downloads ADD COLUMN companion INTEGER REFERENCES downloads(id) ON DELETE SET NULL;
     ",
+    "
+    ALTER TABLE downloads ADD COLUMN checksum    TEXT;
+    ALTER TABLE downloads ADD COLUMN checksum_ok INTEGER;
+    ALTER TABLE downloads ADD COLUMN finish_plan TEXT;
+    ",
 ];
 
 const SELECT_DOWNLOAD: &str = "
@@ -87,7 +93,8 @@ const SELECT_DOWNLOAD: &str = "
            COALESCE((SELECT SUM(s.written) FROM segments s WHERE s.download_id = d.id), 0),
            d.description, d.added_at, d.completed_at, d.part_dir,
            d.queue_id, d.category, d.replace_on_finish,
-           d.stream_parts IS NOT NULL, d.parts_done, d.companion
+           d.stream_parts IS NOT NULL, d.parts_done, d.companion,
+           d.checksum, d.checksum_ok, d.finish_plan
     FROM downloads d
 ";
 
@@ -169,6 +176,12 @@ pub struct Download {
     pub parts_done: usize,
     /// The other half of a video whose picture and sound are saved separately.
     pub companion: Option<DownloadId>,
+    /// What the finished file's checksum should be.
+    pub checksum: Option<Checksum>,
+    /// Whether the finished file matched its checksum, once it has been checked.
+    pub checksum_matches: Option<bool>,
+    /// What the app still has to do to the file once it's finished, in its own words.
+    pub finish_plan: Option<String>,
 }
 
 impl Download {
@@ -205,6 +218,12 @@ impl Download {
             is_stream: row.get(20)?,
             parts_done: row.get::<_, i64>(21)? as usize,
             companion: row.get::<_, Option<i64>>(22)?.map(DownloadId),
+            checksum: row
+                .get::<_, Option<String>>(23)?
+                .as_deref()
+                .and_then(Checksum::parse),
+            checksum_matches: row.get(24)?,
+            finish_plan: row.get(25)?,
         })
     }
 }
@@ -431,6 +450,49 @@ impl Store {
         transaction.commit()
     }
 
+    /// Sets what a download's checksum should be, forgetting any earlier check.
+    pub fn set_checksum(
+        &self,
+        id: DownloadId,
+        checksum: Option<&Checksum>,
+    ) -> rusqlite::Result<()> {
+        self.lock().execute(
+            "UPDATE downloads SET checksum = ?2, checksum_ok = NULL WHERE id = ?1",
+            params![id.0, checksum.map(Checksum::to_string)],
+        )?;
+        Ok(())
+    }
+
+    /// Sets or clears what the app still has to do to the file once it's finished.
+    pub fn set_finish_plan(&self, id: DownloadId, plan: Option<&str>) -> rusqlite::Result<()> {
+        self.lock().execute(
+            "UPDATE downloads SET finish_plan = ?2 WHERE id = ?1",
+            params![id.0, plan],
+        )?;
+        Ok(())
+    }
+
+    /// Records that a finished file became another one, such as a sound turned into MP3.
+    pub fn set_final_file(&self, id: DownloadId, path: &Path, size: u64) -> rusqlite::Result<()> {
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned());
+        self.lock().execute(
+            "UPDATE downloads SET final_path = ?2, file_name = ?3, size = ?4 WHERE id = ?1",
+            params![id.0, path.to_string_lossy(), name, size as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Saves whether a finished file matched its checksum.
+    pub fn set_checksum_matches(&self, id: DownloadId, matches: bool) -> rusqlite::Result<()> {
+        self.lock().execute(
+            "UPDATE downloads SET checksum_ok = ?2 WHERE id = ?1",
+            params![id.0, matches],
+        )?;
+        Ok(())
+    }
+
     pub fn set_category(&self, id: DownloadId, category: Option<&str>) -> rusqlite::Result<()> {
         self.lock().execute(
             "UPDATE downloads SET category = ?2 WHERE id = ?1",
@@ -584,7 +646,7 @@ impl Store {
         self.lock().execute(
             "UPDATE downloads
              SET state = ?2, error = NULL, final_path = ?3, size = ?4, completed_at = ?5,
-                 replace_on_finish = 0
+                 replace_on_finish = 0, checksum_ok = NULL
              WHERE id = ?1",
             params![
                 id.0,

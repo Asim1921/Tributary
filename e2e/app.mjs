@@ -73,6 +73,7 @@ async function step(name, run) {
       for (const download of failed.filter((item) => item.error)) {
         console.log(`     ${download.url}: ${download.error}`);
       }
+      for (const message of pageErrors) console.log(`     window error: ${message}`);
     }
     throw error;
   }
@@ -129,6 +130,25 @@ function probe(path) {
   };
 }
 
+/** Each stream in a file: its kind, codec, language and whether it's a cover. */
+function streamsOf(path) {
+  const output = execFileSync(
+    'ffprobe',
+    [
+      '-v', 'error',
+      '-show_entries', 'stream=codec_type,codec_name:stream_tags=language:stream_disposition=attached_pic',
+      '-of', 'json', path,
+    ],
+    { encoding: 'utf8' },
+  );
+  return JSON.parse(output).streams.map((stream) => ({
+    kind: stream.codec_type,
+    codec: stream.codec_name,
+    language: stream.tags?.language ?? null,
+    cover: stream.disposition?.attached_pic === 1,
+  }));
+}
+
 function assertRealVideo(path) {
   const { kinds, seconds } = probe(path);
   assert.deepEqual(kinds, ['audio', 'video']);
@@ -170,6 +190,15 @@ async function addThroughDialogs(page, url) {
 }
 
 const rowFor = (page, name) => page.locator('tbody tr', { hasText: name });
+
+/** The internet tag Windows reads from a file, or null if it has none. */
+function zoneOf(path) {
+  try {
+    return readFileSync(`${path}:Zone.Identifier`, 'utf8');
+  } catch {
+    return null;
+  }
+}
 
 /** Sends one message through the real host program, exactly as a browser does. */
 function askHost(message, env = { ...process.env, TRIBUTARY_PIPE: PIPE }) {
@@ -281,6 +310,11 @@ try {
     await page.getByRole('heading', { name: 'Download complete' }).waitFor();
     await shot(page, '03-complete');
     assert.equal(await sha256(join(downloadDir, '24M.bin')), expectedSha256('24M.bin'));
+    // Tagged as from the internet, as a browser tags its downloads, so Windows checks it.
+    assert.equal(
+      zoneOf(join(downloadDir, '24M.bin')),
+      `[ZoneTransfer]\r\nZoneId=3\r\nHostUrl=${BASE}/file/24M.bin\r\n`,
+    );
     await page.getByRole('button', { name: 'Close' }).click();
     await rowFor(page, '24M.bin').getByText('Complete').waitFor();
   });
@@ -405,10 +439,17 @@ try {
       await sleep(500);
     };
 
-    await setStartup(true);
-    assert.match(startupEntry(), /tributary\.exe.*--minimized/i);
-    await setStartup(false);
-    assert.equal(startupEntry(), '');
+    try {
+      await setStartup(true);
+      assert.match(startupEntry(), /tributary\.exe.*--minimized/i);
+      await setStartup(false);
+      assert.equal(startupEntry(), '');
+    } finally {
+      // A failure mustn't leave the test copy starting with Windows.
+      if (startupEntry()) {
+        execFileSync('reg', ['delete', RUN_KEY, '/v', 'Tributary', '/f'], { stdio: 'ignore' });
+      }
+    }
   });
 
   await step('warns before saving a web page as a file', async () => {
@@ -581,6 +622,20 @@ try {
     await addThroughDialogs(page, `${ftpBase}pub/4M.ftp`);
     await rowFor(page, '4M.ftp').getByText('Complete').waitFor();
     assert.equal(await sha256(join(downloadDir, '4M.ftp')), expectedSha256('4M.ftp'));
+    assert.match(zoneOf(join(downloadDir, '4M.ftp')) ?? '', /^\[ZoneTransfer\]\r\nZoneId=3\r\n/);
+  });
+
+  await step('marking downloads as from the internet can be turned off in Options', async () => {
+    const mark = /Mark downloads as coming from the internet/;
+    await inOptions('Security', () => page.getByLabel(mark).uncheck());
+    assert.equal(JSON.parse(readFileSync(join(dataDir, 'settings.json'), 'utf8')).markDownloads, false);
+    try {
+      await addThroughDialogs(page, `${BASE}/file/5M.bin`);
+      await rowFor(page, '5M.bin').getByText('Complete').waitFor();
+      assert.equal(zoneOf(join(downloadDir, '5M.bin')), null);
+    } finally {
+      await inOptions('Security', () => page.getByLabel(mark).check());
+    }
   });
 
   await step('the start dialog asks for a login, and the download works with it', async () => {
@@ -732,6 +787,68 @@ try {
     await page.getByRole('heading', { name: 'Something went wrong' }).waitFor();
     await page.getByText('no longer there', { exact: false }).waitFor();
     await page.getByRole('button', { name: 'Close' }).click();
+  });
+
+  /** Opens the start dialog for an address and waits for the file check. */
+  async function startDialogFor(url) {
+    await page.getByRole('button', { name: 'Add URL' }).first().click();
+    await page.getByLabel('Address').fill(url);
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await page.getByText('Supported').waitFor();
+    await page.getByLabel('Folder').fill(downloadDir);
+  }
+
+  await step('Find fills in the checksum a site publishes, and the finished file is checked', async () => {
+    await inOptions('Downloads', () => page.getByLabel('Ask before starting a download').check());
+    await startDialogFor(`${BASE}/file/6M.bin`);
+    await page.getByRole('button', { name: 'Find' }).click();
+    await page.getByText('Found the SHA-256 checksum', { exact: false }).waitFor();
+    assert.equal(await page.getByLabel('Checksum').inputValue(), expectedSha256('6M.bin'));
+    await shot(page, '50-checksum-found');
+
+    await page.getByRole('button', { name: 'Start download' }).click();
+    await page.getByRole('heading', { name: 'Download complete' }).waitFor();
+    await page.getByText('SHA-256 checksum matches', { exact: false }).waitFor();
+    await page.getByRole('button', { name: 'Close' }).click();
+    await rowFor(page, '6M.bin').getByText('Complete, verified').waitFor();
+  });
+
+  await step('a file that does not match its checksum is flagged, and a corrected one is checked at once', async () => {
+    await startDialogFor(`${BASE}/file/7M.bin`);
+    await page.getByLabel('Checksum').fill('0'.repeat(64));
+    await page.getByRole('button', { name: 'Start download' }).click();
+    await page.getByRole('heading', { name: 'Download complete' }).waitFor();
+    await page.getByText("The SHA-256 checksum doesn't match", { exact: false }).waitFor();
+    await shot(page, '51-checksum-mismatch');
+    await page.getByRole('button', { name: 'Close' }).click();
+
+    const row = rowFor(page, '7M.bin');
+    await row.getByText("Checksum doesn't match").waitFor();
+    assert.equal(await row.getAttribute('data-mismatch'), 'true');
+
+    await row.click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Properties' }).click();
+    await page.getByText("SHA-256: doesn't match").waitFor();
+    await page.getByLabel('Checksum').fill(`SHA-256: ${expectedSha256('7M.bin').toUpperCase()}`);
+    await page.getByRole('button', { name: 'Save' }).click();
+    await row.getByText('Complete, verified').waitFor();
+    assert.equal(await row.getAttribute('data-mismatch'), null);
+  });
+
+  await step('a site that publishes no checksum says so, and a mistyped one is refused', async () => {
+    await startDialogFor(`${BASE}/sums/9M.nosum`);
+    await page.getByRole('button', { name: 'Find' }).click();
+    await page.getByText("The site doesn't publish a checksum beside this file.").waitFor();
+    assert.equal(await page.getByLabel('Checksum').inputValue(), '');
+
+    await page.getByLabel('Checksum').fill('abc123');
+    await page.getByText("isn't a checksum Tributary can check", { exact: false }).waitFor();
+    assert.ok(await page.getByRole('button', { name: 'Start download' }).isDisabled());
+    await page.getByLabel('Checksum').fill('');
+    assert.ok(await page.getByRole('button', { name: 'Start download' }).isEnabled());
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    await page.getByRole('dialog').waitFor({ state: 'hidden' });
+    assert.equal(await rowFor(page, '9M.nosum').count(), 0);
   });
 
   await step('the host program reports the capture settings', async () => {
@@ -1023,6 +1140,8 @@ try {
     );
 
     assertRealVideo(joined);
+    // ffmpeg writes a new file, which keeps the tag the downloaded picture had.
+    assert.match(zoneOf(joined) ?? '', /^\[ZoneTransfer\]\r\nZoneId=3\r\n/);
   });
 
   await step('without ffmpeg, picture and sound are saved whole as two files', async () => {
@@ -1376,7 +1495,13 @@ try {
 
     await lookForVideo();
     await page.getByRole('radio', { name: '240p' }).waitFor();
-    assert.equal(await page.getByRole('radio').count(), 1, 'only the plain file is offered, not the stream');
+    // The plain file and its sound alone are offered, not the stream.
+    assert.deepEqual(
+      (await page.getByRole('radio').evaluateAll((items) => items.map((item) => item.parentElement.textContent))).map(
+        (text) => text.replace(/\s+/g, ' ').trim().split(' about')[0].split(' 0:')[0],
+      ),
+      ['240p', 'Audio only, 64 kbps (M4A)'],
+    );
     await page.getByText('go against that site', { exact: false }).waitFor();
     await page.getByText('joined into one file', { exact: false }).first().waitFor();
     assert.equal(await page.getByLabel('Save as').inputValue(), 'Fake film: part 1?', "the site's own title");
@@ -1420,6 +1545,79 @@ try {
       assert.equal(entry.headers.find(([name]) => name.toLowerCase() === 'user-agent')[1], 'FakeAgent/1');
     }
     assert.ok(readFileSync(fakeLog, 'utf8').includes('/video'), 'yt-dlp was never run');
+  });
+
+  await step('subtitles and the cover picture go into the video', async () => {
+    writeFileSync(join(videoDir, 'subs.en.vtt'), 'WEBVTT\n\n00:00.000 --> 00:02.000\nHello there\n');
+    execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=teal:s=320x180', '-frames:v', '1', 'cover.jpg'], {
+      cwd: videoDir,
+    });
+
+    await lookForVideo('?case=extras');
+    await page.getByRole('radio', { name: '240p' }).waitFor();
+    // Written ones, then automatic ones without the machine translations.
+    assert.deepEqual(await page.getByLabel('Subtitles').locator('option').allInnerTexts(), [
+      'None',
+      'English',
+      'English (automatic)',
+    ]);
+    await page.getByLabel('Subtitles').selectOption({ label: 'English' });
+    await page.getByLabel('Add the cover picture').check();
+    await shot(page, '52-video-extras');
+    await saveVideo('With extras');
+
+    const finished = join(downloadDir, 'With extras.mp4');
+    await rowFor(page, 'With extras.mp4').getByText('Complete', { exact: true }).waitFor({ timeout: 30_000 });
+    const streams = streamsOf(finished);
+    assert.deepEqual(
+      streams.map((stream) => [stream.kind, stream.codec, stream.cover]),
+      [
+        ['video', 'h264', false],
+        ['audio', 'aac', false],
+        ['subtitle', 'mov_text', false],
+        ['video', 'mjpeg', true],
+      ],
+    );
+    // Nothing was left beside it or in Tributary's own folder, and it's still tagged.
+    assert.deepEqual(readdirSync(downloadDir).filter((name) => name.startsWith('With extras')), ['With extras.mp4']);
+    const working = join(dataDir, 'sound');
+    assert.deepEqual(existsSync(working) ? readdirSync(working) : [], []);
+    assert.match(zoneOf(finished) ?? '', /ZoneId=3/);
+    // The subtitles and cover were fetched with no cookie, like the video.
+    const extras = serverSaw().filter((entry) => /subs\.en\.vtt|cover\.jpg/.test(entry.target));
+    assert.equal(extras.length, 2);
+    for (const entry of extras) {
+      assert.ok(!entry.headers.some(([name]) => /cookie|authorization/i.test(name)));
+    }
+  });
+
+  await step('sound alone saves as M4A, or as an MP3 with its cover', async () => {
+    await lookForVideo('?case=extras');
+    await page.getByRole('radio', { name: /Audio only/ }).check();
+    assert.equal(await page.getByLabel('Subtitles').count(), 0, 'subtitles are for pictures');
+    assert.ok(await page.getByLabel('Add the cover picture').isChecked(), 'music shows its cover');
+    await page.getByLabel('Convert to MP3').check();
+    await saveVideo('Just the sound');
+
+    const mp3 = join(downloadDir, 'Just the sound.mp3');
+    await rowFor(page, 'Just the sound.mp3').getByText('Complete', { exact: true }).waitFor({ timeout: 30_000 });
+    assert.deepEqual(
+      streamsOf(mp3).map((stream) => [stream.kind, stream.codec, stream.cover]),
+      [
+        ['audio', 'mp3', false],
+        ['video', 'mjpeg', true],
+      ],
+    );
+    assert.ok(!existsSync(join(downloadDir, 'Just the sound.m4a')), 'the M4A was left behind');
+    assert.match(zoneOf(mp3) ?? '', /ZoneId=3/);
+
+    // Without either, the sound is saved just as the site has it.
+    await lookForVideo('?case=extras');
+    await page.getByRole('radio', { name: /Audio only/ }).check();
+    await page.getByLabel('Add the cover picture').uncheck();
+    await saveVideo('Plain sound');
+    await rowFor(page, 'Plain sound.m4a').getByText('Complete', { exact: true }).waitFor({ timeout: 30_000 });
+    assert.equal(await sha256(join(downloadDir, 'Plain sound.m4a')), await sha256(join(videoDir, 'snd.m4a')));
   });
 
   await step('protected, live, login-only and list-only pages are refused, and nothing is saved', async () => {
@@ -1558,6 +1756,13 @@ try {
     launch('--add', `${BASE}/media/master.m3u8`, '--folder', folder, '--name', 'best', '--silent');
     await rowFor(page, 'best.ts').getByText('Complete').waitFor();
     assert.equal(await sha256(join(folder, 'best.ts')), trackSha256('high'));
+
+    // A checksum given on the command line is checked once the file is in.
+    launch(
+      '--add', `${BASE}/file/1M.sum`, '--folder', folder, '--silent',
+      '--checksum', `sha256:${expectedSha256('1M.sum')}`,
+    );
+    await rowFor(page, '1M.sum').getByText('Complete, verified').waitFor();
 
     // A bad command line is ignored rather than breaking the running app.
     launch('--nonsense');

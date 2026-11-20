@@ -155,7 +155,15 @@ async fn a_stream_joins_up_into_the_right_file() {
     let fixture = fixture().await;
     let parts = fixture.parts("/media/low.m3u8").await;
 
-    assert_saved_track(&fixture.save(parts).await, "low");
+    let download = fixture.save(parts).await;
+    assert_saved_track(&download, "low");
+
+    // A stream is tagged as coming from the internet, like any other download.
+    let mut mark = download.final_path.unwrap().into_os_string();
+    mark.push(":Zone.Identifier");
+    let mark = fs::read_to_string(mark).unwrap();
+    assert!(mark.starts_with("[ZoneTransfer]\r\nZoneId=3\r\n"), "{mark}");
+    assert!(mark.contains("HostUrl=http://127.0.0.1:"), "{mark}");
 
     let names: Vec<_> = fs::read_dir(fixture.out())
         .unwrap()

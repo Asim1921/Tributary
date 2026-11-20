@@ -8,8 +8,8 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use engine::{
-    Config, Download, DownloadEdit, DownloadId, Engine, Error, Event, Moment, NewDownload, Queue,
-    QueueId, QueueKind, Quota, RETRY_DELAY_SECONDS, RetryPolicy, State,
+    Checksum, Config, Download, DownloadEdit, DownloadId, Engine, Error, Event, Moment,
+    NewDownload, Queue, QueueId, QueueKind, Quota, RETRY_DELAY_SECONDS, RetryPolicy, State,
 };
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -92,6 +92,13 @@ impl Fixture {
         names.sort();
         names
     }
+}
+
+fn md5_of(path: &Path) -> String {
+    md5::Md5::digest(fs::read(path).unwrap())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn sha256_of(path: &Path) -> String {
@@ -185,6 +192,172 @@ async fn downloads_a_file_over_several_connections() {
 async fn a_tiny_file_works() {
     let fixture = fixture().await;
     assert_completed(&fixture.download("/file/10.bin").await, 1, 10);
+}
+
+/// The internet tag Windows reads from a file, if it has one.
+fn zone_identifier(path: &Path) -> Option<String> {
+    let mut stream = path.as_os_str().to_owned();
+    stream.push(":Zone.Identifier");
+    fs::read_to_string(stream).ok()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_finished_file_is_marked_as_coming_from_the_internet() {
+    let fixture = fixture().await;
+    let id = fixture
+        .engine
+        .add(NewDownload {
+            headers: vec![("Referer".to_owned(), "http://site.test/page".to_owned())],
+            ..fixture.new_download("/file/1M.bin")
+        })
+        .unwrap();
+    let download = fixture.engine.wait(id).await.unwrap();
+
+    assert_completed(&download, 1, MIB);
+    assert_eq!(
+        zone_identifier(download.final_path.as_ref().unwrap()).as_deref(),
+        Some(
+            format!(
+                "[ZoneTransfer]\r\nZoneId=3\r\nReferrerUrl=http://site.test/page\r\nHostUrl={}\r\n",
+                fixture.server.url("/file/1M.bin")
+            )
+            .as_str()
+        )
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn marking_downloads_can_be_turned_off() {
+    let fixture = fixture().await;
+    fixture.engine.set_mark_from_internet(false);
+
+    let download = fixture.download("/file/10.bin").await;
+
+    assert_completed(&download, 1, 10);
+    assert_eq!(zone_identifier(download.final_path.as_ref().unwrap()), None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_finished_file_is_checked_against_its_checksum() {
+    let fixture = fixture().await;
+    let right = Checksum::parse(&content::sha256(1, 2 * MIB)).unwrap();
+    let id = fixture
+        .engine
+        .add(NewDownload {
+            checksum: Some(right.clone()),
+            ..fixture.new_download("/file/2M.bin")
+        })
+        .unwrap();
+    let download = fixture.engine.wait(id).await.unwrap();
+    assert_completed(&download, 1, 2 * MIB);
+    assert_eq!(download.checksum.as_ref(), Some(&right));
+    assert_eq!(download.checksum_matches, None, "not checked until asked");
+
+    assert_eq!(
+        fixture.engine.verify_checksum(id).await.unwrap(),
+        Some(true)
+    );
+    assert_eq!(fixture.engine.get(id).unwrap().checksum_matches, Some(true));
+
+    // A wrong checksum is caught, and the result is kept.
+    let wrong = Checksum::parse(&"0".repeat(64)).unwrap();
+    fixture.engine.set_checksum(id, Some(&wrong)).unwrap();
+    assert_eq!(fixture.engine.get(id).unwrap().checksum_matches, None);
+    assert_eq!(
+        fixture.engine.verify_checksum(id).await.unwrap(),
+        Some(false)
+    );
+    assert_eq!(
+        fixture.engine.get(id).unwrap().checksum_matches,
+        Some(false)
+    );
+
+    // MD5 works the same way.
+    let md5 = md5_of(download.final_path.as_ref().unwrap());
+    fixture
+        .engine
+        .set_checksum(id, Some(&Checksum::parse(&md5).unwrap()))
+        .unwrap();
+    assert_eq!(
+        fixture.engine.verify_checksum(id).await.unwrap(),
+        Some(true)
+    );
+
+    // Without a checksum there's nothing to check.
+    fixture.engine.set_checksum(id, None).unwrap();
+    assert_eq!(fixture.engine.verify_checksum(id).await.unwrap(), None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_file_that_changed_on_disk_no_longer_matches() {
+    let fixture = fixture().await;
+    let id = fixture
+        .engine
+        .add(NewDownload {
+            checksum: Checksum::parse(&content::sha256(1, MIB)),
+            ..fixture.new_download("/file/1M.bin")
+        })
+        .unwrap();
+    let download = fixture.engine.wait(id).await.unwrap();
+    assert_eq!(
+        fixture.engine.verify_checksum(id).await.unwrap(),
+        Some(true)
+    );
+
+    let path = download.final_path.unwrap();
+    let mut bytes = fs::read(&path).unwrap();
+    bytes[1000] ^= 1;
+    fs::write(&path, bytes).unwrap();
+
+    assert_eq!(
+        fixture.engine.verify_checksum(id).await.unwrap(),
+        Some(false)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unfinished_download_has_nothing_to_check_yet() {
+    let fixture = fixture().await;
+    let id = fixture
+        .engine
+        .add(NewDownload {
+            paused: true,
+            checksum: Checksum::parse(&content::sha256(1, MIB)),
+            ..fixture.new_download("/file/1M.bin")
+        })
+        .unwrap();
+
+    assert_eq!(fixture.engine.verify_checksum(id).await.unwrap(), None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_checksum_published_beside_a_file_is_found() {
+    let fixture = fixture().await;
+
+    // `4M.bin.sha256` sits beside the file.
+    let found = fixture
+        .engine
+        .find_checksum(&fixture.server.url("/file/4M.bin"), &["4M.bin"])
+        .await
+        .unwrap();
+    assert_eq!(found.hex, content::sha256(1, 4 * MIB));
+
+    // A `SHA256SUMS` list in the same folder names it.
+    let found = fixture
+        .engine
+        .find_checksum(&fixture.server.url("/sums/3M.bin?rate=1M"), &["3M.bin"])
+        .await
+        .unwrap();
+    assert_eq!(found.hex, content::sha256(1, 3 * MIB));
+
+    // Nothing is published for this one.
+    assert_eq!(
+        fixture
+            .engine
+            .find_checksum(&fixture.server.url("/sums/5M.bin"), &["5M.bin"])
+            .await,
+        None
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -103,4 +103,14 @@ describe('a video saved as two parts', () => {
     expect(finishedForGood(plain)).toBe(true);
     expect(finishedForGood({ ...plain, state: 'failed' })).toBe(false);
   });
+
+  it('is finished only once its checksum has been checked', () => {
+    expect(finishedForGood({ ...plain, checking: true })).toBe(false);
+    expect(finishedForGood({ ...plain, checking: false })).toBe(true);
+  });
+
+  it('is finished only once it has been made into what was asked for', () => {
+    expect(finishedForGood({ ...plain, finishing: 'Adding subtitles…' })).toBe(false);
+    expect(finishedForGood({ ...plain, finishing: null })).toBe(true);
+  });
 });

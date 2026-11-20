@@ -6,12 +6,12 @@
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
-use std::os::windows::process::CommandExt as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use engine::{Download, DownloadId, Engine, Login, State};
+use media::ytdlp::Subtitle;
 use media::{Quality, Track};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State as Managed};
@@ -19,13 +19,14 @@ use url::Url;
 
 use crate::capture::Captured;
 use crate::commands::{AddRequest, AppState, add_download_now};
+use crate::finishing::{self, FinishPlan, PlannedSubtitle, beside, move_file, put_extras_beside};
 use crate::ytdlp;
 
 const FFMPEG_FILE: &str = "ffmpeg.exe";
 const DEFAULT_NAME: &str = "video";
 
-/// Keeps ffmpeg from flashing a console window.
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+/// The largest cover picture fetched.
+const MAX_COVER_BYTES: usize = 10 << 20;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -37,6 +38,8 @@ pub struct VideoChoice {
     seconds: f64,
     extension: String,
     separate_audio: bool,
+    /// Sound with no picture.
+    audio_only: bool,
 }
 
 impl From<&Quality> for VideoChoice {
@@ -49,6 +52,7 @@ impl From<&Quality> for VideoChoice {
             seconds: quality.video.seconds,
             extension: quality.video.extension.clone(),
             separate_audio: quality.audio.is_some(),
+            audio_only: quality.audio_only,
         }
     }
 }
@@ -60,6 +64,27 @@ pub struct VideoDetails {
     /// Whether separate picture and sound can be joined into one file.
     can_join: bool,
     suggested_name: String,
+    /// The subtitles offered, by position. Their addresses stay here in Rust.
+    subtitles: Vec<SubtitleChoice>,
+    /// Whether the video has a cover picture to save.
+    has_cover: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubtitleChoice {
+    language: String,
+    name: String,
+    /// Made by speech recognition rather than written by someone.
+    automatic: bool,
+}
+
+/// What the video dialog offers beyond the qualities.
+#[derive(Debug, Default)]
+pub struct VideoExtras {
+    subtitles: Vec<Subtitle>,
+    thumbnail: Option<String>,
+    title: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -74,6 +99,15 @@ pub struct AddVideoRequest {
     #[serde(default)]
     later: bool,
     capture_token: Option<u64>,
+    /// Which of the offered subtitles to save, by position.
+    #[serde(default)]
+    subtitles: Vec<usize>,
+    /// Saves the cover picture too.
+    #[serde(default)]
+    cover: bool,
+    /// Turns sound saved on its own into MP3.
+    #[serde(default)]
+    mp3: bool,
 }
 
 /// Where to find ffmpeg. A chosen path is the only one tried, so a mistake there shows
@@ -118,6 +152,8 @@ fn suggested_name(title: Option<&str>, url: &str) -> String {
 struct Offer {
     qualities: Vec<Quality>,
     title: Option<String>,
+    subtitles: Vec<Subtitle>,
+    thumbnail: Option<String>,
 }
 
 /// The page holding an embedded player, when it's worth reading instead of the player. A
@@ -161,7 +197,15 @@ async fn read_page(
     let mut qualities = page.qualities;
     if let Some(stream) = page.stream {
         match read_stream(&state.engine, &stream).await {
-            Ok(found) => qualities = found,
+            Ok(found) => {
+                // Sound alone stays on offer beside the stream's pictures.
+                let alone: Vec<Quality> = qualities
+                    .into_iter()
+                    .filter(|quality| quality.audio_only)
+                    .collect();
+                qualities = found;
+                qualities.extend(alone);
+            }
             Err(problem) if qualities.is_empty() => return Err(problem),
             // The plain files are still there to offer.
             Err(_) => {}
@@ -170,6 +214,8 @@ async fn read_page(
     Ok(Offer {
         qualities,
         title: page.title,
+        subtitles: page.subtitles,
+        thumbnail: page.thumbnail,
     })
 }
 
@@ -193,6 +239,8 @@ async fn read_spotted(
         Ok(qualities) => Ok(Offer {
             qualities,
             title: None,
+            subtitles: Vec::new(),
+            thumbnail: None,
         }),
         Err(problem) => match host_to_try(url, host, &problem) {
             // The stream's own answer says more about what went wrong.
@@ -266,6 +314,8 @@ struct Destination<'a> {
     queue: Option<i64>,
     gallery: bool,
     headers: &'a [(String, String)],
+    /// What to do to the video once it's in, saved as a plan.
+    finish_plan: Option<String>,
 }
 
 fn add_track(
@@ -273,6 +323,7 @@ fn add_track(
     to: &Destination,
     track: &Track,
     file_name: String,
+    finish_plan: Option<String>,
 ) -> Result<i64, String> {
     // A quality that's simply a file gets the full treatment an ordinary download has.
     let (url, parts) = match track.parts.as_slice() {
@@ -280,7 +331,8 @@ fn add_track(
         _ => (to.url.to_owned(), Some(track.parts.clone())),
     };
 
-    let request = AddRequest::for_track(url, to.folder.clone(), file_name, parts);
+    let request = AddRequest::for_track(url, to.folder.clone(), file_name, parts)
+        .with_finish_plan(finish_plan);
     let request = if to.later {
         request.later().in_queue(to.queue)
     } else {
@@ -303,7 +355,13 @@ const SOUND_FOLDER: &str = "sound";
 
 fn save_quality(state: &AppState, quality: &Quality, to: &Destination) -> Result<Vec<i64>, String> {
     let video_name = format!("{}.{}", to.name, quality.video.extension);
-    let video = add_track(state, to, &quality.video, video_name)?;
+    let video = add_track(
+        state,
+        to,
+        &quality.video,
+        video_name,
+        to.finish_plan.clone(),
+    )?;
 
     let Some(audio) = &quality.audio else {
         return Ok(vec![video]);
@@ -320,8 +378,9 @@ fn save_quality(state: &AppState, quality: &Quality, to: &Destination) -> Result
         queue: to.queue,
         gallery: to.gallery,
         headers: to.headers,
+        finish_plan: None,
     };
-    let sound = add_track(state, &sound_to, audio, audio_name)?;
+    let sound = add_track(state, &sound_to, audio, audio_name, None)?;
 
     state
         .engine
@@ -357,6 +416,21 @@ pub async fn inspect_video(
 
     let choices = offer.qualities.iter().map(VideoChoice::from).collect();
     *state.video_choices() = offer.qualities;
+    let subtitles = offer
+        .subtitles
+        .iter()
+        .map(|subtitle| SubtitleChoice {
+            language: subtitle.language.clone(),
+            name: subtitle.name.clone(),
+            automatic: subtitle.automatic,
+        })
+        .collect();
+    let has_cover = offer.thumbnail.is_some();
+    *state.video_extras() = VideoExtras {
+        subtitles: offer.subtitles,
+        thumbnail: offer.thumbnail,
+        title: offer.title.clone(),
+    };
 
     // The site's own title beats the tab's, which has the site's name tacked on.
     let named = offer.title.as_deref().or(file_name.as_deref());
@@ -364,6 +438,8 @@ pub async fn inspect_video(
         choices,
         can_join: ffmpeg_for(&state).is_some(),
         suggested_name: suggested_name(named, url),
+        subtitles,
+        has_cover,
     })
 }
 
@@ -379,6 +455,13 @@ pub async fn add_video(
         .get(request.choice)
         .cloned()
         .ok_or("that quality is no longer available")?;
+    if request.mp3 && !quality.audio_only {
+        return Err("only sound saved on its own can be made into an MP3".to_owned());
+    }
+    if request.mp3 && ffmpeg_for(&state).is_none() {
+        return Err("Making an MP3 needs ffmpeg. Set it up under Options, Video.".to_owned());
+    }
+    let (plan, missed) = fetch_extras(&state, &request, quality.audio_only).await;
 
     let captured = request
         .capture_token
@@ -398,17 +481,111 @@ pub async fn add_video(
         queue: None,
         gallery: false,
         headers: &headers,
+        finish_plan: (!plan.is_empty()).then(|| plan.write()),
     };
-    let ids = save_quality(&state, &quality, &to)?;
-    join_finished(&app, &ids);
+    let ids = save_quality(&state, &quality, &to).inspect_err(|_| {
+        for file in plan.fetched_files() {
+            let _ = fs::remove_file(file);
+        }
+    })?;
+    finish_all_ready(&app, &ids);
+    if !missed.is_empty() {
+        let _ = app.emit(
+            "video-problem",
+            format!(
+                "Tributary couldn't fetch {}, so the video is being saved without {}.",
+                missed.join(" or "),
+                if missed.len() == 1 { "it" } else { "them" }
+            ),
+        );
+    }
     Ok(())
 }
 
-/// Joins picture and sound that already finished. A small video's two files can both be
-/// done before they're recorded as belonging together, so completion alone would miss it.
-fn join_finished(app: &AppHandle, ids: &[i64]) {
+/// A name no other fetched file has.
+fn unique_stamp() -> String {
+    static COUNT: AtomicU64 = AtomicU64::new(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or_default();
+    format!("{nanos}-{}", COUNT.fetch_add(1, Ordering::Relaxed))
+}
+
+/// The kind of picture an address names, for a cover's file name.
+fn picture_extension(url: &str) -> &'static str {
+    let path = Url::parse(url)
+        .map(|url| url.path().to_ascii_lowercase())
+        .unwrap_or_default();
+    if path.ends_with(".png") {
+        "png"
+    } else if path.ends_with(".webp") {
+        "webp"
+    } else {
+        "jpg"
+    }
+}
+
+/// Fetches the subtitles and cover asked for into Tributary's own folder, now rather than
+/// later, because their addresses can expire before a video saved for later starts. No
+/// cookies go with them. Returns the plan for the video, and what couldn't be fetched.
+async fn fetch_extras(
+    state: &AppState,
+    request: &AddVideoRequest,
+    audio_only: bool,
+) -> (FinishPlan, Vec<String>) {
+    let (subtitles, thumbnail, title) = {
+        let extras = state.video_extras();
+        let subtitles: Vec<Subtitle> = request
+            .subtitles
+            .iter()
+            .filter_map(|index| extras.subtitles.get(*index).cloned())
+            .collect();
+        (subtitles, extras.thumbnail.clone(), extras.title.clone())
+    };
+    let mut plan = FinishPlan {
+        mp3: request.mp3 && audio_only,
+        audio_only,
+        title,
+        ..FinishPlan::default()
+    };
+    let mut missed = Vec::new();
+    let wanted_cover = thumbnail.filter(|_| request.cover);
+    // Subtitles are for pictures.
+    let subtitles = if audio_only { Vec::new() } else { subtitles };
+    if subtitles.is_empty() && wanted_cover.is_none() {
+        return (plan, missed);
+    }
+
+    let folder = sound_folder(&state.settings_path);
+    let _ = fs::create_dir_all(&folder);
+    let stamp = unique_stamp();
+    for (number, subtitle) in subtitles.iter().enumerate() {
+        let path = folder.join(format!("{stamp}-{number}.{}", subtitle.extension));
+        match state.engine.fetch_text(&subtitle.url, &[], None).await {
+            Ok(text) if fs::write(&path, &text).is_ok() => plan.subtitles.push(PlannedSubtitle {
+                path,
+                language: subtitle.language.clone(),
+                name: subtitle.name.clone(),
+            }),
+            _ => missed.push(format!("the {} subtitles", subtitle.name)),
+        }
+    }
+    if let Some(url) = wanted_cover {
+        let path = folder.join(format!("{stamp}-cover.{}", picture_extension(&url)));
+        match state.engine.fetch_bytes(&url, &[], MAX_COVER_BYTES).await {
+            Ok(bytes) if fs::write(&path, &bytes).is_ok() => plan.cover = Some(path),
+            _ => missed.push("the cover picture".to_owned()),
+        }
+    }
+    (plan, missed)
+}
+
+/// Finishes videos whose files are already in. A small video's two files can both be done
+/// before they're recorded as belonging together, so completion alone would miss it.
+fn finish_all_ready(app: &AppHandle, ids: &[i64]) {
     for id in ids {
-        join_if_ready(app, DownloadId(*id));
+        finish_if_ready(app, DownloadId(*id));
     }
 }
 
@@ -465,6 +642,7 @@ pub async fn save_best(app: &AppHandle, file: Captured, later: bool) -> Result<V
                 queue: file.queue,
                 gallery: file.gallery,
                 headers: own.as_deref().unwrap_or(&headers),
+                finish_plan: None,
             };
             offer
                 .qualities
@@ -476,123 +654,9 @@ pub async fn save_best(app: &AppHandle, file: Captured, later: bool) -> Result<V
     };
 
     if let Ok(ids) = &saved {
-        join_finished(app, ids);
+        finish_all_ready(app, ids);
     }
     saved
-}
-
-/// Joins picture and sound without re-encoding, then replaces the picture file with the
-/// result and removes the sound file. Returns the new size. On failure both files stay.
-/// How the joining went. The video is joined whatever happens to the sound file.
-#[derive(Debug)]
-struct Joined {
-    size: u64,
-    /// Set when the sound file couldn't be deleted afterwards.
-    leftover: Option<String>,
-}
-
-/// How long a file that was just read may stay locked, as it can be while a virus scanner
-/// looks at it.
-const DELETE_ATTEMPTS: u32 = 30;
-const DELETE_WAIT: Duration = Duration::from_millis(100);
-
-/// Deletes a file, trying again for a moment if something else still has it open.
-fn remove_patiently(path: &Path, attempts: u32, wait: Duration) -> Result<(), String> {
-    let mut last = String::new();
-    for attempt in 0..attempts.max(1) {
-        match fs::remove_file(path) {
-            Ok(()) => return Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => last = error.to_string(),
-        }
-        if attempt + 1 < attempts {
-            std::thread::sleep(wait);
-        }
-    }
-    Err(last)
-}
-
-fn join_files(ffmpeg: &Path, video: &Path, audio: &Path) -> Result<Joined, String> {
-    let extension = video
-        .extension()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .into_owned();
-    // ffmpeg picks the format from the name, so the extension has to stay last.
-    let output = video.with_extension(format!("joining.{extension}"));
-
-    let status = Command::new(ffmpeg)
-        .args(["-y", "-loglevel", "error", "-i"])
-        .arg(video)
-        .arg("-i")
-        .arg(audio)
-        .args(["-map", "0:v:0", "-map", "1:a:0", "-c", "copy"])
-        .arg(&output)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW)
-        .status()
-        .map_err(|error| format!("ffmpeg couldn't start: {error}"))?;
-
-    if !status.success() {
-        let _ = fs::remove_file(&output);
-        return Err("ffmpeg couldn't join the picture and sound, so they stay as two files".into());
-    }
-
-    let size = fs::metadata(&output)
-        .map_err(|error| format!("the joined file can't be read: {error}"))?
-        .len();
-    fs::rename(&output, video).map_err(|error| format!("could not save the file: {error}"))?;
-    let leftover = remove_patiently(audio, DELETE_ATTEMPTS, DELETE_WAIT).err();
-    Ok(Joined { size, leftover })
-}
-
-/// Both halves of a video, once both have finished. The picture is added first, so it
-/// has the lower id.
-fn finished_pair(state: &AppState, id: DownloadId) -> Option<(Download, Download)> {
-    let this = state.engine.get(id).ok()?;
-    let other = state.engine.get(this.companion?).ok()?;
-    if this.state != State::Completed || other.state != State::Completed {
-        return None;
-    }
-    Some(if this.id < other.id {
-        (this, other)
-    } else {
-        (other, this)
-    })
-}
-
-/// Where a sound that can't be joined is put: beside its video, under a name nothing
-/// there already has.
-fn beside(video: &Path, sound_name: &str) -> PathBuf {
-    let folder = video.parent().unwrap_or(Path::new("."));
-    let wanted = folder.join(sound_name);
-    if !wanted.exists() {
-        return wanted;
-    }
-    let name = Path::new(sound_name);
-    let stem = name.file_stem().unwrap_or_default().to_string_lossy();
-    let extension = name
-        .extension()
-        .map(|extension| format!(".{}", extension.to_string_lossy()));
-    (2..)
-        .map(|count| {
-            folder.join(format!(
-                "{stem} ({count}){}",
-                extension.as_deref().unwrap_or("")
-            ))
-        })
-        .find(|path| !path.exists())
-        .unwrap_or(wanted)
-}
-
-/// Moves a file, copying it when the two places are on different drives.
-fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
-    fs::rename(from, to).or_else(|_| {
-        fs::copy(from, to)?;
-        fs::remove_file(from)
-    })
 }
 
 /// Puts a sound that can't be joined beside its video, so nothing is lost, and lets the
@@ -623,71 +687,69 @@ async fn keep_apart(
     Ok(to)
 }
 
-/// Joins a video's picture and sound once both are ready. Without ffmpeg, or if they can't
-/// be joined, the sound is put beside the video instead, so nothing is lost.
-pub fn join_if_ready(app: &AppHandle, id: DownloadId) {
+/// A video ready to be finished: its picture, its separate sound if it has one, and what
+/// else was asked for.
+struct Job {
+    video: Download,
+    sound: Option<Download>,
+    plan: FinishPlan,
+}
+
+/// What's to be done to a video, once everything it needs has finished.
+fn job_for(state: &AppState, id: DownloadId) -> Option<Job> {
+    let this = state.engine.get(id).ok()?;
+    let (video, sound) = match this.companion {
+        // The picture is added first, so it has the lower id.
+        Some(other) => {
+            let other = state.engine.get(other).ok()?;
+            if this.id < other.id {
+                (this, Some(other))
+            } else {
+                (other, Some(this))
+            }
+        }
+        None => (this, None),
+    };
+    let ready = video.state == State::Completed
+        && sound
+            .as_ref()
+            .is_none_or(|sound| sound.state == State::Completed);
+    let plan = video
+        .finish_plan
+        .as_deref()
+        .and_then(FinishPlan::read)
+        .unwrap_or_default();
+    (ready && (sound.is_some() || !plan.is_empty())).then_some(Job { video, sound, plan })
+}
+
+/// Finishes a video once everything it needs is in: joins its separate sound, adds the
+/// subtitles and cover asked for, or makes an MP3. Without ffmpeg, or if it fails, what
+/// couldn't go in is put beside the video, so nothing is lost.
+pub fn finish_if_ready(app: &AppHandle, id: DownloadId) {
     let state = app.state::<AppState>();
-    let Some((video, audio)) = finished_pair(&state, id) else {
+    let Some(job) = job_for(&state, id) else {
         return;
     };
-    let (Some(video_path), Some(audio_path)) = (video.final_path.clone(), audio.final_path.clone())
-    else {
-        return;
+    let label = if job.sound.is_some() {
+        "Adding sound…"
+    } else {
+        job.plan.label()
     };
-    if !state.start_joining(video.id.0) {
+    if !state.start_joining(job.video.id.0, label) {
         return;
     }
+
     let handle = app.clone();
-    let Some(ffmpeg) = ffmpeg_for(&state) else {
-        // The dialog said they'd stay as two files, so that's no surprise worth a message.
-        tauri::async_runtime::spawn(async move {
-            let state = handle.state::<AppState>();
-            let kept = keep_apart(&state, &video_path, &audio).await;
-            state.finish_joining(video.id.0);
-            if let Err(problem) = kept {
-                let _ = handle.emit("video-problem", problem);
-            }
-            let _ = handle.emit("queues-changed", ());
-        });
-        return;
-    };
-
     tauri::async_runtime::spawn(async move {
-        let joined = tauri::async_runtime::spawn_blocking({
-            let video_path = video_path.clone();
-            move || join_files(&ffmpeg, &video_path, &audio_path)
-        })
-        .await
-        .map_err(|error| error.to_string())
-        .and_then(|result| result);
-
+        let finished = finish(&handle, &job).await;
         let state = handle.state::<AppState>();
-        let finished = match joined {
-            Ok(joined) => {
-                let replaced = state.engine.file_replaced(video.id, joined.size);
-                let removed = state.engine.remove(audio.id, false).await;
-                replaced
-                    .and(removed)
-                    .map_err(|error| error.to_string())
-                    // The video is fine, but the user should know a file was left behind.
-                    .and_then(|()| match joined.leftover {
-                        Some(reason) => Err(format!(
-                            "The video is joined, but the separate sound file couldn't be deleted: {reason}"
-                        )),
-                        None => Ok(()),
-                    })
-            }
-            // Nothing is lost: the sound goes beside the video, and the message says where.
-            Err(problem) => match keep_apart(&state, &video_path, &audio).await {
-                Ok(kept) => Err(format!(
-                    "{problem}. The sound is saved beside the video, as {}",
-                    kept.file_name().unwrap_or_default().to_string_lossy()
-                )),
-                Err(also) => Err(format!("{problem}. Also, {also}")),
-            },
-        };
-
-        state.finish_joining(video.id.0);
+        let _ = state.engine.set_finish_plan(job.video.id, None);
+        // Whatever was fetched for the video and found no place is Tributary's to tidy.
+        for file in job.plan.fetched_files() {
+            let _ = fs::remove_file(file);
+        }
+        state.finish_joining(job.video.id.0);
+        crate::notices::finished(&handle, job.video.id);
         if let Err(problem) = finished {
             let _ = handle.emit("video-problem", problem);
         }
@@ -695,9 +757,114 @@ pub fn join_if_ready(app: &AppHandle, id: DownloadId) {
     });
 }
 
+async fn finish(app: &AppHandle, job: &Job) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let video_path = job
+        .video
+        .final_path
+        .clone()
+        .ok_or("the video has no file")?;
+
+    let Some(ffmpeg) = ffmpeg_for(&state) else {
+        // The dialog said they'd stay apart, so that's no surprise worth a message.
+        let placed = put_extras_beside(&video_path, &job.plan, false);
+        if let Some(sound) = &job.sound {
+            keep_apart(&state, &video_path, sound).await?;
+        }
+        placed?;
+        return if job.plan.mp3 {
+            Err("ffmpeg isn't set up any more, so the sound is saved as it came".to_owned())
+        } else {
+            Ok(())
+        };
+    };
+
+    let finished = tauri::async_runtime::spawn_blocking({
+        let video_path = video_path.clone();
+        let sound_path = job
+            .sound
+            .as_ref()
+            .and_then(|sound| sound.final_path.clone());
+        let plan = job.plan.clone();
+        move || finishing::finish_files(&ffmpeg, &video_path, sound_path.as_deref(), &plan)
+    })
+    .await
+    .map_err(|error| error.to_string())
+    .and_then(|result| result);
+
+    match finished {
+        Ok(finished) => {
+            let recorded = if finished.path == video_path {
+                state.engine.file_replaced(job.video.id, finished.size)
+            } else {
+                state
+                    .engine
+                    .file_moved(job.video.id, &finished.path, finished.size)
+            };
+            recorded.map_err(|error| error.to_string())?;
+            if let Some(sound) = &job.sound {
+                state
+                    .engine
+                    .remove(sound.id, false)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
+            // The video is fine, but the user should know a file was left behind.
+            match finished.leftover {
+                Some(reason) => Err(format!(
+                    "The video is joined, but the separate sound file couldn't be deleted: {reason}"
+                )),
+                None => Ok(()),
+            }
+        }
+        // Nothing is lost: what couldn't go in goes beside the video, and the message says
+        // where.
+        Err(problem) => {
+            let placed = put_extras_beside(&video_path, &job.plan, false);
+            let mut message = problem;
+            if let Some(sound) = &job.sound {
+                match keep_apart(&state, &video_path, sound).await {
+                    Ok(kept) => {
+                        message = format!(
+                            "{message}. The sound is saved beside the video, as {}",
+                            kept.file_name().unwrap_or_default().to_string_lossy()
+                        );
+                    }
+                    Err(also) => message = format!("{message}. Also, {also}"),
+                }
+            }
+            match placed {
+                Ok(placed) if !placed.is_empty() => {
+                    message.push_str(". The subtitles and cover are saved beside it");
+                }
+                Ok(_) => {}
+                Err(also) => message = format!("{message}. Also, {also}"),
+            }
+            Err(message)
+        }
+    }
+}
+
+/// Finishes any video whose finishing was cut short, say by the app closing.
+pub fn finish_leftovers(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let Ok(downloads) = state.engine.list() else {
+        return;
+    };
+    for download in downloads.iter().filter(|download| {
+        download.state == State::Completed
+            && (download.companion.is_some() || download.finish_plan.is_some())
+    }) {
+        finish_if_ready(app, download.id);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
+    use std::time::Duration;
+
+    use crate::finishing::remove_patiently;
 
     use super::*;
 
@@ -742,22 +909,6 @@ mod tests {
 
         assert_eq!(find_ffmpeg("", Some(&search)), None);
         assert_eq!(find_ffmpeg("", None), None);
-    }
-
-    #[test]
-    fn a_failed_join_keeps_both_files() {
-        let folder = tempfile::tempdir().unwrap();
-        let video = folder.path().join("a.mp4");
-        let audio = folder.path().join("a.audio.m4a");
-        fs::write(&video, b"picture").unwrap();
-        fs::write(&audio, b"sound").unwrap();
-
-        // Any program that fails stands in for ffmpeg giving up.
-        let failing = PathBuf::from(env::var_os("ComSpec").unwrap());
-        assert!(join_files(&failing, &video, &audio).is_err());
-
-        assert_eq!(fs::read(&video).unwrap(), b"picture");
-        assert_eq!(fs::read(&audio).unwrap(), b"sound");
     }
 
     #[test]
@@ -893,14 +1044,5 @@ mod tests {
         assert_eq!(host_to_try(player, None, &problem), None);
         assert_eq!(host_to_try(player, Some("  "), &problem), None);
         assert_eq!(host_to_try(player, Some(player), &problem), None);
-    }
-
-    #[test]
-    fn a_missing_program_is_explained() {
-        let folder = tempfile::tempdir().unwrap();
-        let path = folder.path().join("a.mp4");
-
-        let problem = join_files(Path::new(r"C:\no\such\ffmpeg.exe"), &path, &path).unwrap_err();
-        assert!(problem.contains("couldn't start"), "{problem}");
     }
 }

@@ -292,7 +292,9 @@
   async function saveEdit(id: number, edit: EditRequest) {
     closeDialog();
     try {
-      await api.editDownload(id, edit);
+      const { checksum, ...rest } = edit;
+      await api.editDownload(id, rest);
+      if (checksum !== undefined) await api.setChecksum(id, checksum || null);
       await downloads.refresh();
     } catch (error) {
       showError(error);
