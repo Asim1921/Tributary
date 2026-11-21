@@ -54,6 +54,11 @@ let browser;
 async function step(name, run) {
   // E2E_ONLY=<pattern> runs just the steps whose names match, for chasing one problem.
   if (process.env.E2E_ONLY && !new RegExp(process.env.E2E_ONLY).test(name)) return;
+  // E2E_SKIP=<pattern> leaves steps out, such as the clipboard's while the screen is locked.
+  if (process.env.E2E_SKIP && new RegExp(process.env.E2E_SKIP).test(name)) {
+    console.log(`skip ${name}`);
+    return;
+  }
 
   const started = Date.now();
   try {
@@ -616,7 +621,8 @@ try {
     await page.getByRole('tab', { name: tab }).click();
     await change();
     await page.getByRole('button', { name: 'Save' }).click();
-    await page.getByRole('dialog').waitFor({ state: 'hidden' });
+    // Only Options closing: a message may open straight after, as a refused setting does.
+    await page.getByRole('dialog', { name: 'Options' }).waitFor({ state: 'hidden' });
     await sleep(300);
   }
 
@@ -671,8 +677,12 @@ try {
     await page.getByLabel('Password').fill('wrong password');
     await page.getByRole('button', { name: 'Try again' }).click();
 
-    // A wrong password asks again rather than failing quietly.
-    await page.getByRole('dialog').waitFor({ state: 'hidden' });
+    // A wrong password asks again rather than failing quietly. The dialog can close and
+    // open again faster than it can be seen closed, so its emptied fields show it's new.
+    await page.waitForFunction(() => {
+      const field = [...document.querySelectorAll('dialog[open] input')].find((input) => input.type === 'text');
+      return field !== undefined && field.value === '';
+    });
     await page.getByRole('heading', { name: 'Login needed' }).waitFor();
     await page.getByLabel('User name').fill('bob');
     await page.getByLabel('Password').fill('hunter2');
@@ -863,7 +873,11 @@ try {
     const reply = await askHost({ type: 'download', url: `${BASE}/file/16M.fresh?token=fresh`, fileName: '16M.fresh' });
     assert.equal(reply.ok, true);
     await row.getByText('Complete', { exact: true }).waitFor({ timeout: 30_000 });
-    assert.equal(await page.getByRole('dialog').count(), 0, 'a dialog asked about the fresh link');
+    // Only the usual "complete" message: no start dialog asked about the fresh link.
+    assert.equal(await page.getByRole('heading', { name: 'Download file' }).count(), 0, 'a dialog asked about the fresh link');
+    if (await page.getByRole('heading', { name: 'Download complete' }).count()) {
+      await page.getByRole('button', { name: 'Close' }).click();
+    }
     assert.equal(await sha256(join(downloadDir, '16M.fresh')), expectedSha256('16M.fresh'));
     assert.equal(await page.locator('tbody tr', { hasText: '16M.fresh' }).count(), 1, 'a second download was added');
   });
