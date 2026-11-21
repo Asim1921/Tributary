@@ -15,6 +15,10 @@ use crate::commands::AppState;
 /// the name and icon that go with it.
 const APP_ID: &str = "app.tributary.desktop";
 
+/// Set by the test suites. A test copy shares the installed app's ID, so its notifications
+/// would otherwise land in the user's own notification list.
+const QUIET_VARIABLE: &str = "TRIBUTARY_NO_NOTIFICATIONS";
+
 /// How long to wait for more downloads to finish, so they're told of together.
 const GATHER_TIME: Duration = Duration::from_secs(2);
 
@@ -170,7 +174,7 @@ fn show(app: &AppHandle, notice: Notice) {
         .state::<AppState>()
         .settings_snapshot()
         .notify_in_background;
-    if !wanted || !out_of_sight(app) {
+    if !wanted || std::env::var_os(QUIET_VARIABLE).is_some() || !out_of_sight(app) {
         return;
     }
     let mut toast = Toast::new(APP_ID).title(&notice.title).text1(&notice.text);

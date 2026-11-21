@@ -417,6 +417,8 @@ try {
     ...process.env,
     TRIBUTARY_DATA_DIR: dataDir,
     TRIBUTARY_PIPE: PIPE,
+    // Keeps the test copy's notifications out of the user's own notification list.
+    TRIBUTARY_NO_NOTIFICATIONS: '1',
     WEBVIEW2_USER_DATA_FOLDER: join(dataDir, 'webview'),
     WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${APP_DEBUG_PORT}`,
     FAKE_YTDLP_LOG: fakeLog,

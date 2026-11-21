@@ -274,6 +274,9 @@ try {
     TRIBUTARY_PIPE: PIPE,
     // "Get a fresh link" would open the file's page in the real browser.
     TRIBUTARY_NO_BROWSER: '1',
+    // A test copy shares the installed app's ID, so its notifications would land in the
+    // user's own notification list.
+    TRIBUTARY_NO_NOTIFICATIONS: '1',
     // The phone page listens on this computer only, not the home network.
     TRIBUTARY_PHONE_ADDRESS: '127.0.0.1',
     WEBVIEW2_USER_DATA_FOLDER: join(dataDir, 'webview'),
