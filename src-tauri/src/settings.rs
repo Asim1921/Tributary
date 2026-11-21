@@ -141,6 +141,8 @@ pub struct Settings {
     pub video_panel: bool,
     /// Where yt-dlp is. Empty means the copy Tributary installed, then the `PATH`.
     pub ytdlp_path: String,
+    /// The language to speak, such as `ur`. Empty follows Windows.
+    pub language: String,
 }
 
 fn default_capture_types() -> Vec<String> {
@@ -205,6 +207,7 @@ impl Default for Settings {
             ffmpeg_path: String::new(),
             video_panel: true,
             ytdlp_path: String::new(),
+            language: String::new(),
         }
     }
 }

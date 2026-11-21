@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t, tMarkup } from '../lib/locale.svelte';
   import { displayName } from '../lib/format';
   import type { DownloadRow } from '../lib/types';
   import Modal from './Modal.svelte';
@@ -21,30 +22,33 @@
   }
 </script>
 
-<Modal title="Login needed" {onclose}>
-  <p><strong>{displayName(row)}</strong> needs a user name and password.</p>
+<Modal title={t('Login needed')} {onclose}>
+  <p>
+    <!-- eslint-disable-next-line svelte/no-at-html-tags -- the app's own text, with the name escaped -->
+    {@html tMarkup('<strong>{name}</strong> needs a user name and password.', { name: displayName(row) })}
+  </p>
   <p class="note selectable">{row.url}</p>
 
   <form id="download-login" autocomplete="off" onsubmit={submit}>
     <label class="field">
-      User name
+      {t('User name')}
       <!-- svelte-ignore a11y_autofocus -->
       <input type="text" bind:value={username} autocomplete="off" autofocus />
     </label>
     <label class="field">
-      Password
+      {t('Password')}
       <input type="password" bind:value={password} autocomplete="off" />
     </label>
     <label class="check">
       <input type="checkbox" bind:checked={remember} />
-      Remember for this site
+      {t('Remember for this site')}
     </label>
   </form>
 
   {#snippet footer()}
-    <button type="button" onclick={onclose}>Cancel</button>
+    <button type="button" onclick={onclose}>{t('Cancel')}</button>
     <button type="submit" form="download-login" class="primary" disabled={!username.trim()}>
-      Try again
+      {t('Try again')}
     </button>
   {/snippet}
 </Modal>

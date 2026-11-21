@@ -140,15 +140,16 @@ pub async fn restart_to_update(app: AppHandle) -> Result<(), String> {
     }
     let ready = pending(&app).ready.take();
     let Some((update, bytes)) = ready else {
-        return Err("There's no update waiting.".to_owned());
+        return Err(text!("There's no update waiting."));
     };
     if let Err(error) = update.install(&bytes) {
         // Kept, so the user can try again.
         pending(&app).ready = Some((update, bytes));
-        return Err(format!("The update couldn't be installed: {error}"));
+        return Err(text!("The update couldn't be installed: {error}"));
     }
     app.restart();
 }
 
-pub const BUSY: &str = "Tributary will update once nothing is downloading. Stop the downloads \
-     running now, or wait for them to finish, then restart to update.";
+pub const BUSY: &str = en!(
+    "Tributary will update once nothing is downloading. Stop the downloads running now, or wait for them to finish, then restart to update."
+);

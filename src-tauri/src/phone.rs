@@ -48,6 +48,48 @@ const MAX_LISTED: usize = 100;
 
 const PAGE: &str = include_str!("phone.html");
 
+/// What the phone page says, in English. The page is sent with these in every language, and
+/// says them in the phone's own.
+const PAGE_TEXT: [&str; 16] = [
+    en!("Send to Tributary"),
+    en!("Paste a link, and Tributary on your computer asks what to do with it."),
+    en!("Send"),
+    en!("Sending…"),
+    en!("Sent. Tributary is asking about it on your computer."),
+    en!("Couldn't reach Tributary. Is your phone on the same network?"),
+    en!("Scan the code in Tributary’s Options, under Phone, to pair this phone."),
+    en!("downloading"),
+    en!("stopped"),
+    en!("complete"),
+    en!("failed"),
+    en!("a new download"),
+    en!("too many requests"),
+    en!("this phone isn't paired"),
+    en!("send a link"),
+    en!("that isn't a web or FTP address"),
+];
+
+/// The page, with its words in every language Tributary speaks.
+fn page() -> String {
+    let mut words = serde_json::Map::new();
+    for code in crate::messages::CODES {
+        let own: serde_json::Map<String, serde_json::Value> = PAGE_TEXT
+            .iter()
+            .map(|text| {
+                (
+                    (*text).to_owned(),
+                    crate::messages::describe_in(text, code).into(),
+                )
+            })
+            .collect();
+        words.insert(code.to_owned(), own.into());
+    }
+    let words = serde_json::Value::from(words)
+        .to_string()
+        .replace('<', "\\u003c");
+    PAGE.replace("/*WORDS*/{}", &words)
+}
+
 /// The server while it runs.
 #[derive(Default)]
 pub struct Phone {
@@ -108,7 +150,7 @@ fn listen_address() -> Result<Ipv4Addr, String> {
             .map_err(|_| format!("{ADDRESS_VARIABLE} isn't an address"));
     }
     home_address().ok_or_else(|| {
-        "This computer isn't on a home or office network, so a phone can't reach it.".to_owned()
+        text!("This computer isn't on a home or office network, so a phone can't reach it.")
     })
 }
 
@@ -193,13 +235,13 @@ async fn handle(
     if !LIMIT.allow(now_seconds()) {
         return json_reply(
             StatusCode::TOO_MANY_REQUESTS,
-            json!({ "error": "too many requests" }),
+            json!({ "error": en!("too many requests") }),
         );
     }
     let path = request.uri().path().to_owned();
     let method = request.method().clone();
     if method == Method::GET && path == "/" {
-        return reply(StatusCode::OK, "text/html; charset=utf-8", PAGE);
+        return reply(StatusCode::OK, "text/html; charset=utf-8", page());
     }
 
     let given = request
@@ -210,7 +252,7 @@ async fn handle(
     if !same(given, &token) {
         return json_reply(
             StatusCode::FORBIDDEN,
-            json!({ "error": "this phone isn't paired" }),
+            json!({ "error": en!("this phone isn't paired") }),
         );
     }
 
@@ -229,7 +271,10 @@ async fn handle(
                 }
             };
             let Ok(AddBody { url }) = serde_json::from_slice(&body) else {
-                return json_reply(StatusCode::BAD_REQUEST, json!({ "error": "send a link" }));
+                return json_reply(
+                    StatusCode::BAD_REQUEST,
+                    json!({ "error": en!("send a link") }),
+                );
             };
             let file = Captured {
                 url: url.trim().to_owned(),
@@ -238,7 +283,7 @@ async fn handle(
             if !file.is_valid() {
                 return json_reply(
                     StatusCode::BAD_REQUEST,
-                    json!({ "error": "that isn't a web or FTP address" }),
+                    json!({ "error": en!("that isn't a web or FTP address") }),
                 );
             }
             // Asked about on the PC, as a link from the browser is.
@@ -260,12 +305,12 @@ async fn handle(
                     name: download
                         .file_name
                         .clone()
-                        .unwrap_or_else(|| "a new download".to_owned()),
+                        .unwrap_or_else(|| en!("a new download").to_owned()),
                     state: match download.state {
-                        State::Running => "downloading",
-                        State::Paused => "stopped",
-                        State::Completed => "complete",
-                        State::Failed => "failed",
+                        State::Running => en!("downloading"),
+                        State::Paused => en!("stopped"),
+                        State::Completed => en!("complete"),
+                        State::Failed => en!("failed"),
                     },
                     percent: download
                         .size
@@ -288,13 +333,13 @@ async fn start(app: &AppHandle) -> Result<SocketAddr, String> {
     }
     let token = state.settings_snapshot().phone_token;
     if token.len() != 64 {
-        return Err("There's no pairing code yet.".to_owned());
+        return Err(text!("There's no pairing code yet."));
     }
     let address = listen_address()?;
     let listener = TcpListener::bind((address, state.settings_snapshot().phone_port))
         .await
         .or(TcpListener::bind((address, 0)).await)
-        .map_err(|error| format!("couldn't listen on the home network: {error}"))?;
+        .map_err(|error| text!("couldn't listen on the home network: {error}"))?;
     let bound = listener.local_addr().map_err(|error| error.to_string())?;
     let stop = CancellationToken::new();
     *phone.running() = Some(Running {

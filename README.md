@@ -116,6 +116,10 @@ Paste a magnet link or a `.torrent` file's address into **Add URL**, or click on
 - **Magnet links from the browser.** **Options > Downloads > Choose Tributary…** opens Windows' Default apps, where Tributary is listed for magnet links. Tributary never takes them over by itself, and uninstalling it removes the listing.
 - **Finding others.** Tributary finds others sharing a torrent through its trackers and the DHT network. It doesn't search for torrents. Only download what you have the right to.
 
+## Languages
+
+Tributary speaks English, Urdu, Arabic, Hindi and Spanish, and lays its window out right to left for Urdu and Arabic. It follows Windows' display language until **Options > General > Language** chooses another, which shows at once. Its messages, notifications and tray menu change with it. The browser extension follows the browser's language, and the page on your phone the phone's. The translations still need a native speaker's review: [TRANSLATIONS.md](TRANSLATIONS.md) says what to check, and how to add or correct one.
+
 ## Where things are kept
 
 - Downloads, queues and settings are in `%APPDATA%\app.tributary.desktop`.

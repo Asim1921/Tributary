@@ -1,6 +1,10 @@
 // Runs in web pages. Notes which keys are held on a click, lists links on request, and
 // shows the panel over video players.
 
+// Words in the browser's own language, from _locales, and the way they read.
+const say = (name, substitutions) => chrome.i18n.getMessage(name, substitutions);
+const DIRECTION = chrome.i18n.getMessage('@@bidi_dir') || 'ltr';
+
 // Tells the extension which document this tab now holds, so it can drop finds from the
 // page before it.
 if (window === window.top) {
@@ -37,7 +41,7 @@ const PANEL_STYLE = `
     background: #15201fee; border: 1px solid #26b5a4; border-radius: 7px;
   }
   button {
-    padding: 5px 8px; overflow: hidden; font: inherit; color: inherit; text-align: left;
+    padding: 5px 8px; overflow: hidden; font: inherit; color: inherit; text-align: start;
     text-overflow: ellipsis; white-space: nowrap; cursor: pointer;
     background: transparent; border: 0; border-radius: 4px;
   }
@@ -180,12 +184,13 @@ function showPanel(labels) {
 
   const box = document.createElement('div');
   box.className = 'panel';
+  box.dir = DIRECTION;
 
   if (entries) {
     entries.forEach((label, index) => {
       const button = document.createElement('button');
       button.type = 'button';
-      button.textContent = `Save: ${label}`;
+      button.textContent = say('panelSave', [label]);
       button.addEventListener('click', (event) => {
         if (event.isTrusted) void chrome.runtime.sendMessage({ type: 'save-media', index });
       });
@@ -194,7 +199,7 @@ function showPanel(labels) {
   } else {
     const button = document.createElement('button');
     button.type = 'button';
-    button.textContent = 'Download this video';
+    button.textContent = say('panelDownloadVideo');
     button.addEventListener('click', (event) => {
       if (!event.isTrusted) return;
       void chrome.runtime.sendMessage({
@@ -212,7 +217,7 @@ function showPanel(labels) {
   const hide = document.createElement('button');
   hide.type = 'button';
   hide.className = 'hide';
-  hide.textContent = 'Hide';
+  hide.textContent = say('panelHide');
   hide.addEventListener('click', (event) => {
     if (!event.isTrusted) return;
     panelHidden = true;
@@ -388,6 +393,7 @@ function showOverlay(text, buttons) {
   style.textContent = COLLECT_STYLE;
   const box = document.createElement('div');
   box.className = 'box';
+  box.dir = DIRECTION;
   const words = document.createElement('span');
   words.textContent = text;
   box.append(words);
@@ -414,7 +420,7 @@ function showOverlay(text, buttons) {
 /** Waits while the tab is out of sight, because a page loads nothing more until it's seen. */
 async function untilSeen(overlay) {
   if (document.visibilityState !== 'hidden') return;
-  overlay.say('Waiting for this tab to be in view again…');
+  overlay.say(say('collectWaiting'));
   // The browser says when, so a tab left for a long while carries on straight away. Its
   // timers then run only once a minute.
   await new Promise((done) => {
@@ -439,15 +445,15 @@ async function collectMedia({ scroll }) {
   collecting = state;
   const target = scroller();
   const start = target.scrollTop;
-  const overlay = showOverlay('Tributary is looking for pictures and videos…', [
+  const overlay = showOverlay(say('collectLooking'), [
     {
-      label: 'Stop here',
+      label: say('collectStop'),
       press: () => {
         state.stopped = true;
       },
     },
     {
-      label: 'Cancel',
+      label: say('collectCancel'),
       quiet: true,
       press: () => {
         state.cancelled = true;
@@ -456,7 +462,7 @@ async function collectMedia({ scroll }) {
   ]);
   const report = () => {
     const { pictures, videos } = tally(seen);
-    overlay.say(`Found ${pictures} pictures and ${videos} videos so far…`);
+    overlay.say(say('collectFound', [String(pictures), String(videos)]));
   };
 
   try {
@@ -506,8 +512,8 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
     return undefined;
   }
   if (message?.type === 'media-none') {
-    const notice = showOverlay('Tributary found no pictures or videos on this page.', [
-      { label: 'Close', quiet: true, press: () => notice.remove() },
+    const notice = showOverlay(say('collectNothing'), [
+      { label: say('collectClose'), quiet: true, press: () => notice.remove() },
     ]);
     setTimeout(() => notice.remove(), 6000);
     return undefined;

@@ -167,13 +167,18 @@ export function keepDocument(items, documentId) {
   return kept.length === items.length ? items : kept;
 }
 
+/** Words in the browser's language, or the English where there's no browser, as in tests. */
+function say(name, english) {
+  return globalThis.chrome?.i18n?.getMessage(name) || english;
+}
+
 /** What to call a find in a list. */
 export function mediaLabel(item) {
-  if (item.kind === 'stream') return 'Video stream';
+  if (item.kind === 'stream') return say('labelVideoStream', 'Video stream');
 
   const name = baseName(new URL(item.url).pathname);
   try {
-    return decodeURIComponent(name) || 'Video';
+    return decodeURIComponent(name) || say('labelVideo', 'Video');
   } catch {
     return name;
   }

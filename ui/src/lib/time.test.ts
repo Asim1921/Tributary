@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { dayEnabled, minutesToTime, timeToMinutes, toggleDay } from './time';
+import { dayEnabled, dayName, minutesToTime, timeToMinutes, toggleDay } from './time';
 
 describe('times', () => {
   it('converts both ways', () => {
@@ -33,5 +33,14 @@ describe('days', () => {
   it('switches one day without touching the others', () => {
     expect(toggleDay(0b0000101, 1)).toBe(0b0000111);
     expect(toggleDay(0b0000111, 1)).toBe(0b0000101);
+  });
+});
+
+describe('dayName', () => {
+  it('names the days in each language, Monday first', () => {
+    expect(dayName(0, 'en')).toBe('Mon');
+    expect(dayName(6, 'en')).toBe('Sun');
+    expect(dayName(0, 'es')).toMatch(/^lun/);
+    expect(dayName(4, 'ar')).toBe('الجمعة');
   });
 });

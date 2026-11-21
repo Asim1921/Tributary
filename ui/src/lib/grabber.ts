@@ -1,10 +1,12 @@
+import { mark } from './locale.svelte';
+
 /** What the grabber can start from, in the order offered. */
 export const TEMPLATES = [
-  { id: 'allFiles', label: 'All files', hint: 'Every file the site links to' },
-  { id: 'pictures', label: 'Pictures', hint: 'Pictures on the site' },
-  { id: 'documents', label: 'Documents', hint: 'PDFs, office files and text' },
-  { id: 'audioAndVideo', label: 'Audio and video', hint: 'Music and video files' },
-  { id: 'offlineSite', label: 'Whole site', hint: 'The pages too, to read with no connection' },
+  { id: 'allFiles', label: mark('All files'), hint: mark('Every file the site links to') },
+  { id: 'pictures', label: mark('Pictures'), hint: mark('Pictures on the site') },
+  { id: 'documents', label: mark('Documents'), hint: mark('PDFs, office files and text') },
+  { id: 'audioAndVideo', label: mark('Audio and video'), hint: mark('Music and video files') },
+  { id: 'offlineSite', label: mark('Whole site'), hint: mark('The pages too, to read with no connection') },
 ] as const;
 
 export type TemplateId = (typeof TEMPLATES)[number]['id'];

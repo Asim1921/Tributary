@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../lib/locale.svelte';
   import type { Filter, FilterEntry } from '../lib/filters';
 
   interface Props {
@@ -10,9 +11,9 @@
   let { groups, activeKey, onchange }: Props = $props();
 </script>
 
-<nav aria-label="Filter downloads">
+<nav aria-label={t('Filter downloads')}>
   {#each groups as group (group.title)}
-    <h2>{group.title}</h2>
+    <h2>{t(group.title)}</h2>
     {#each group.entries as entry (entry.key)}
       <button
         type="button"
@@ -20,7 +21,7 @@
         aria-current={entry.key === activeKey ? 'true' : undefined}
         onclick={() => onchange(entry.filter)}
       >
-        <span class="label">{entry.label}</span>
+        <span class="label">{t(entry.label)}</span>
         <span class="count">{entry.count}</span>
       </button>
     {/each}
@@ -37,7 +38,7 @@
     padding: 4px 8px 8px;
     overflow-y: auto;
     background: var(--surface);
-    border-right: 1px solid var(--line);
+    border-inline-end: 1px solid var(--line);
   }
 
   h2 {
@@ -56,7 +57,7 @@
     padding: 4px 10px;
     background: transparent;
     border-color: transparent;
-    text-align: left;
+    text-align: start;
   }
 
   button.active {

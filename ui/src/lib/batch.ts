@@ -1,16 +1,17 @@
+import { t } from './locale.svelte';
 import type { CaptureItem } from './types';
 
 /** What a chosen item is, in words. */
 export function kindLabel(kind: CaptureItem['kind']): string {
   switch (kind) {
     case 'image':
-      return 'Picture';
+      return t('Picture');
     case 'video':
-      return 'Video';
+      return t('Video');
     case 'page':
-      return 'Video page';
+      return t('Video page');
     default:
-      return 'File';
+      return t('File');
   }
 }
 
@@ -27,7 +28,7 @@ export function kindCounts(items: Pick<CaptureItem, 'kind'>[]): { pictures: numb
   return { pictures, videos, other };
 }
 
-const FALLBACK_FOLDER = 'Page media';
+const fallbackFolder = () => t('Page media');
 const MAX_FOLDER_NAME = 80;
 /** Keeps the folder's whole path short enough for Windows, whatever the base folder is. */
 const MAX_FOLDER_PATH = 180;
@@ -54,7 +55,7 @@ export function folderForPage(defaultFolder: string, title: string | null | unde
       .slice(0, room)
       .join('')
       // Windows drops trailing dots and spaces from a name.
-      .replace(/[. ]+$/, '') || FALLBACK_FOLDER;
+      .replace(/[. ]+$/, '') || fallbackFolder();
   if (DEVICE_NAME.test(name)) name += ' page';
   return base ? `${base}\\${name}` : name;
 }

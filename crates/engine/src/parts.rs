@@ -167,9 +167,9 @@ impl PartsJob {
         // would quietly ruin the file.
         let content_type = text(response.headers(), CONTENT_TYPE).unwrap_or_default();
         if content_type.starts_with("text/html") {
-            return Err(Problem::Fatal(
-                "the server sent a web page instead of video".to_owned(),
-            ));
+            return Err(Problem::Fatal(text!(
+                "the server sent a web page instead of video"
+            )));
         }
         Ok(response)
     }
@@ -219,7 +219,7 @@ impl PartsJob {
 
         if let Some(wanted) = wanted {
             if data.len() < wanted {
-                return Err(Problem::retry("the server sent less than it should"));
+                return Err(Problem::retry(en!("the server sent less than it should")));
             }
             data.truncate(wanted);
         }
@@ -270,10 +270,10 @@ impl PartsJob {
     }
 
     fn describe(&self, index: usize, reason: &str) -> String {
-        format!(
-            "part {} of {} failed: {reason}",
-            index + 1,
-            self.setup.parts.len()
+        text!(
+            "part {part} of {count} failed: {reason}",
+            part = index + 1,
+            count = self.setup.parts.len()
         )
     }
 
@@ -296,8 +296,8 @@ impl PartsJob {
             let file = self.file();
             tokio::task::spawn_blocking(move || file.write_at(&data, offset))
                 .await
-                .map_err(|error| Ended::Failed(format!("disk write stopped: {error}")))?
-                .map_err(|error| Ended::Failed(format!("could not write the file: {error}")))?;
+                .map_err(|error| Ended::Failed(text!("disk write stopped: {error}")))?
+                .map_err(|error| Ended::Failed(text!("could not write the file: {error}")))?;
 
             let mut joined = self.joined();
             joined.position.parts += 1;
@@ -352,5 +352,5 @@ pub async fn run(job: Arc<PartsJob>, connections: usize) -> Ended {
     if job.is_complete() {
         return Ended::Finished;
     }
-    first_problem.unwrap_or_else(|| Ended::Failed("the transfer ended early".to_owned()))
+    first_problem.unwrap_or_else(|| Ended::Failed(text!("the transfer ended early")))
 }

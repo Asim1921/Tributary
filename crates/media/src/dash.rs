@@ -385,7 +385,7 @@ fn rendition(
 fn period_renditions(mpd: &MPD, base: &Url, index: usize) -> Result<Vec<Rendition>, Error> {
     let period = &mpd.periods[index];
     let seconds = period_seconds(mpd, index)
-        .ok_or_else(|| Error::Invalid("it doesn't say how long it is".to_owned()))?;
+        .ok_or_else(|| Error::Invalid(text!("it doesn't say how long it is")))?;
     let base = join_base(base, &[period.BaseURL.first().map(|item| &item.base)])?;
 
     let mut renditions = Vec::new();
@@ -430,7 +430,7 @@ pub(crate) fn read(url: &str, xml: &str) -> Result<Vec<Quality>, Error> {
         return Err(Error::Live);
     }
     if mpd.periods.is_empty() {
-        return Err(Error::Invalid("it lists nothing to save".to_owned()));
+        return Err(Error::Invalid(text!("it lists nothing to save")));
     }
 
     let base = parse_base(url)?;

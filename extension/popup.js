@@ -2,6 +2,13 @@
 
 import { mediaKey, mediaLabel } from './rules.js';
 
+// The browser's own language, and the way it reads.
+document.documentElement.lang = chrome.i18n.getUILanguage();
+document.documentElement.dir = chrome.i18n.getMessage('@@bidi_dir') || 'ltr';
+for (const element of document.querySelectorAll('[data-say]')) {
+  element.textContent = chrome.i18n.getMessage(element.dataset.say);
+}
+
 async function currentTabId() {
   const asked = Number(new URLSearchParams(location.search).get('tab'));
   if (asked) return asked;

@@ -12,15 +12,15 @@ pub enum Error {
     InvalidUrl(String),
     #[error("the header `{0}` is not valid")]
     InvalidHeader(String),
-    #[error("download {} does not exist", .0.0)]
+    #[error("download {id} does not exist", id = .0.0)]
     NotFound(DownloadId),
-    #[error("download {} is already running", .0.0)]
+    #[error("download {id} is already running", id = .0.0)]
     AlreadyRunning(DownloadId),
-    #[error("download {} has already completed", .0.0)]
+    #[error("download {id} has already completed", id = .0.0)]
     AlreadyCompleted(DownloadId),
     #[error("the main queue can't be deleted")]
     MainQueue,
-    #[error("queue {} does not exist", .0.0)]
+    #[error("queue {id} does not exist", id = .0.0)]
     QueueNotFound(QueueId),
     #[error("{0}")]
     Request(String),

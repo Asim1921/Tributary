@@ -133,7 +133,9 @@ pub fn parse_list(json: &str) -> Result<List, Error> {
     let page: Value = serde_json::from_str(json)
         .map_err(|_| Error::Invalid("yt-dlp's answer isn't readable".into()))?;
     let Some(entries) = page.get("entries").and_then(Value::as_array) else {
-        return Err(Error::Invalid("this address isn't a list of videos".into()));
+        return Err(Error::Invalid(
+            en!("this address isn't a list of videos").into(),
+        ));
     };
     // A channel's own page lists its tabs (videos, shorts, live) rather than videos.
     if !entries.is_empty()
@@ -584,7 +586,9 @@ pub fn parse(json: &str) -> Result<Page, Error> {
 pub const BOT_CHECK: &str = "YouTube wants to check this computer isn't a bot, which it does for a while after a lot of videos in a short time. Try again in a few minutes";
 
 /// What to say when a site won't hand a page to anything but its own player.
-pub const REFUSED: &str = "the site wouldn't show this page outside its own player. It may only work inside the page it's embedded in, or its link may have expired, so use the button beside the player on that page";
+pub const REFUSED: &str = en!(
+    "the site wouldn't show this page outside its own player. It may only work inside the page it's embedded in, or its link may have expired, so use the button beside the player on that page"
+);
 
 /// Turns yt-dlp's complaint into something to show.
 pub fn explain_failure(stderr: &str) -> Error {

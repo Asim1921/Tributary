@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../lib/locale.svelte';
   import type { UpdateInfo } from '../lib/types';
 
   interface Props {
@@ -12,12 +13,12 @@
 
 <div class="bar" role="status">
   <span>
-    Tributary {update.version} is ready.
-    {#if update.notes}<span class="notes" title={update.notes}>What's new</span>{/if}
+    {t('Tributary {version} is ready.', { version: update.version })}
+    {#if update.notes}<span class="notes" title={update.notes}>{t("What's new")}</span>{/if}
   </span>
   <span class="actions">
-    <button type="button" onclick={onlater}>Later</button>
-    <button type="button" class="primary" onclick={onrestart}>Restart to update</button>
+    <button type="button" onclick={onlater}>{t('Later')}</button>
+    <button type="button" class="primary" onclick={onrestart}>{t('Restart to update')}</button>
   </span>
 </div>
 
@@ -33,7 +34,7 @@
   }
 
   .notes {
-    margin-left: 8px;
+    margin-inline-start: 8px;
     color: var(--muted);
     text-decoration: underline dotted;
     cursor: help;

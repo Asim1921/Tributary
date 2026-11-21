@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../lib/locale.svelte';
   import { untrack } from 'svelte';
 
   import { pickFolder } from '../lib/api';
@@ -82,34 +83,36 @@
   }
 </script>
 
-<Modal title={gallery ? 'Save pictures and videos' : 'Download links'} wide {onclose}>
+<Modal title={gallery ? t('Save pictures and videos') : t('Download links')} wide {onclose}>
   {#if gallery}
     <p class="lede">
-      {#if title}<strong>{title}</strong>: {/if}{counts.pictures} pictures and {counts.videos} videos
-      found on the page.
+      {#if title}<strong>{title}</strong>: {/if}{t(
+        '{pictures, plural, one {# picture} other {# pictures}} and {videos, plural, one {# video} other {# videos}} found on the page.',
+        { pictures: counts.pictures, videos: counts.videos },
+      )}
     </p>
     <div class="kinds">
       <label class="check">
         <input id="batch-pictures" type="checkbox" bind:checked={pictures} />
-        Pictures ({counts.pictures})
+        {t('Pictures ({count})', { count: counts.pictures })}
       </label>
       <label class="check">
         <input id="batch-videos" type="checkbox" bind:checked={videos} />
-        Videos ({counts.videos})
+        {t('Videos ({count})', { count: counts.videos })}
       </label>
     </div>
   {/if}
 
   <label class="field">
-    Only show addresses containing
+    {t('Only show addresses containing')}
     <input type="text" bind:value={filter} placeholder={gallery ? '.jpg' : '.zip'} />
   </label>
 
   <div class="actions">
-    <span class="note">{chosenShown.length} of {items.length} chosen</span>
+    <span class="note">{t('{chosen} of {count} chosen', { chosen: chosenShown.length, count: items.length })}</span>
     <span>
-      <button type="button" onclick={() => setShown(true)}>Select all</button>
-      <button type="button" onclick={() => setShown(false)}>Select none</button>
+      <button type="button" onclick={() => setShown(true)}>{t('Select all')}</button>
+      <button type="button" onclick={() => setShown(false)}>{t('Select none')}</button>
     </span>
   </div>
 
@@ -126,7 +129,7 @@
   </ul>
 
   <div class="block">
-    <label class="field" for="batch-folder">Folder</label>
+    <label class="field" for="batch-folder">{t('Folder')}</label>
     <div class="folder-row">
       <input
         id="batch-folder"
@@ -134,7 +137,7 @@
         value={folder}
         oninput={(event) => typeFolder(event.currentTarget.value)}
       />
-      <button type="button" onclick={browse}>Browse…</button>
+      <button type="button" onclick={browse}>{t('Browse…')}</button>
     </div>
     {#if gallery}
       <label class="check own">
@@ -144,32 +147,30 @@
           checked={ownFolder}
           onchange={(event) => setOwnFolder(event.currentTarget.checked)}
         />
-        Put them in a folder named after the page
+        {t('Put them in a folder named after the page')}
       </label>
     {/if}
   </div>
 
   <label class="field">
-    Queue for later
+    {t('Queue for later')}
     <select bind:value={queueId}>
       {#each queues as queue (queue.id)}
-        <option value={queue.id}>{queue.name}</option>
+        <option value={queue.id}>{t(queue.name)}</option>
       {/each}
     </select>
   </label>
 
   {#if gallery}
     <p class="note">
-      Pictures download a few at a time, through the Page media queue. Videos are read from their
-      pages one at a time, and any that need a login are skipped. Saving from a site may go against
-      its terms, and the pictures belong to the people who posted them.
+      {t('Pictures download a few at a time, through the Page media queue. Videos are read from their pages one at a time, and any that need a login are skipped. Saving from a site may go against its terms, and the pictures belong to the people who posted them.')}
     </p>
   {/if}
 
   {#snippet footer()}
-    <button type="button" onclick={onclose}>Cancel</button>
+    <button type="button" onclick={onclose}>{t('Cancel')}</button>
     <button type="button" disabled={chosenShown.length === 0} onclick={() => submit(true)}>
-      Download later
+      {t('Download later')}
     </button>
     <button
       type="button"
@@ -177,7 +178,7 @@
       disabled={chosenShown.length === 0}
       onclick={() => submit(false)}
     >
-      {gallery ? 'Download all' : 'Start now'}
+      {gallery ? t('Download all') : t('Start now')}
     </button>
   {/snippet}
 </Modal>

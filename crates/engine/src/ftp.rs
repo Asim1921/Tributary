@@ -38,12 +38,10 @@ impl FtpTarget {
     fn path(&self) -> Result<String, Problem> {
         let path = percent_decode_str(self.url.path())
             .decode_utf8()
-            .map_err(|_| Problem::Fatal("the FTP path isn't valid text".to_owned()))?;
+            .map_err(|_| Problem::Fatal(text!("the FTP path isn't valid text")))?;
 
         if path.contains(['\r', '\n']) {
-            return Err(Problem::Fatal(
-                "the FTP path contains a line break".to_owned(),
-            ));
+            return Err(Problem::Fatal(text!("the FTP path contains a line break")));
         }
         Ok(path.into_owned())
     }
@@ -51,7 +49,7 @@ impl FtpTarget {
 
 /// Decides what an FTP reply means for a download.
 fn problem_for(code: u16, text: &str) -> Problem {
-    let reason = format!("the FTP server answered {code} {text}");
+    let reason = text!("the FTP server answered {code} {text}");
     match code {
         // Service not available, data connection problems and busy files are temporary.
         421 | 425 | 426 | 450 | 451 | 452 => Problem::retry(reason),
@@ -94,13 +92,13 @@ impl FtpSession {
         let host = target
             .url
             .host_str()
-            .ok_or_else(|| Problem::Fatal("the FTP address has no host".to_owned()))?;
+            .ok_or_else(|| Problem::Fatal(text!("the FTP address has no host")))?;
         let port = target.url.port().unwrap_or(DEFAULT_PORT);
 
         let stream = timeout(target.connect_timeout, TcpStream::connect((host, port)))
             .await
-            .map_err(|_| Problem::retry("the FTP server didn't answer in time"))?
-            .map_err(|error| Problem::retry(format!("could not reach the FTP server: {error}")))?;
+            .map_err(|_| Problem::retry(en!("the FTP server didn't answer in time")))?
+            .map_err(|error| Problem::retry(text!("could not reach the FTP server: {error}")))?;
 
         let server_ip = stream
             .peer_addr()
@@ -157,7 +155,7 @@ impl FtpSession {
         let code: u16 = line
             .get(..3)
             .and_then(|text| text.parse().ok())
-            .ok_or_else(|| Problem::retry("the FTP server sent an unreadable reply"))?;
+            .ok_or_else(|| Problem::retry(en!("the FTP server sent an unreadable reply")))?;
 
         // `123-` starts a reply of several lines, which `123 ` ends.
         if line.as_bytes().get(3) == Some(&b'-') {
@@ -176,11 +174,11 @@ impl FtpSession {
     async fn read_line(&mut self, line: &mut String) -> Result<(), Problem> {
         let read = timeout(self.target.read_timeout, self.control.read_line(line))
             .await
-            .map_err(|_| Problem::retry("the FTP server stopped answering"))?
-            .map_err(|error| Problem::retry(format!("lost the FTP connection: {error}")))?;
+            .map_err(|_| Problem::retry(en!("the FTP server stopped answering")))?
+            .map_err(|error| Problem::retry(text!("lost the FTP connection: {error}")))?;
 
         if read == 0 {
-            return Err(Problem::retry("the FTP server closed the connection"));
+            return Err(Problem::retry(en!("the FTP server closed the connection")));
         }
         Ok(())
     }
@@ -190,7 +188,7 @@ impl FtpSession {
             .get_mut()
             .write_all(format!("{line}\r\n").as_bytes())
             .await
-            .map_err(|error| Problem::retry(format!("lost the FTP connection: {error}")))?;
+            .map_err(|error| Problem::retry(text!("lost the FTP connection: {error}")))?;
         self.reply().await
     }
 
@@ -207,30 +205,28 @@ impl FtpSession {
         if self.target.passive {
             let reply = self.expect("PASV", 227).await?;
             let port = parse_passive_port(&reply)
-                .ok_or_else(|| Problem::retry("the FTP server sent an unreadable address"))?;
+                .ok_or_else(|| Problem::retry(en!("the FTP server sent an unreadable address")))?;
 
             // The address in the reply is ignored on purpose. It's often wrong behind a
             // router, and following it would let a server send us anywhere.
             let address = SocketAddr::new(self.server_ip, port);
             let stream = timeout(self.target.connect_timeout, TcpStream::connect(address))
                 .await
-                .map_err(|_| Problem::retry("the FTP data connection timed out"))?
+                .map_err(|_| Problem::retry(en!("the FTP data connection timed out")))?
                 .map_err(|error| Problem::retry(format!("FTP data connection failed: {error}")))?;
             return Ok(DataChannel::Passive(stream));
         }
 
         let listener = TcpListener::bind((self.local_ip, 0))
             .await
-            .map_err(|error| Problem::retry(format!("could not open an FTP port: {error}")))?;
+            .map_err(|error| Problem::retry(text!("could not open an FTP port: {error}")))?;
         let port = listener
             .local_addr()
             .map_err(|error| Problem::retry(error.to_string()))?
             .port();
 
         let IpAddr::V4(ip) = self.local_ip else {
-            return Err(Problem::Fatal(
-                "active FTP needs an IPv4 connection".to_owned(),
-            ));
+            return Err(Problem::Fatal(text!("active FTP needs an IPv4 connection")));
         };
         let [a, b, c, d] = ip.octets();
         let (high, low) = (port / 256, port % 256);
@@ -258,7 +254,7 @@ impl FtpSession {
             DataChannel::Active(listener) => {
                 let (stream, _) = timeout(self.target.connect_timeout, listener.accept())
                     .await
-                    .map_err(|_| Problem::retry("the FTP server never connected back"))?
+                    .map_err(|_| Problem::retry(en!("the FTP server never connected back")))?
                     .map_err(|error| Problem::retry(error.to_string()))?;
                 Ok(stream)
             }
@@ -296,8 +292,8 @@ impl FtpBody {
             self.data.read(&mut self.buffer),
         )
         .await
-        .map_err(|_| Problem::retry("the FTP transfer stalled"))?
-        .map_err(|error| Problem::retry(format!("the FTP transfer broke: {error}")))?;
+        .map_err(|_| Problem::retry(en!("the FTP transfer stalled")))?
+        .map_err(|error| Problem::retry(text!("the FTP transfer broke: {error}")))?;
 
         if read > 0 {
             return Ok(Some(Bytes::copy_from_slice(&self.buffer[..read])));

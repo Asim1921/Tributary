@@ -66,13 +66,13 @@ impl Notices {
     pub fn finished(&mut self, finish: Finish, queue: Option<i64>) -> Step {
         // A file that doesn't match its checksum is worth saying at once, on its own.
         if let Some((kind, false)) = finish.checked {
+            let name = &finish.name;
             return Step::Now(Notice {
-                title: "Checksum doesn't match".to_owned(),
-                text: format!(
-                    "{} doesn't match its {kind} checksum. It may be damaged, so download it again before opening it.",
-                    finish.name
+                title: text!("Checksum doesn't match"),
+                text: text!(
+                    "{name} doesn't match its {kind} checksum. It may be damaged, so download it again before opening it."
                 ),
-                buttons: vec![("Show in folder", format!("folder:{}", finish.id))],
+                buttons: vec![(en!("Show in folder"), format!("folder:{}", finish.id))],
             });
         }
         if let Some(queue) = queue {
@@ -103,38 +103,42 @@ impl Notices {
             [] => {}
             [one] => {
                 let verified = match one.checked {
-                    Some((kind, true)) => format!("Its {kind} checksum matches."),
+                    Some((kind, true)) => text!("Its {kind} checksum matches."),
                     _ => String::new(),
                 };
                 notices.push(Notice {
-                    title: "Download complete".to_owned(),
+                    title: text!("Download complete"),
                     text: [one.name.as_str(), verified.as_str()]
                         .into_iter()
                         .filter(|line| !line.is_empty())
                         .collect::<Vec<_>>()
                         .join("\n"),
                     buttons: vec![
-                        ("Open", format!("open:{}", one.id)),
-                        ("Show in folder", format!("folder:{}", one.id)),
+                        (en!("Open"), format!("open:{}", one.id)),
+                        (en!("Show in folder"), format!("folder:{}", one.id)),
                     ],
                 });
             }
             [first, rest @ ..] => notices.push(Notice {
-                title: format!("{} downloads complete", rest.len() + 1),
-                text: format!("{} and {} more", first.name, rest.len()),
+                title: text!("{count} downloads complete", count = rest.len() + 1),
+                text: text!(
+                    "{name} and {count} more",
+                    name = first.name,
+                    count = rest.len()
+                ),
                 buttons: Vec::new(),
             }),
         }
         match self.failed.as_slice() {
             [] => {}
             [(name, reason)] => notices.push(Notice {
-                title: "Download failed".to_owned(),
+                title: text!("Download failed"),
                 text: format!("{name}: {reason}"),
                 buttons: Vec::new(),
             }),
             many => notices.push(Notice {
-                title: format!("{} downloads failed", many.len()),
-                text: "Open Tributary to see why.".to_owned(),
+                title: text!("{count} downloads failed", count = many.len()),
+                text: text!("Open Tributary to see why."),
                 buttons: Vec::new(),
             }),
         }
@@ -147,11 +151,11 @@ impl Notices {
     pub fn queue_finished(&mut self, queue: i64, name: &str) -> Option<Notice> {
         let count = self.queues.remove(&queue).filter(|count| *count > 0)?;
         Some(Notice {
-            title: format!("{name} is done"),
+            title: text!("{name} is done"),
             text: if count == 1 {
-                "1 file saved".to_owned()
+                text!("1 file saved")
             } else {
-                format!("{count} files saved")
+                text!("{count} files saved")
             },
             buttons: Vec::new(),
         })
@@ -177,9 +181,13 @@ fn show(app: &AppHandle, notice: Notice) {
     if !wanted || std::env::var_os(QUIET_VARIABLE).is_some() || !out_of_sight(app) {
         return;
     }
-    let mut toast = Toast::new(APP_ID).title(&notice.title).text1(&notice.text);
+    // Made in English, as the tests read it, and said in the user's language here.
+    let say = crate::messages::describe;
+    let mut toast = Toast::new(APP_ID)
+        .title(&say(&notice.title))
+        .text1(&say(&notice.text));
     for (label, action) in &notice.buttons {
-        toast = toast.add_button(label, action);
+        toast = toast.add_button(&say(label), action);
     }
     let handle = app.clone();
     let toast = toast.on_activated(move |action| {
@@ -294,10 +302,13 @@ pub fn failed(app: &AppHandle, id: DownloadId) {
     let Ok(download) = state.engine.get(id) else {
         return;
     };
-    let reason = download
-        .error
-        .clone()
-        .unwrap_or_else(|| "it couldn't be downloaded".to_owned());
+    // The notice is said in the user's language, the reason with it.
+    let reason = crate::messages::describe(
+        download
+            .error
+            .as_deref()
+            .unwrap_or(en!("it couldn't be downloaded")),
+    );
     let step = state.notices().failed(display_name(&download), reason);
     carry_out(app, step);
 }
@@ -310,7 +321,7 @@ pub fn queue_finished(app: &AppHandle, id: QueueId) {
         .ok()
         .and_then(|queues| queues.into_iter().find(|info| info.queue.id == id))
         .map(|info| info.queue.name)
-        .unwrap_or_else(|| "A queue".to_owned());
+        .unwrap_or_else(|| text!("A queue"));
     let notice = state.notices().queue_finished(id.0, &name);
     if let Some(notice) = notice {
         show(app, notice);

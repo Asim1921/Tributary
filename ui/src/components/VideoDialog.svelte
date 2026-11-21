@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { sayError, t } from '../lib/locale.svelte';
   import { untrack } from 'svelte';
 
   import { YTDLP_MISSING, inspectVideo, installYtdlp, pickFolder, suggestCategory } from '../lib/api';
@@ -31,6 +32,8 @@
     $props();
 
   let details = $state<VideoDetails | null>(null);
+  /** The address is a playlist or channel, which the list dialog handles. */
+  let isList = $state(false);
   let problem = $state<string | null>(null);
   let chosen = $state(0);
   let name = $state('');
@@ -62,6 +65,7 @@
 
   async function check() {
     problem = null;
+    isList = false;
     try {
       const found = await inspectVideo(url, suggestedName ?? undefined, captureToken, page);
       details = found;
@@ -72,7 +76,8 @@
       const suggestion = await suggestCategory(`${found.suggestedName}.${first?.extension}`, url);
       if (!folderEdited) folder = suggestion.folder;
     } catch (error) {
-      problem = String(error);
+      problem = sayError(error);
+      isList = String(error).includes('list of videos');
     }
   }
 
@@ -87,7 +92,7 @@
       await installYtdlp();
       await check();
     } catch (error) {
-      installProblem = String(error);
+      installProblem = sayError(error);
     } finally {
       installing = false;
     }
@@ -126,33 +131,31 @@
   }
 </script>
 
-<Modal title="Save video" wide {onclose}>
+<Modal title={t('Save video')} wide {onclose}>
   <p class="selectable note">{url}</p>
 
   {#if problem === YTDLP_MISSING}
     <p class="refused" role="alert">
-      This site hides its video from ordinary downloading. Tributary can use yt-dlp, a free
-      open-source tool, to find it. It will be downloaded from yt-dlp's own releases and checked
-      against their published checksum.
+      {t("This site hides its video from ordinary downloading. Tributary can use yt-dlp, a free open-source tool, to find it. It will be downloaded from yt-dlp's own releases and checked against their published checksum.")}
     </p>
     {#if installProblem}<p class="error-text" role="alert">{installProblem}</p>{/if}
     <p>
       <button type="button" class="primary" disabled={installing} onclick={install}>
-        {installing ? 'Installing…' : 'Install yt-dlp'}
+        {installing ? t('Installing…') : t('Install yt-dlp')}
       </button>
     </p>
   {:else if problem}
     <p class="refused" role="alert">{problem}</p>
-    {#if problem.includes('list of videos') && onlist}
+    {#if isList && onlist}
       <p>
-        <button type="button" class="primary" onclick={onlist}>Choose videos from this list</button>
+        <button type="button" class="primary" onclick={onlist}>{t('Choose videos from this list')}</button>
       </p>
     {/if}
   {:else if !details}
-    <p>Reading the video…</p>
+    <p>{t('Reading the video…')}</p>
   {:else}
     <fieldset>
-      <legend>Quality</legend>
+      <legend>{t('Quality')}</legend>
       {#each details.choices as item, index (index)}
         <label class="check">
           <input
@@ -171,15 +174,15 @@
     {#if audioOnly && details.canJoin}
       <label class="check">
         <input type="checkbox" bind:checked={mp3} />
-        Convert to MP3
+        {t('Convert to MP3')}
       </label>
     {/if}
 
     {#if offersSubtitles}
       <label class="field">
-        Subtitles
+        {t('Subtitles')}
         <select bind:value={subtitle}>
-          <option value={-1}>None</option>
+          <option value={-1}>{t('None')}</option>
           {#each details.subtitles ?? [] as item, index (index)}
             <option value={index}>{subtitleLabel(item)}</option>
           {/each}
@@ -196,23 +199,23 @@
             if (partOnly && !to) to = clock(choice?.seconds ?? 0);
           }}
         />
-        Save only part of it
+        {t('Save only part of it')}
       </label>
       {#if partOnly}
         <div class="pair">
           <label class="field">
-            From
+            {t('From')}
             <input type="text" bind:value={from} placeholder="0:00" />
           </label>
           <label class="field">
-            To
+            {t('To')}
             <input type="text" bind:value={to} placeholder={clock(choice?.seconds ?? 0)} />
           </label>
         </div>
         {#if !audioOnly}
           <label class="check">
             <input type="checkbox" bind:checked={exact} />
-            Cut exactly (slower, because the picture is encoded again)
+            {t('Cut exactly (slower, because the picture is encoded again)')}
           </label>
         {/if}
         {#if partProblem}<p class="error-text" role="alert">{partProblem}</p>{/if}
@@ -222,46 +225,43 @@
     {#if details.hasCover}
       <label class="check">
         <input type="checkbox" bind:checked={cover} />
-        Add the cover picture
+        {t('Add the cover picture')}
       </label>
     {/if}
 
     {#if (cover || (offersSubtitles && subtitle >= 0)) && extrasBeside}
       <p class="note">
         {#if !details.canJoin}
-          Without ffmpeg, the subtitles and cover are saved beside the file. Set up ffmpeg in
-          Options to have them put inside it.
+          {t('Without ffmpeg, the subtitles and cover are saved beside the file. Set up ffmpeg in Options to have them put inside it.')}
         {:else}
-          This kind of file can't hold everything chosen, so what doesn't fit is saved beside it.
+          {t("This kind of file can't hold everything chosen, so what doesn't fit is saved beside it.")}
         {/if}
       </p>
     {/if}
 
     {#if page}
       <p class="note">
-        Saving video from a site may go against that site's terms. Protected, paid and
-        login-only videos are refused.
+        {t("Saving video from a site may go against that site's terms. Protected, paid and login-only videos are refused.")}
       </p>
     {/if}
 
     {#if choice?.separateAudio}
       <p class="note">
         {#if details.canJoin}
-          The picture and sound are separate, and will be joined into one file when both finish.
+          {t('The picture and sound are separate, and will be joined into one file when both finish.')}
         {:else}
-          The picture and sound are separate, and stay as two files. Set up ffmpeg in Options to
-          have them joined.
+          {t('The picture and sound are separate, and stay as two files. Set up ffmpeg in Options to have them joined.')}
         {/if}
       </p>
     {/if}
 
     <label class="field">
-      Save as
+      {t('Save as')}
       <input type="text" bind:value={name} oninput={() => (nameEdited = true)} />
     </label>
 
     <div class="field-block">
-      <label class="field" for="video-folder">Folder</label>
+      <label class="field" for="video-folder">{t('Folder')}</label>
       <div class="folder-row">
         <input
           id="video-folder"
@@ -269,20 +269,20 @@
           bind:value={folder}
           oninput={() => (folderEdited = true)}
         />
-        <button type="button" onclick={browse}>Browse…</button>
+        <button type="button" onclick={browse}>{t('Browse…')}</button>
       </div>
     </div>
   {/if}
 
   {#snippet footer()}
-    <button type="button" onclick={onclose}>{problem ? 'Close' : 'Cancel'}</button>
+    <button type="button" onclick={onclose}>{problem ? t('Close') : t('Cancel')}</button>
     {#if !problem}
       <button
         type="button"
         disabled={!details || !name.trim() || !!partProblem}
         onclick={() => submit(true)}
       >
-        Download later
+        {t('Download later')}
       </button>
       <button
         type="button"
@@ -290,7 +290,7 @@
         disabled={!details || !name.trim() || !!partProblem}
         onclick={() => submit(false)}
       >
-        Start download
+        {t('Start download')}
       </button>
     {/if}
   {/snippet}
@@ -309,7 +309,7 @@
   }
 
   .muted {
-    margin-left: 6px;
+    margin-inline-start: 6px;
     color: var(--muted);
   }
 

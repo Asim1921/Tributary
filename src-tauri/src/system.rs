@@ -109,7 +109,7 @@ pub fn drag_out(window: &Window, files: Vec<PathBuf>) -> Result<(), String> {
 
     match dragged {
         Ok(result) => result.map_err(|error| error.to_string()),
-        Err(_) => Err("Windows couldn't start the drag".to_owned()),
+        Err(_) => Err(text!("Windows couldn't start the drag")),
     }
 }
 
@@ -318,7 +318,7 @@ fn magnet_values(app_path: &Path) -> Vec<RegistryValue> {
         (
             r"Software\Tributary\Capabilities".to_owned(),
             Some("ApplicationDescription"),
-            "Downloads files, video and torrents".to_owned(),
+            say!("Downloads files, video and torrents").local(),
         ),
         (
             r"Software\Tributary\Capabilities\URLAssociations".to_owned(),

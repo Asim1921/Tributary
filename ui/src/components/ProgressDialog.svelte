@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { sayError, t } from '../lib/locale.svelte';
   import {
     displayName,
     formatBytes,
@@ -27,23 +28,23 @@
   <p class="note selectable">{row.url}</p>
 
   <dl>
-    <dt>Status</dt>
+    <dt>{t('Status')}</dt>
     <dd>{statusText(row)}</dd>
-    <dt>Downloaded</dt>
-    <dd>{formatBytes(row.downloaded)} of {formatBytes(row.size)}</dd>
-    <dt>Speed</dt>
+    <dt>{t('Downloaded')}</dt>
+    <dd>{t('{done} of {total}', { done: formatBytes(row.downloaded), total: formatBytes(row.size) })}</dd>
+    <dt>{t('Speed')}</dt>
     <dd>{row.state === 'running' ? formatSpeed(row.speed) : '—'}</dd>
-    <dt>Time left</dt>
+    <dt>{t('Time left')}</dt>
     <dd>{formatTimeLeft(row) || '—'}</dd>
-    <dt>Resume</dt>
-    <dd>{row.resumable ? 'Supported' : 'Not supported'}</dd>
+    <dt>{t('Resume')}</dt>
+    <dd>{row.resumable ? t('Supported') : t('Not supported')}</dd>
   </dl>
 
   {#if row.error}
-    <p class="error-text">{row.error}</p>
+    <p class="error-text">{sayError(row.error)}</p>
   {/if}
 
-  <p class="heading">Connections</p>
+  <p class="heading">{t('Connections')}</p>
   {#if row.segments.length > 0 && row.size}
     <SegmentChart segments={row.segments} size={row.size} />
   {:else}
@@ -54,11 +55,11 @@
 
   {#snippet footer()}
     {#if row.state === 'running'}
-      <button type="button" onclick={onpause}>Stop</button>
+      <button type="button" onclick={onpause}>{t('Stop')}</button>
     {:else if row.state !== 'completed'}
-      <button type="button" onclick={onresume}>Resume</button>
+      <button type="button" onclick={onresume}>{t('Resume')}</button>
     {/if}
-    <button type="button" class="primary" onclick={onclose}>Close</button>
+    <button type="button" class="primary" onclick={onclose}>{t('Close')}</button>
   {/snippet}
 </Modal>
 

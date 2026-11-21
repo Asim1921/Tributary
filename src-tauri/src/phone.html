@@ -21,15 +21,28 @@
 </style>
 </head>
 <body>
-<h1>Send to Tributary</h1>
-<p>Paste a link, and Tributary on your computer asks what to do with it.</p>
+<h1 data-say>Send to Tributary</h1>
+<p data-say>Paste a link, and Tributary on your computer asks what to do with it.</p>
 <form id="send">
   <input id="link" type="url" inputmode="url" placeholder="https://" required autocomplete="off">
-  <button>Send</button>
+  <button data-say>Send</button>
 </form>
 <div id="said" role="status"></div>
 <ul id="list"></ul>
 <script>
+  // Tributary sends its words in each language it speaks; the page uses the phone's own.
+  const WORDS = /*WORDS*/{};
+  const LANGUAGE =
+    (navigator.languages || [navigator.language])
+      .map((tag) => tag.split('-')[0].toLowerCase())
+      .find((code) => WORDS[code]) || 'en';
+  const say = (text) => (WORDS[LANGUAGE] && WORDS[LANGUAGE][text]) || text;
+  document.documentElement.lang = LANGUAGE;
+  document.documentElement.dir = LANGUAGE === 'ur' || LANGUAGE === 'ar' ? 'rtl' : 'ltr';
+  for (const element of document.querySelectorAll('[data-say]')) {
+    element.textContent = say(element.textContent.trim());
+  }
+
   // The pairing code comes in the address after #, which never reaches a server, and is kept
   // so the page can be bookmarked.
   if (location.hash.length > 1) {
@@ -44,14 +57,14 @@
   document.getElementById('send').addEventListener('submit', async (event) => {
     event.preventDefault();
     const link = document.getElementById('link');
-    said.textContent = 'Sending…';
+    said.textContent = say('Sending…');
     try {
       const answer = await ask('/add', { method: 'POST', body: JSON.stringify({ url: link.value }) });
       const body = await answer.json();
-      said.textContent = answer.ok ? 'Sent. Tributary is asking about it on your computer.' : body.error;
+      said.textContent = answer.ok ? say('Sent. Tributary is asking about it on your computer.') : say(body.error);
       if (answer.ok) link.value = '';
     } catch {
-      said.textContent = "Couldn't reach Tributary. Is your phone on the same network?";
+      said.textContent = say("Couldn't reach Tributary. Is your phone on the same network?");
     }
   });
 
@@ -59,7 +72,7 @@
     try {
       const answer = await ask('/list');
       if (answer.status === 403) {
-        said.textContent = 'Scan the code in Tributary’s Options, under Phone, to pair this phone.';
+        said.textContent = say('Scan the code in Tributary’s Options, under Phone, to pair this phone.');
         return;
       }
       const items = await answer.json();
@@ -69,9 +82,9 @@
           const row = document.createElement('li');
           const name = document.createElement('span');
           const state = document.createElement('span');
-          name.textContent = item.name;
+          name.textContent = say(item.name);
           state.textContent =
-            item.state === 'downloading' && item.percent != null ? `${item.percent}%` : item.state;
+            item.state === 'downloading' && item.percent != null ? `${item.percent}%` : say(item.state);
           row.append(name, state);
           return row;
         }),

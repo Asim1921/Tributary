@@ -54,7 +54,7 @@ impl Grabber {
         self.file()
             .find(id)
             .cloned()
-            .ok_or_else(|| "that project no longer exists".to_owned())
+            .ok_or_else(|| text!("that project no longer exists"))
     }
 
     fn save(&self, file: &ProjectFile) -> Result<(), String> {

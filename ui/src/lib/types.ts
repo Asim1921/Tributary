@@ -151,6 +151,8 @@ export interface Settings {
   sounds: Sounds;
   captureEnabled: boolean;
   ffmpegPath: string;
+  /** Such as `ur`; empty follows Windows. */
+  language: string;
   ytdlpPath: string;
   videoPanel: boolean;
   captureTypes: string[];

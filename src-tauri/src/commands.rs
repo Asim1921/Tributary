@@ -404,7 +404,7 @@ impl DownloadView {
             self.error = sound
                 .error
                 .as_ref()
-                .map(|problem| format!("the sound couldn't be saved: {problem}"));
+                .map(|problem| text!("the sound couldn't be saved: {problem}"));
         }
         self
     }
@@ -862,7 +862,7 @@ pub async fn add_batch(
     let files = state
         .pending()
         .take(token)
-        .ok_or("these links have already been handled")?;
+        .ok_or(en!("these links have already been handled"))?;
     let (pages, files): (Vec<Captured>, Vec<Captured>) = files
         .into_iter()
         .filter(|file| urls.contains(&file.url))
@@ -1022,14 +1022,14 @@ fn refused_summary(total: usize, refused: &[String], unread: Unread) -> Option<S
     }
     match unread {
         Unread::Nothing => {}
-        Unread::NoYtDlp(count) => parts.push(format!(
-            "yt-dlp is needed to read videos from their pages (Options > Video can install it). {count} {} not read.",
-            if count == 1 { "video was" } else { "videos were" }
+        Unread::NoYtDlp(1) => parts.push(text!(
+            "yt-dlp is needed to read videos from their pages (Options > Video can install it). 1 video was not read."
         )),
-        Unread::Stopped(count) => parts.push(format!(
-            "Stopped before reading {count} {}.",
-            if count == 1 { "video" } else { "videos" }
+        Unread::NoYtDlp(count) => parts.push(text!(
+            "yt-dlp is needed to read videos from their pages (Options > Video can install it). {count} videos were not read."
         )),
+        Unread::Stopped(1) => parts.push(text!("Stopped before reading 1 video.")),
+        Unread::Stopped(count) => parts.push(text!("Stopped before reading {count} videos.")),
     }
     (!parts.is_empty()).then(|| parts.join("\n\n"))
 }
@@ -1359,7 +1359,7 @@ fn finished_file(state: &AppState, id: i64) -> Result<PathBuf, String> {
     download
         .final_path
         .filter(|path| Path::new(path).exists())
-        .ok_or_else(|| "the file is no longer there".to_owned())
+        .ok_or_else(|| text!("the file is no longer there"))
 }
 
 #[tauri::command]
@@ -1421,7 +1421,7 @@ pub async fn drag_files(
         .filter_map(|id| finished_file(&state, id).ok())
         .collect();
     if files.is_empty() {
-        return Err("the file is no longer there".to_owned());
+        return Err(text!("the file is no longer there"));
     }
 
     let (finished, result) = oneshot::channel();
@@ -1430,6 +1430,18 @@ pub async fn drag_files(
     })
     .map_err(text)?;
     result.await.map_err(text)?
+}
+
+/// The language the app speaks: with `chosen`, the one it would speak if that were chosen in
+/// Options (empty for Windows' own), or else the one it speaks now.
+#[tauri::command]
+pub fn app_language(chosen: Option<String>) -> String {
+    match chosen {
+        Some(chosen) => {
+            crate::messages::pick_language(&chosen, &crate::messages::windows_languages())
+        }
+        None => crate::messages::language(),
+    }
 }
 
 #[tauri::command]
@@ -1465,6 +1477,7 @@ pub async fn save_settings(
     // Applied first, so a bad proxy address is refused before anything is saved.
     apply_to_engine(&state.engine, &settings).map_err(text)?;
     settings.save(&state.settings_path).map_err(text)?;
+    crate::apply_language(&app, &settings.language);
     let show_drop_target = settings.show_drop_target;
     *state.settings() = settings;
     crate::sync_drop_target(&app, show_drop_target);

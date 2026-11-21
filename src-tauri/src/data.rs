@@ -67,10 +67,10 @@ pub fn export_to(path: &Path, engine: &Engine, settings: &Settings) -> Result<us
 pub fn import_from(path: &Path, engine: &Engine) -> Result<(Settings, usize), String> {
     let text = fs::read_to_string(path).map_err(|error| error.to_string())?;
     let export: Export =
-        serde_json::from_str(&text).map_err(|_| "this isn't a Tributary export file".to_owned())?;
+        serde_json::from_str(&text).map_err(|_| text!("this isn't a Tributary export file"))?;
 
     if export.version > FORMAT_VERSION {
-        return Err("this file came from a newer version of Tributary".to_owned());
+        return Err(text!("this file came from a newer version of Tributary"));
     }
 
     let existing: Vec<String> = engine

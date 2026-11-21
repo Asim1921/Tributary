@@ -212,8 +212,8 @@ impl Job {
         .await;
 
         let (written, data) =
-            result.map_err(|error| Problem::Fatal(format!("disk write stopped: {error}")))?;
-        written.map_err(|error| Problem::Fatal(format!("could not write the file: {error}")))?;
+            result.map_err(|error| Problem::Fatal(text!("disk write stopped: {error}")))?;
+        written.map_err(|error| Problem::Fatal(text!("could not write the file: {error}")))?;
 
         *buffer = data;
         buffer.clear();
@@ -241,7 +241,7 @@ pub async fn run_segments(job: Arc<Job>, connections: usize) -> Ended {
     if job.map().is_complete() {
         return Ended::Finished;
     }
-    first_problem.unwrap_or_else(|| Ended::Failed("the transfer ended early".to_owned()))
+    first_problem.unwrap_or_else(|| Ended::Failed(text!("the transfer ended early")))
 }
 
 /// One connection: takes work until none is left.
@@ -346,14 +346,14 @@ async fn open_range(job: &Job, claim: Claim) -> Result<(Body, Option<InUse<'_>>)
 /// own validators mean nothing here, since they come from another server.
 fn check_mirror(job: &Job, response: &Response, claim: Claim) -> Result<(), String> {
     if response.status() != StatusCode::PARTIAL_CONTENT {
-        return Err(format!("it answered {}", response.status()));
+        return Err(text!("it answered {status}", status = response.status()));
     }
-    let range = ContentRange::from_headers(response.headers()).ok_or("it gave no range")?;
+    let range = ContentRange::from_headers(response.headers()).ok_or(en!("it gave no range"))?;
     if range.total != job.size {
-        return Err("its file is a different size".to_owned());
+        return Err(text!("its file is a different size"));
     }
     if range.start != Some(claim.from) {
-        return Err("it sent a different part".to_owned());
+        return Err(text!("it sent a different part"));
     }
     Ok(())
 }
@@ -361,8 +361,8 @@ fn check_mirror(job: &Job, response: &Response, claim: Claim) -> Result<(), Stri
 fn problem_reason(problem: &Problem) -> String {
     match problem {
         Problem::Retry { reason, .. } | Problem::Fatal(reason) => reason.clone(),
-        Problem::LoginRequired { .. } => "it wants a login".to_owned(),
-        Problem::Changed => "its file changed".to_owned(),
+        Problem::LoginRequired { .. } => text!("it wants a login"),
+        Problem::Changed => text!("its file changed"),
         Problem::Stopped => "stopped".to_owned(),
     }
 }
@@ -410,7 +410,7 @@ async fn fetch_segment(job: &Job, claim: Claim) -> Result<(), Problem> {
             }
             Ok(None) => {
                 flush(job, claim, &mut buffer, &mut position).await?;
-                return Err(Problem::retry("the server ended the response early"));
+                return Err(Problem::retry(en!("the server ended the response early")));
             }
             Err(problem) => {
                 // Bytes that did arrive are good, so keep them.
@@ -453,7 +453,7 @@ fn check_partial(job: &Job, response: &Response, claim: Claim) -> Result<(), Pro
                     },
                 ) => {
                     auth.renew(fresh);
-                    Err(Problem::retry("the login needs renewing"))
+                    Err(Problem::retry(en!("the login needs renewing")))
                 }
                 (_, problem) => Err(problem),
             };
@@ -472,13 +472,15 @@ fn check_partial(job: &Job, response: &Response, claim: Claim) -> Result<(), Pro
     }
 
     let Some(range) = ContentRange::from_headers(headers) else {
-        return Err(Problem::retry("the server sent no usable Content-Range"));
+        return Err(Problem::retry(en!(
+            "the server sent no usable Content-Range"
+        )));
     };
     if range.total.is_some() && range.total != job.size {
         return Err(Problem::Changed);
     }
     if range.start != Some(claim.from) {
-        return Err(Problem::retry("the server sent a different range"));
+        return Err(Problem::retry(en!("the server sent a different range")));
     }
     Ok(())
 }
@@ -567,11 +569,11 @@ async fn fetch_whole(job: &Job) -> Result<(), Problem> {
     position += count;
 
     if job.size.is_some_and(|size| size != position) {
-        return Err(Problem::retry("the server ended the response early"));
+        return Err(Problem::retry(en!("the server ended the response early")));
     }
     job.file
         .set_len(position)
-        .map_err(|error| Problem::Fatal(format!("could not write the file: {error}")))
+        .map_err(|error| Problem::Fatal(text!("could not write the file: {error}")))
 }
 
 #[cfg(test)]

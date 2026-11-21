@@ -1,3 +1,4 @@
+import { mark } from './locale.svelte';
 import type { Category, Download, DownloadRow, Queue } from './types';
 
 export type StatusFilter = 'all' | 'active' | 'unfinished' | 'finished';
@@ -39,11 +40,14 @@ export interface FilterEntry {
 
 export const ALL: Filter = { kind: 'status', status: 'all' };
 
+/** The queue every download can join, as the engine names it, said where queues are shown. */
+export const MAIN_QUEUE = mark('Main queue');
+
 const STATUS_LABELS: Record<StatusFilter, string> = {
-  all: 'All downloads',
-  active: 'Downloading',
-  unfinished: 'Unfinished',
-  finished: 'Finished',
+  all: mark('All downloads'),
+  active: mark('Downloading'),
+  unfinished: mark('Unfinished'),
+  finished: mark('Finished'),
 };
 
 const STATUS_MATCHES: Record<StatusFilter, (row: DownloadRow) => boolean> = {

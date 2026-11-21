@@ -1,0 +1,84 @@
+{
+  "extName": {
+    "message": "Tributary"
+  },
+  "extDescription": {
+    "message": "يرسل التنزيلات إلى مدير التنزيلات Tributary."
+  },
+  "commandSaveMedia": {
+    "message": "حفظ كل صورة وفيديو في هذه الصفحة باستخدام Tributary"
+  },
+  "menuLink": {
+    "message": "التنزيل باستخدام Tributary"
+  },
+  "menuSelection": {
+    "message": "تنزيل الروابط المحددة باستخدام Tributary"
+  },
+  "menuAllLinks": {
+    "message": "تنزيل كل الروابط باستخدام Tributary"
+  },
+  "menuPageMedia": {
+    "message": "تنزيل كل الصور ومقاطع الفيديو في هذه الصفحة باستخدام Tributary"
+  },
+  "panelSave": {
+    "message": "حفظ: $LABEL$",
+    "placeholders": {
+      "label": {
+        "content": "$1"
+      }
+    }
+  },
+  "panelDownloadVideo": {
+    "message": "تنزيل هذا الفيديو"
+  },
+  "panelHide": {
+    "message": "إخفاء"
+  },
+  "collectWaiting": {
+    "message": "في انتظار ظهور علامة التبويب هذه مجددًا…"
+  },
+  "collectLooking": {
+    "message": "يبحث Tributary عن الصور ومقاطع الفيديو…"
+  },
+  "collectStop": {
+    "message": "التوقف هنا"
+  },
+  "collectCancel": {
+    "message": "إلغاء"
+  },
+  "collectFound": {
+    "message": "عُثر حتى الآن على: صور $PICTURES$، مقاطع فيديو $VIDEOS$…",
+    "placeholders": {
+      "pictures": {
+        "content": "$1"
+      },
+      "videos": {
+        "content": "$2"
+      }
+    }
+  },
+  "collectNothing": {
+    "message": "لم يعثر Tributary على صور أو مقاطع فيديو في هذه الصفحة."
+  },
+  "collectClose": {
+    "message": "إغلاق"
+  },
+  "popupSaveAll": {
+    "message": "حفظ كل الصور ومقاطع الفيديو في هذه الصفحة"
+  },
+  "popupUnreadable": {
+    "message": "لا يستطيع Tributary قراءة هذه الصفحة. إن كانت مفتوحة قبل تحميل الإضافة أو تحديثها، فأعد تحميلها وحاول مجددًا. لا يمكن قراءة صفحات المتصفح نفسه."
+  },
+  "popupVideoHeading": {
+    "message": "الفيديو في هذه الصفحة"
+  },
+  "popupNothing": {
+    "message": "لم يُعثر على فيديو بعد. ابدأ تشغيله، ثم انظر هنا مجددًا."
+  },
+  "labelVideoStream": {
+    "message": "بث فيديو"
+  },
+  "labelVideo": {
+    "message": "فيديو"
+  }
+}

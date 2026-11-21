@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { sayError, t } from '../lib/locale.svelte';
   import { untrack } from 'svelte';
 
   import { LOGIN_NEEDED, findChecksum, inspectUrl, pickFolder, suggestCategory } from '../lib/api';
@@ -78,7 +79,7 @@
       if (!folderEdited) folder = suggestion.folder;
     } catch (error) {
       needsLogin = needsLogin || String(error) === LOGIN_NEEDED;
-      problem = String(error);
+      problem = sayError(error);
     } finally {
       checking = false;
     }
@@ -111,12 +112,14 @@
       const result = await findChecksum(url, fileName || undefined);
       if (result) {
         checksum = result.hex;
-        found = `Found the ${result.algorithm} checksum the site publishes for this file.`;
+        found = t('Found the {algorithm} checksum the site publishes for this file.', {
+          algorithm: result.algorithm,
+        });
       } else {
-        found = "The site doesn't publish a checksum beside this file.";
+        found = t("The site doesn't publish a checksum beside this file.");
       }
     } catch (error) {
-      found = `Couldn't look for one: ${error}`;
+      found = t("Couldn't look for one: {error}", { error: sayError(error) });
     } finally {
       finding = false;
     }
@@ -140,20 +143,20 @@
   }
 </script>
 
-<Modal title="Download file" wide {onclose}>
+<Modal title={t('Download file')} wide {onclose}>
   <p class="selectable note">{url}</p>
 
   <div class="facts">
     {#if checking}
-      <span>Checking the file…</span>
+      <span>{t('Checking the file…')}</span>
     {:else if info}
-      <span>Size: <strong>{formatBytes(info.size)}</strong></span>
+      <span>{t('Size:')} <strong>{formatBytes(info.size)}</strong></span>
       <span>
-        Resume:
-        <strong>{info.resumable ? 'Supported' : 'Not supported'}</strong>
+        {t('Resume:')}
+        <strong>{info.resumable ? t('Supported') : t('Not supported')}</strong>
       </span>
     {:else}
-      <span class="error-text">Couldn't check this file: {problem}</span>
+      <span class="error-text">{t("Couldn't check this file: {problem}", { problem })}</span>
     {/if}
   </div>
 
@@ -161,46 +164,45 @@
     <div class="login">
       <div class="pair">
         <label class="field">
-          User name
+          {t('User name')}
           <input type="text" bind:value={username} autocomplete="off" />
         </label>
         <label class="field">
-          Password
+          {t('Password')}
           <input type="password" bind:value={password} autocomplete="off" />
         </label>
       </div>
       <div class="login-actions">
         <label class="check">
           <input type="checkbox" bind:checked={rememberLogin} />
-          Remember for this site
+          {t('Remember for this site')}
         </label>
-        <button type="button" disabled={checking || !username} onclick={check}>Try again</button>
+        <button type="button" disabled={checking || !username} onclick={check}>{t('Try again')}</button>
       </div>
     </div>
   {/if}
 
   {#if info?.isWebPage}
     <p class="warning" role="alert">
-      This address is a web page, not a file. Saving it keeps the page's text only, not any video
-      or file shown on it.
+      {t("This address is a web page, not a file. Saving it keeps the page's text only, not any video or file shown on it.")}
     </p>
     <p>
-      <button type="button" onclick={() => onstream(true)}>Look for a video on this page</button>
+      <button type="button" onclick={() => onstream(true)}>{t('Look for a video on this page')}</button>
     </p>
   {/if}
 
   <label class="field">
-    Save as
+    {t('Save as')}
     <input
       type="text"
       bind:value={fileName}
-      placeholder="Name from the server"
+      placeholder={t('Name from the server')}
       oninput={() => (nameEdited = true)}
     />
   </label>
 
   <div class="field-block">
-    <label class="field" for="start-folder">Folder</label>
+    <label class="field" for="start-folder">{t('Folder')}</label>
     <div class="folder-row">
       <input
         id="start-folder"
@@ -208,48 +210,48 @@
         bind:value={folder}
         oninput={() => (folderEdited = true)}
       />
-      <button type="button" onclick={browse}>Browse…</button>
+      <button type="button" onclick={browse}>{t('Browse…')}</button>
     </div>
   </div>
 
   <div class="pair">
     <label class="field">
-      Category
+      {t('Category')}
       <select bind:value={category} onchange={changeCategory}>
-        <option value="">None</option>
+        <option value="">{t('None')}</option>
         {#each categories as item (item.name)}
-          <option value={item.name}>{item.name}</option>
+          <option value={item.name}>{t(item.name)}</option>
         {/each}
       </select>
     </label>
     <label class="field">
-      Queue for later
+      {t('Queue for later')}
       <select bind:value={queueId}>
         {#each queues as queue (queue.id)}
-          <option value={queue.id}>{queue.name}</option>
+          <option value={queue.id}>{t(queue.name)}</option>
         {/each}
       </select>
     </label>
   </div>
 
   <label class="field">
-    Description
-    <input type="text" bind:value={description} placeholder="Optional" />
+    {t('Description')}
+    <input type="text" bind:value={description} placeholder={t('Optional')} />
   </label>
 
   <div class="field-block">
-    <label class="field" for="start-checksum">Checksum</label>
+    <label class="field" for="start-checksum">{t('Checksum')}</label>
     <div class="folder-row">
       <input
         id="start-checksum"
         type="text"
         bind:value={checksum}
-        placeholder="Optional: the MD5, SHA-1, SHA-256 or SHA-512 the site gives"
+        placeholder={t('Optional: the MD5, SHA-1, SHA-256 or SHA-512 the site gives')}
         spellcheck="false"
         autocomplete="off"
       />
       <button type="button" disabled={finding} onclick={find}>
-        {finding ? 'Looking…' : 'Find'}
+        {finding ? t('Looking…') : t('Find')}
       </button>
     </div>
     {#if !checksumOk}
@@ -260,9 +262,9 @@
   </div>
 
   {#snippet footer()}
-    <button type="button" onclick={onclose}>Cancel</button>
+    <button type="button" onclick={onclose}>{t('Cancel')}</button>
     <button type="button" disabled={checking || !checksumOk} onclick={() => submit(true)}>
-      Download later
+      {t('Download later')}
     </button>
     <button
       type="button"
@@ -270,7 +272,7 @@
       disabled={checking || !checksumOk}
       onclick={() => submit(false)}
     >
-      Start download
+      {t('Start download')}
     </button>
   {/snippet}
 </Modal>

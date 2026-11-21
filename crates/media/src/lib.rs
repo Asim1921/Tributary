@@ -7,6 +7,21 @@
 //! parsed result, so a declaration the parsers don't model is still caught. A stream is
 //! refused whole if any playlist it uses declares protection, even if others don't.
 
+/// English for the user, as `format!`, marked so the app's check finds its translations
+/// (`ui/src/locales`). The window says it in the user's language.
+macro_rules! text {
+    ($($arguments:tt)*) => {
+        format!($($arguments)*)
+    };
+}
+
+/// English for the user as a plain `&'static str`, marked like `text!`.
+macro_rules! en {
+    ($text:literal) => {
+        $text
+    };
+}
+
 mod dash;
 mod hls;
 pub mod ytdlp;
@@ -124,7 +139,7 @@ where
     };
 
     if qualities.is_empty() {
-        return Err(Error::Invalid("it lists nothing to save".to_owned()));
+        return Err(Error::Invalid(text!("it lists nothing to save")));
     }
     qualities.sort_by_key(|quality| {
         std::cmp::Reverse((quality.height.unwrap_or(0), quality.bandwidth.unwrap_or(0)))
@@ -158,20 +173,20 @@ pub fn is_stream(url: &str, content_type: Option<&str>) -> bool {
 fn resolve(base: &Url, link: &str) -> Result<Url, Error> {
     let url = base
         .join(link.trim())
-        .map_err(|_| Error::Invalid(format!("it has a bad address: {link}")))?;
+        .map_err(|_| Error::Invalid(text!("it has a bad address: {link}")))?;
     if matches!(url.scheme(), "http" | "https") {
         Ok(url)
     } else {
-        Err(Error::Invalid(format!("it has a bad address: {link}")))
+        Err(Error::Invalid(text!("it has a bad address: {link}")))
     }
 }
 
 fn parse_base(url: &str) -> Result<Url, Error> {
-    Url::parse(url).map_err(|_| Error::Invalid(format!("it has a bad address: {url}")))
+    Url::parse(url).map_err(|_| Error::Invalid(text!("it has a bad address: {url}")))
 }
 
 fn too_many_parts() -> Error {
-    Error::Invalid("it lists too many parts".to_owned())
+    Error::Invalid(text!("it lists too many parts"))
 }
 
 fn extension_of(url: &str) -> Option<String> {

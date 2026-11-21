@@ -239,7 +239,7 @@ pub fn receive_from(
     let from = from.unwrap_or_default();
     let files: Vec<Captured> = files.into_iter().filter(Captured::is_valid).collect();
     if files.is_empty() {
-        return Err("there's nothing here that can be downloaded".to_owned());
+        return Err(text!("there's nothing here that can be downloaded"));
     }
     if let (false, [file]) = (batch, files.as_slice())
         && !file.is_stream()
@@ -277,7 +277,7 @@ pub fn receive_from(
         let mut pending = state.pending();
         let token = pending
             .hold(files)
-            .ok_or("too many downloads are waiting")?;
+            .ok_or(en!("too many downloads are waiting"))?;
         pending.deliver(CaptureEvent {
             token,
             items,

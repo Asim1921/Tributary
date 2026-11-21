@@ -21,7 +21,7 @@ use url::Url;
 use crate::commands::AppState;
 
 /// What the window shows when yt-dlp isn't there, and recognises to offer installing it.
-pub const MISSING: &str = "yt-dlp is needed for this site";
+pub const MISSING: &str = en!("yt-dlp is needed for this site");
 
 const PROGRAM: &str = "yt-dlp.exe";
 const TOOLS_FOLDER: &str = "tools";
@@ -79,11 +79,11 @@ pub fn program_for(state: &AppState) -> Option<PathBuf> {
 /// Only web pages are given to yt-dlp.
 fn check_page(address: &str) -> Result<Url, Error> {
     let url = Url::parse(address.trim())
-        .map_err(|_| Error::Invalid("that isn't a web address".into()))?;
+        .map_err(|_| Error::Invalid(en!("that isn't a web address").into()))?;
     if matches!(url.scheme(), "http" | "https") && url.host_str().is_some() {
         Ok(url)
     } else {
-        Err(Error::Invalid("that isn't a web address".into()))
+        Err(Error::Invalid(en!("that isn't a web address").into()))
     }
 }
 
@@ -171,7 +171,7 @@ async fn run(program: &Path, arguments: Vec<String>) -> Result<String, Error> {
         .kill_on_drop(true)
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
-        .map_err(|error| Error::Fetch(format!("yt-dlp couldn't start: {error}")))?;
+        .map_err(|error| Error::Fetch(text!("yt-dlp couldn't start: {error}")))?;
 
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
@@ -221,14 +221,14 @@ fn sha256_of(path: &Path) -> std::io::Result<String> {
 /// Downloads the latest yt-dlp from its own releases, checks it against the checksum
 /// published beside it, and puts it in place. Doing this again updates it.
 pub async fn install_into(engine: &Engine, tools: &Path) -> Result<PathBuf, String> {
-    std::fs::create_dir_all(tools).map_err(|error| format!("couldn't make the folder: {error}"))?;
+    std::fs::create_dir_all(tools).map_err(|error| text!("couldn't make the folder: {error}"))?;
 
     let sums = engine
         .fetch_text(&format!("{RELEASE}/SHA2-256SUMS"), &[], None)
         .await
-        .map_err(|error| format!("couldn't read the published checksums: {error}"))?;
-    let wanted =
-        checksum_for(&sums, PROGRAM).ok_or("the release doesn't list a checksum for yt-dlp")?;
+        .map_err(|error| text!("couldn't read the published checksums: {error}"))?;
+    let wanted = checksum_for(&sums, PROGRAM)
+        .ok_or(en!("the release doesn't list a checksum for yt-dlp"))?;
 
     let _ = std::fs::remove_file(tools.join(DOWNLOAD_NAME));
     let id = engine
@@ -245,12 +245,10 @@ pub async fn install_into(engine: &Engine, tools: &Path) -> Result<PathBuf, Stri
     let _ = engine.remove(id, false).await;
 
     if done.state != State::Completed {
-        return Err(format!(
-            "the download failed: {}",
-            done.error.unwrap_or_else(|| "it didn't finish".into())
-        ));
+        let reason = done.error.unwrap_or_else(|| en!("it didn't finish").into());
+        return Err(text!("the download failed: {reason}"));
     }
-    let downloaded = done.final_path.ok_or("the download has no file")?;
+    let downloaded = done.final_path.ok_or(en!("the download has no file"))?;
 
     let found = tokio::task::spawn_blocking({
         let downloaded = downloaded.clone();
@@ -258,18 +256,19 @@ pub async fn install_into(engine: &Engine, tools: &Path) -> Result<PathBuf, Stri
     })
     .await
     .map_err(|error| error.to_string())?
-    .map_err(|error| format!("couldn't check the download: {error}"))?;
+    .map_err(|error| text!("couldn't check the download: {error}"))?;
 
     if found != wanted {
         let _ = std::fs::remove_file(&downloaded);
-        return Err(
-            "the download doesn't match its published checksum, so it was thrown away".into(),
-        );
+        return Err(en!(
+            "the download doesn't match its published checksum, so it was thrown away"
+        )
+        .into());
     }
 
     let target = tools.join(PROGRAM);
     std::fs::rename(&downloaded, &target)
-        .map_err(|error| format!("couldn't put it in place (is it running?): {error}"))?;
+        .map_err(|error| text!("couldn't put it in place (is it running?): {error}"))?;
     Ok(target)
 }
 

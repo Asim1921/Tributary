@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from './lib/locale.svelte';
   import { addDroppedLink } from './lib/api';
   import { droppedLink } from './lib/format';
 
@@ -16,7 +17,7 @@
   class="target"
   class:over
   role="region"
-  aria-label="Drop a link here"
+  aria-label={t('Drop a link here')}
   data-tauri-drag-region
   ondragover={(event) => {
     event.preventDefault();

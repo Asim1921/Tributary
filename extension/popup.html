@@ -10,7 +10,7 @@
   ul { margin: 0; padding: 0; list-style: none; }
   li + li { margin-top: 4px; }
   button {
-    width: 100%; padding: 6px 8px; overflow: hidden; font: inherit; text-align: left;
+    width: 100%; padding: 6px 8px; overflow: hidden; font: inherit; text-align: start;
     text-overflow: ellipsis; white-space: nowrap; cursor: pointer;
     background: transparent; border: 1px solid #8884; border-radius: 5px; color: inherit;
   }
@@ -21,11 +21,11 @@
 </style>
 </head>
 <body>
-<button type="button" id="save-all">Save all images and videos on this page</button>
-<p id="unreadable" hidden>Tributary can't read this page. If it was open before the extension was loaded or updated, reload it and try again. The browser's own pages can't be read.</p>
-<h1>Video on this page</h1>
+<button type="button" id="save-all" data-say="popupSaveAll">Save all images and videos on this page</button>
+<p id="unreadable" hidden data-say="popupUnreadable">Tributary can't read this page. If it was open before the extension was loaded or updated, reload it and try again. The browser's own pages can't be read.</p>
+<h1 data-say="popupVideoHeading">Video on this page</h1>
 <ul id="items"></ul>
-<p id="nothing" hidden>No video found yet. Start playing it, then look here again.</p>
+<p id="nothing" hidden data-say="popupNothing">No video found yet. Start playing it, then look here again.</p>
 <script type="module" src="popup.js"></script>
 </body>
 </html>

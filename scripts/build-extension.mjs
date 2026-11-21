@@ -19,7 +19,7 @@ const SOURCE = join(ROOT, 'extension');
 /** Fixed, so the app can name it as the only add-on allowed to talk to it. */
 export const FIREFOX_ID = '{8e47a714-dbc1-470d-a416-9dddedafd3a6}';
 
-const FILES = ['background.js', 'content.js', 'popup.html', 'popup.js', 'rules.js', 'icons'];
+const FILES = ['background.js', 'content.js', 'popup.html', 'popup.js', 'rules.js', 'icons', '_locales'];
 
 /** The manifest for each target, from the one hand-loaded copies use. */
 export function manifestFor(target, manifest) {

@@ -86,7 +86,9 @@ pub async fn get_fresh_link(
         .get(DownloadId(id))
         .map_err(|error| error.to_string())?;
     if matches!(download.state, State::Running | State::Completed) {
-        return Err("Only a download that has stopped needs a fresh link.".to_owned());
+        return Err(text!(
+            "Only a download that has stopped needs a fresh link."
+        ));
     }
     let name = download
         .file_name

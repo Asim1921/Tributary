@@ -114,7 +114,7 @@ pub fn finish(part: &Path, folder: &Path, name: &str) -> io::Result<PathBuf> {
     }
     Err(io::Error::new(
         io::ErrorKind::AlreadyExists,
-        "too many files with this name already exist",
+        en!("too many files with this name already exist"),
     ))
 }
 

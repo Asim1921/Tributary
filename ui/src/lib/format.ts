@@ -1,6 +1,7 @@
+import { languageCode, mark, sayError, t } from './locale.svelte';
 import type { Download, DownloadRow, DownloadState } from './types';
 
-const UNITS = ['B', 'KB', 'MB', 'GB', 'TB'];
+const UNITS = [mark('{size} B'), mark('{size} KB'), mark('{size} MB'), mark('{size} GB'), mark('{size} TB')];
 
 /** Summarises a quality: its likely size and its length. */
 export function describeVideoChoice(choice: {
@@ -11,7 +12,7 @@ export function describeVideoChoice(choice: {
   const length = `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
   return choice.estimatedBytes === null
     ? length
-    : `about ${formatBytes(choice.estimatedBytes)}, ${length}`;
+    : t('about {size}, {length}', { size: formatBytes(choice.estimatedBytes), length });
 }
 
 /** Whether an address is a stream, so it needs the video dialog. */
@@ -21,7 +22,7 @@ export function isStreamAddress(url: string): boolean {
 }
 
 export function formatBytes(bytes: number | null): string {
-  if (bytes === null) return 'Unknown';
+  if (bytes === null) return t('Unknown');
 
   let value = bytes;
   let unit = 0;
@@ -31,11 +32,11 @@ export function formatBytes(bytes: number | null): string {
   }
 
   const digits = unit === 0 || value >= 100 ? 0 : 1;
-  return `${value.toFixed(digits)} ${UNITS[unit]}`;
+  return t(UNITS[unit]!, { size: value.toFixed(digits) });
 }
 
 export function formatSpeed(bytesPerSecond: number): string {
-  return `${formatBytes(bytesPerSecond)}/s`;
+  return t('{size}/s', { size: formatBytes(bytesPerSecond) });
 }
 
 export function formatDuration(totalSeconds: number): string {
@@ -44,9 +45,9 @@ export function formatDuration(totalSeconds: number): string {
   const minutes = Math.floor((seconds % 3600) / 60);
   const rest = seconds % 60;
 
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  if (minutes > 0) return `${minutes}m ${rest}s`;
-  return `${rest}s`;
+  if (hours > 0) return t('{hours}h {minutes}m', { hours: String(hours), minutes: String(minutes) });
+  if (minutes > 0) return t('{minutes}m {seconds}s', { minutes: String(minutes), seconds: String(rest) });
+  return t('{seconds}s', { seconds: String(rest) });
 }
 
 /** Seconds until a running download finishes, or null if it can't be estimated. */
@@ -68,36 +69,37 @@ export function percent(download: Pick<Download, 'size' | 'downloaded' | 'state'
 }
 
 const STATE_LABELS: Record<DownloadState, string> = {
-  running: 'Downloading',
-  paused: 'Stopped',
-  completed: 'Complete',
-  failed: 'Failed',
+  running: mark('Downloading'),
+  paused: mark('Stopped'),
+  completed: mark('Complete'),
+  failed: mark('Failed'),
 };
 
 export function statusText(download: Download): string {
-  if (download.awaitingLink && download.state !== 'running') return 'Waiting for a fresh link…';
-  if (download.state === 'failed' && download.linkExpired) return 'Link expired';
+  if (download.awaitingLink && download.state !== 'running') return t('Waiting for a fresh link…');
+  if (download.state === 'failed' && download.linkExpired) return t('Link expired');
   // A video saved as two parts is done once its sound is joined in.
-  if (download.state === 'completed' && download.addingSound) return 'Adding sound…';
-  if (download.state === 'completed' && download.finishing) return download.finishing;
-  if (download.state === 'completed' && download.checking) return 'Checking…';
+  if (download.state === 'completed' && download.addingSound) return t('Adding sound…');
+  if (download.state === 'completed' && download.finishing) return sayError(download.finishing);
+  if (download.state === 'completed' && download.checking) return t('Checking…');
   if (download.state === 'completed' && download.checksumMatches === false) {
-    return "Checksum doesn't match";
+    return t("Checksum doesn't match");
   }
-  if (download.state === 'completed' && download.checksumMatches === true) return 'Complete, verified';
+  if (download.state === 'completed' && download.checksumMatches === true) return t('Complete, verified');
   const value = percent(download);
-  if (download.state === 'completed' || value === null) return STATE_LABELS[download.state];
-  return `${STATE_LABELS[download.state]} ${value.toFixed(1)}%`;
+  const label = t(STATE_LABELS[download.state]);
+  if (download.state === 'completed' || value === null) return label;
+  return t('{state} {percent}%', { state: label, percent: value.toFixed(1) });
 }
 
 /** How a download's checksum check went, for its properties. */
 export function checksumText(download: Download): string {
-  if (!download.checksum) return 'None given';
+  if (!download.checksum) return t('None given');
   const kind = download.checksum.algorithm;
-  if (download.checking) return `${kind}: checking…`;
-  if (download.checksumMatches === true) return `${kind}: matches`;
-  if (download.checksumMatches === false) return `${kind}: doesn't match`;
-  return `${kind}: checked when the download finishes`;
+  if (download.checking) return t('{kind}: checking…', { kind });
+  if (download.checksumMatches === true) return t('{kind}: matches', { kind });
+  if (download.checksumMatches === false) return t("{kind}: doesn't match", { kind });
+  return t('{kind}: checked when the download finishes', { kind });
 }
 
 /** The best available name, for a download whose server hasn't been asked yet too. */
@@ -114,9 +116,10 @@ export function displayName(download: Pick<Download, 'fileName' | 'url'>): strin
 
 export function formatDate(secondsSince1970: number | null): string {
   if (!secondsSince1970) return '';
-  return new Date(secondsSince1970 * 1000).toLocaleString(undefined, {
+  return new Date(secondsSince1970 * 1000).toLocaleString(languageCode(), {
     dateStyle: 'medium',
     timeStyle: 'short',
+    numberingSystem: 'latn',
   });
 }
 

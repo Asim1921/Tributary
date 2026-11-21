@@ -1468,7 +1468,7 @@ try {
     await carryOn.click();
     await finished();
 
-    const pages = (text) => Number(/(\d+) pages read/.exec(text)[1]);
+    const pages = (text) => Number(/(\d+) pages? read/.exec(text)[1]);
     const whole = await page.getByRole('status').first().textContent();
     assert.ok(pages(whole) > pages(partly), `${partly} then ${whole}`);
     await closeGrabber();
@@ -2159,6 +2159,68 @@ try {
     assert.ok(read > 20, `only ${read} files could be read`);
     assert.ok(files.some((file) => file.endsWith('settings.json')));
     assert.ok(files.some((file) => file.endsWith('downloads.db')));
+  });
+
+  await step('the window speaks each language, right to left for Urdu and Arabic', async () => {
+    // Found by what they do, since their names change with the language.
+    const chooseLanguage = async (code) => {
+      await page.locator('[data-action="options"]').click();
+      const options = page.getByRole('dialog');
+      await options.getByRole('tab').first().click();
+      await options.locator('select:has(option[value="ur"])').selectOption(code);
+      await options.locator('.footer button.primary').click();
+      await options.waitFor({ state: 'hidden' });
+      await sleep(300);
+    };
+    // The main screen's own words: names the user gave queues and files aren't counted.
+    const mainScreenWords = () =>
+      page.evaluate(() =>
+        [
+          ...[...document.querySelectorAll('.toolbar button')].map((button) => button.title),
+          ...['.toolbar', 'nav h2', 'thead', 'footer'].flatMap((selector) =>
+            [...document.querySelectorAll(selector)].map((element) => element.innerText),
+          ),
+        ].join('\n'),
+      );
+    // Names, and keys on the keyboard, are the same in every language.
+    const KEEP = new Set(['Tributary', 'Windows']);
+
+    for (const [code, dir] of [['ur', 'rtl'], ['ar', 'rtl'], ['hi', 'ltr'], ['es', 'ltr']]) {
+      await chooseLanguage(code);
+      assert.equal(await page.evaluate(() => document.documentElement.lang), code);
+      assert.equal(await page.evaluate(() => document.documentElement.dir), dir);
+      if (code !== 'es') {
+        const english = ((await mainScreenWords()).match(/[A-Za-z]{4,}/g) ?? []).filter((word) => !KEEP.has(word));
+        assert.deepEqual(english, [], `${code}: English left on the main screen`);
+      }
+      await shot(page, `60-${code}-main`);
+      for (const action of ['add', 'scheduler', 'grabber', 'options']) {
+        await page.locator(`[data-action="${action}"]`).click();
+        await page.getByRole('dialog').waitFor();
+        await shot(page, `61-${code}-${action}`);
+        await page.keyboard.press('Escape');
+        await page.getByRole('dialog').waitFor({ state: 'hidden' });
+      }
+    }
+
+    // What the app's Rust side says, here an engine error, comes out in the language too.
+    await chooseLanguage('ur');
+    await page.locator('[data-action="add"]').click();
+    await page.getByRole('dialog').locator('input').first().fill(`${BASE}/static/missing.torrent`);
+    await page.getByRole('dialog').locator('button[type="submit"]').click();
+    const refused = page.getByRole('alert');
+    await refused.waitFor({ timeout: 30_000 });
+    const said = await refused.innerText();
+    assert.match(said, /سرور نے جواب دیا: \u2068?404 Not Found/, said);
+    await shot(page, '62-ur-error');
+    await page.keyboard.press('Escape');
+    await page.getByRole('dialog').waitFor({ state: 'hidden' });
+
+    // Back to Windows' own language, English on this computer.
+    await chooseLanguage('');
+    assert.equal(await page.evaluate(() => document.documentElement.lang), 'en');
+    assert.equal(await page.evaluate(() => document.documentElement.dir), 'ltr');
+    await page.getByRole('button', { name: 'Options' }).waitFor();
   });
 
   await step('no script error happened anywhere in the run', async () => {

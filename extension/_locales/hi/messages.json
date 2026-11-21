@@ -1,0 +1,84 @@
+{
+  "extName": {
+    "message": "Tributary"
+  },
+  "extDescription": {
+    "message": "डाउनलोड को Tributary डाउनलोड मैनेजर को भेजता है।"
+  },
+  "commandSaveMedia": {
+    "message": "इस पेज का हर चित्र और वीडियो Tributary से सहेजें"
+  },
+  "menuLink": {
+    "message": "Tributary से डाउनलोड करें"
+  },
+  "menuSelection": {
+    "message": "चुने हुए लिंक Tributary से डाउनलोड करें"
+  },
+  "menuAllLinks": {
+    "message": "सभी लिंक Tributary से डाउनलोड करें"
+  },
+  "menuPageMedia": {
+    "message": "इस पेज के सभी चित्र और वीडियो Tributary से डाउनलोड करें"
+  },
+  "panelSave": {
+    "message": "सहेजें: $LABEL$",
+    "placeholders": {
+      "label": {
+        "content": "$1"
+      }
+    }
+  },
+  "panelDownloadVideo": {
+    "message": "यह वीडियो डाउनलोड करें"
+  },
+  "panelHide": {
+    "message": "छिपाएँ"
+  },
+  "collectWaiting": {
+    "message": "इस टैब के फिर से सामने आने की प्रतीक्षा…"
+  },
+  "collectLooking": {
+    "message": "Tributary चित्र और वीडियो खोज रहा है…"
+  },
+  "collectStop": {
+    "message": "यहीं रोकें"
+  },
+  "collectCancel": {
+    "message": "रद्द करें"
+  },
+  "collectFound": {
+    "message": "अब तक मिले: चित्र $PICTURES$, वीडियो $VIDEOS$…",
+    "placeholders": {
+      "pictures": {
+        "content": "$1"
+      },
+      "videos": {
+        "content": "$2"
+      }
+    }
+  },
+  "collectNothing": {
+    "message": "Tributary को इस पेज पर कोई चित्र या वीडियो नहीं मिला।"
+  },
+  "collectClose": {
+    "message": "बंद करें"
+  },
+  "popupSaveAll": {
+    "message": "इस पेज के सभी चित्र और वीडियो सहेजें"
+  },
+  "popupUnreadable": {
+    "message": "Tributary यह पेज नहीं पढ़ सकता। अगर यह एक्सटेंशन लोड या अपडेट होने से पहले खुला था, तो इसे फिर से लोड करके दोबारा कोशिश करें। ब्राउज़र के अपने पेज नहीं पढ़े जा सकते।"
+  },
+  "popupVideoHeading": {
+    "message": "इस पेज पर वीडियो"
+  },
+  "popupNothing": {
+    "message": "अभी कोई वीडियो नहीं मिला। इसे चलाना शुरू करें, फिर यहाँ दोबारा देखें।"
+  },
+  "labelVideoStream": {
+    "message": "वीडियो स्ट्रीम"
+  },
+  "labelVideo": {
+    "message": "वीडियो"
+  }
+}

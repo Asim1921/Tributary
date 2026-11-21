@@ -1,3 +1,5 @@
+import { mark } from './locale.svelte';
+
 /** Inner SVG for each icon, drawn on a 24 by 24 grid with a stroke. */
 export const ICONS = {
   add: '<path d="M12 5v14M5 12h14"/>',
@@ -37,17 +39,17 @@ export interface ToolbarButton {
 }
 
 export const TOOLBAR_BUTTONS: ToolbarButton[] = [
-  { id: 'add', label: 'Add URL', icon: 'add' },
-  { id: 'resume', label: 'Resume', icon: 'resume' },
-  { id: 'stop', label: 'Stop', icon: 'stop' },
-  { id: 'stopAll', label: 'Stop all', icon: 'stopAll' },
-  { id: 'delete', label: 'Delete', icon: 'delete' },
-  { id: 'deleteCompleted', label: 'Clear finished', icon: 'deleteCompleted' },
-  { id: 'scheduler', label: 'Scheduler', icon: 'scheduler' },
-  { id: 'startQueue', label: 'Start queue', icon: 'startQueue' },
-  { id: 'stopQueue', label: 'Stop queue', icon: 'stopQueue' },
-  { id: 'grabber', label: 'Grabber', icon: 'grabber' },
-  { id: 'options', label: 'Options', icon: 'options' },
+  { id: 'add', label: mark('Add URL'), icon: 'add' },
+  { id: 'resume', label: mark('Resume'), icon: 'resume' },
+  { id: 'stop', label: mark('Stop'), icon: 'stop' },
+  { id: 'stopAll', label: mark('Stop all'), icon: 'stopAll' },
+  { id: 'delete', label: mark('Delete'), icon: 'delete' },
+  { id: 'deleteCompleted', label: mark('Clear finished'), icon: 'deleteCompleted' },
+  { id: 'scheduler', label: mark('Scheduler'), icon: 'scheduler' },
+  { id: 'startQueue', label: mark('Start queue'), icon: 'startQueue' },
+  { id: 'stopQueue', label: mark('Stop queue'), icon: 'stopQueue' },
+  { id: 'grabber', label: mark('Grabber'), icon: 'grabber' },
+  { id: 'options', label: mark('Options'), icon: 'options' },
 ];
 
 const BY_ID = new Map(TOOLBAR_BUTTONS.map((button) => [button.id as string, button]));

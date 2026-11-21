@@ -1,0 +1,84 @@
+{
+  "extName": {
+    "message": "Tributary"
+  },
+  "extDescription": {
+    "message": "Envía las descargas al gestor de descargas Tributary."
+  },
+  "commandSaveMedia": {
+    "message": "Guardar todas las imágenes y vídeos de esta página con Tributary"
+  },
+  "menuLink": {
+    "message": "Descargar con Tributary"
+  },
+  "menuSelection": {
+    "message": "Descargar los enlaces seleccionados con Tributary"
+  },
+  "menuAllLinks": {
+    "message": "Descargar todos los enlaces con Tributary"
+  },
+  "menuPageMedia": {
+    "message": "Descargar todas las imágenes y vídeos de esta página con Tributary"
+  },
+  "panelSave": {
+    "message": "Guardar: $LABEL$",
+    "placeholders": {
+      "label": {
+        "content": "$1"
+      }
+    }
+  },
+  "panelDownloadVideo": {
+    "message": "Descargar este vídeo"
+  },
+  "panelHide": {
+    "message": "Ocultar"
+  },
+  "collectWaiting": {
+    "message": "Esperando a que esta pestaña vuelva a estar a la vista…"
+  },
+  "collectLooking": {
+    "message": "Tributary está buscando imágenes y vídeos…"
+  },
+  "collectStop": {
+    "message": "Parar aquí"
+  },
+  "collectCancel": {
+    "message": "Cancelar"
+  },
+  "collectFound": {
+    "message": "Encontradas hasta ahora: $PICTURES$ imágenes y $VIDEOS$ vídeos…",
+    "placeholders": {
+      "pictures": {
+        "content": "$1"
+      },
+      "videos": {
+        "content": "$2"
+      }
+    }
+  },
+  "collectNothing": {
+    "message": "Tributary no encontró imágenes ni vídeos en esta página."
+  },
+  "collectClose": {
+    "message": "Cerrar"
+  },
+  "popupSaveAll": {
+    "message": "Guardar todas las imágenes y vídeos de esta página"
+  },
+  "popupUnreadable": {
+    "message": "Tributary no puede leer esta página. Si ya estaba abierta antes de cargar o actualizar la extensión, recárgala e inténtalo de nuevo. Las páginas propias del navegador no se pueden leer."
+  },
+  "popupVideoHeading": {
+    "message": "Vídeo en esta página"
+  },
+  "popupNothing": {
+    "message": "Aún no se ha encontrado ningún vídeo. Empieza a reproducirlo y vuelve a mirar aquí."
+  },
+  "labelVideoStream": {
+    "message": "Emisión de vídeo"
+  },
+  "labelVideo": {
+    "message": "Vídeo"
+  }
+}

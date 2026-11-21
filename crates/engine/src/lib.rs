@@ -4,6 +4,21 @@
 //! only after the matching data has been flushed to disk, so after a crash the
 //! database never claims bytes the file doesn't have.
 
+/// English for the user, as `format!`, marked so the app's check finds its translations
+/// (`ui/src/locales`). The window says it in the user's language.
+macro_rules! text {
+    ($($arguments:tt)*) => {
+        format!($($arguments)*)
+    };
+}
+
+/// English for the user as a plain `&'static str`, marked like `text!`.
+macro_rules! en {
+    ($text:literal) => {
+        $text
+    };
+}
+
 mod auth;
 pub mod checksum;
 mod disk;

@@ -1,0 +1,84 @@
+{
+  "extName": {
+    "message": "Tributary"
+  },
+  "extDescription": {
+    "message": "Sends downloads to the Tributary download manager."
+  },
+  "commandSaveMedia": {
+    "message": "Save every image and video on this page with Tributary"
+  },
+  "menuLink": {
+    "message": "Download with Tributary"
+  },
+  "menuSelection": {
+    "message": "Download selected links with Tributary"
+  },
+  "menuAllLinks": {
+    "message": "Download all links with Tributary"
+  },
+  "menuPageMedia": {
+    "message": "Download all images and videos on this page with Tributary"
+  },
+  "panelSave": {
+    "message": "Save: $LABEL$",
+    "placeholders": {
+      "label": {
+        "content": "$1"
+      }
+    }
+  },
+  "panelDownloadVideo": {
+    "message": "Download this video"
+  },
+  "panelHide": {
+    "message": "Hide"
+  },
+  "collectWaiting": {
+    "message": "Waiting for this tab to be in view again…"
+  },
+  "collectLooking": {
+    "message": "Tributary is looking for pictures and videos…"
+  },
+  "collectStop": {
+    "message": "Stop here"
+  },
+  "collectCancel": {
+    "message": "Cancel"
+  },
+  "collectFound": {
+    "message": "Found $PICTURES$ pictures and $VIDEOS$ videos so far…",
+    "placeholders": {
+      "pictures": {
+        "content": "$1"
+      },
+      "videos": {
+        "content": "$2"
+      }
+    }
+  },
+  "collectNothing": {
+    "message": "Tributary found no pictures or videos on this page."
+  },
+  "collectClose": {
+    "message": "Close"
+  },
+  "popupSaveAll": {
+    "message": "Save all images and videos on this page"
+  },
+  "popupUnreadable": {
+    "message": "Tributary can't read this page. If it was open before the extension was loaded or updated, reload it and try again. The browser's own pages can't be read."
+  },
+  "popupVideoHeading": {
+    "message": "Video on this page"
+  },
+  "popupNothing": {
+    "message": "No video found yet. Start playing it, then look here again."
+  },
+  "labelVideoStream": {
+    "message": "Video stream"
+  },
+  "labelVideo": {
+    "message": "Video"
+  }
+}

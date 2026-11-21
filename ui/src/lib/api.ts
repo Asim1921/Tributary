@@ -2,6 +2,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { open, save } from '@tauri-apps/plugin-dialog';
 
+import { t } from './locale.svelte';
+
 import type {
   Checksum,
   AddRequest,
@@ -61,6 +63,10 @@ export const getFreshLink = (id: number) => invoke<string | null>('get_fresh_lin
 export const stopWaitingForLink = (id: number) => invoke<void>('stop_waiting_for_link', { id });
 export const setMirrors = (id: number, mirrors: string[]) => invoke<void>('set_mirrors', { id, mirrors });
 export const phoneStatus = () => invoke<PhoneStatus>('phone_status');
+/** The language the app speaks, or would speak if `chosen` were picked ('' for Windows'). */
+export const appLanguage = (chosen?: string) => invoke<string>('app_language', { chosen });
+export const onLanguageChanged = (handler: (code: string) => void): Promise<UnlistenFn> =>
+  listen<string>('language-changed', (event) => handler(event.payload));
 export const setPhone = (on: boolean) => invoke<PhoneStatus>('set_phone', { on });
 export const newPhoneCode = () => invoke<PhoneStatus>('new_phone_code');
 export const inspectTorrent = (url: string) => invoke<TorrentPreview>('inspect_torrent', { url });
@@ -169,7 +175,7 @@ export const onShutdownPending = (handler: (seconds: number) => void): Promise<U
 export async function pickSavePath(): Promise<string | null> {
   return save({
     defaultPath: 'tributary-export.json',
-    filters: [{ name: 'Tributary export', extensions: ['json'] }],
+    filters: [{ name: t('Tributary export'), extensions: ['json'] }],
   });
 }
 

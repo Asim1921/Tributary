@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { mark, sayError, t } from './lib/locale.svelte';
   import { onMount } from 'svelte';
 
   import AddUrlDialog from './components/AddUrlDialog.svelte';
@@ -95,9 +96,9 @@
   const columns = $derived(resolveColumns(settings?.columns ?? []));
   const toolbarButtons = $derived(resolveToolbar(settings?.toolbar ?? []));
   const sidebarGroups = $derived([
-    { title: 'Status', entries: statusEntries(downloads.rows) },
-    { title: 'Categories', entries: categoryEntries(downloads.rows, settings?.categories ?? []) },
-    { title: 'Queues', entries: queueEntries(downloads.rows, downloads.queues) },
+    { title: mark('Status'), entries: statusEntries(downloads.rows) },
+    { title: mark('Categories'), entries: categoryEntries(downloads.rows, settings?.categories ?? []) },
+    { title: mark('Queues'), entries: queueEntries(downloads.rows, downloads.queues) },
   ]);
   /** The queue the toolbar acts on: the one being viewed, otherwise the main queue. */
   const targetQueue = $derived(
@@ -235,7 +236,7 @@
   }
 
   function showError(error: unknown) {
-    dialog = { kind: 'error', message: String(error) };
+    dialog = { kind: 'error', message: sayError(error) };
   }
 
   const closeDialog = () => {
@@ -264,7 +265,13 @@
       const path = await api.pickSavePath();
       if (!path) return;
       const count = await api.exportData(path);
-      dialog = { kind: 'info', message: `Exported your settings and ${count} downloads.` };
+      dialog = {
+        kind: 'info',
+        message: t(
+          '{count, plural, one {Exported your settings and # download.} other {Exported your settings and # downloads.}}',
+          { count },
+        ),
+      };
     } catch (error) {
       showError(error);
     }
@@ -272,12 +279,18 @@
 
   async function importData() {
     try {
-      const path = await api.pickFile('Tributary export', ['json']);
+      const path = await api.pickFile(t('Tributary export'), ['json']);
       if (!path) return;
       const added = await api.importData(path);
       settings = await api.getSettings();
       await downloads.refresh();
-      dialog = { kind: 'info', message: `Imported your settings and added ${added} downloads.` };
+      dialog = {
+        kind: 'info',
+        message: t(
+          '{count, plural, one {Imported your settings and added # download.} other {Imported your settings and added # downloads.}}',
+          { count: added },
+        ),
+      };
     } catch (error) {
       showError(error);
     }
@@ -436,24 +449,24 @@
 
     return [
       {
-        label: 'Open file',
+        label: t('Open file'),
         disabled: !finished,
         run: () => single && api.openFile(single.id).catch(showError),
       },
       {
-        label: 'Open folder',
+        label: t('Open folder'),
         disabled: !single,
         run: () => single && api.showInFolder(single.id).catch(showError),
       },
       {
-        label: 'Resume',
+        label: t('Resume'),
         separatorBefore: true,
         disabled: !selectedRows.some(canResume),
         run: () => runAction('resume'),
       },
-      { label: 'Stop', disabled: !selectedRows.some(canStop), run: () => runAction('stop') },
+      { label: t('Stop'), disabled: !selectedRows.some(canStop), run: () => runAction('stop') },
       {
-        label: 'Show progress',
+        label: t('Show progress'),
         disabled: !single || finished,
         run: () => {
           if (single) dialog = { kind: 'progress', id: single.id };
@@ -461,7 +474,7 @@
       },
       ...downloads.queues.map(
         (queue, index): MenuItem => ({
-          label: `Add to ${queue.name}`,
+          label: t('Add to {queue}', { queue: t(queue.name) }),
           separatorBefore: index === 0,
           disabled: torrent || selectedRows.every((row) => row.queueId === queue.id),
           run: () =>
@@ -469,18 +482,18 @@
         }),
       ),
       {
-        label: 'Remove from queue',
+        label: t('Remove from queue'),
         disabled: selectedRows.every((row) => row.queueId === null),
         run: () => void forEachRow(selectedRows, (id) => api.setDownloadQueue(id, null)),
       },
       {
-        label: 'Copy address',
+        label: t('Copy address'),
         separatorBefore: true,
         disabled: !single,
         run: () => single && navigator.clipboard.writeText(single.url).catch(showError),
       },
       {
-        label: 'Enter login…',
+        label: t('Enter login…'),
         disabled: torrent || single?.state !== 'failed',
         run: () => {
           if (single) dialog = { kind: 'login', id: single.id };
@@ -488,7 +501,7 @@
       },
       {
         // Opens the page the file came from; the browser's next file of that name carries on.
-        label: single?.awaitingLink ? 'Stop waiting for a fresh link' : 'Get a fresh link',
+        label: single?.awaitingLink ? t('Stop waiting for a fresh link') : t('Get a fresh link'),
         disabled: torrent || !single || single.state === 'running' || single.state === 'completed',
         run: () => {
           if (!single) return;
@@ -503,9 +516,10 @@
               if (!page) {
                 dialog = {
                   kind: 'info',
-                  title: "Find the file's page",
-                  message:
+                  title: t("Find the file's page"),
+                  message: t(
                     "This download doesn't say which page it came from. Find the file's page in your browser and download it again: Tributary will carry on from where it stopped.",
+                  ),
                 };
               }
             })
@@ -513,13 +527,13 @@
         },
       },
       {
-        label: 'Properties',
+        label: t('Properties'),
         disabled: !single || torrent,
         run: () => {
           if (single) dialog = { kind: 'properties', id: single.id };
         },
       },
-      { label: 'Delete', separatorBefore: true, run: () => runAction('delete') },
+      { label: t('Delete'), separatorBefore: true, run: () => runAction('delete') },
     ];
   });
 
@@ -589,9 +603,9 @@
     <main>
       {#if downloads.rows.length === 0}
         <div class="empty">
-          <h1>No downloads yet</h1>
-          <p>Add a web address to start your first download.</p>
-          <button type="button" class="primary" onclick={() => runAction('add')}>Add URL</button>
+          <h1>{t('No downloads yet')}</h1>
+          <p>{t('Add a web address to start your first download.')}</p>
+          <button type="button" class="primary" onclick={() => runAction('add')}>{t('Add URL')}</button>
         </div>
       {:else}
         <DownloadList
@@ -630,7 +644,7 @@
   </div>
 
   <footer>
-    <span>{running === 0 ? 'Idle' : `${running} downloading`}</span>
+    <span>{running === 0 ? t('Idle') : t('{count} downloading', { count: running })}</span>
     {#if running > 0}<span>{formatSpeed(downloads.totalSpeed)}</span>{/if}
   </footer>
 </div>
@@ -794,8 +808,13 @@
     onclose={closeDialog}
   />
 {:else if dialog?.kind === 'shutdown'}
-  <Modal title="Shutting down" onclose={closeDialog}>
-    <p>A queue finished. This computer will shut down in {dialog.seconds} seconds.</p>
+  <Modal title={t('Shutting down')} onclose={closeDialog}>
+    <p>
+      {t(
+        '{count, plural, one {A queue finished. This computer will shut down in # second.} other {A queue finished. This computer will shut down in # seconds.}}',
+        { count: dialog.seconds },
+      )}
+    </p>
     {#snippet footer()}
       <button
         type="button"
@@ -805,7 +824,7 @@
           api.cancelShutdown().catch(showError);
         }}
       >
-        Cancel shutdown
+        {t('Cancel shutdown')}
       </button>
     {/snippet}
   </Modal>
@@ -823,25 +842,25 @@
     />
   {/if}
 {:else if dialog?.kind === 'scan'}
-  <Modal title="Virus scan warning" onclose={closeDialog}>
-    <p class="error-text">{dialog.problem}</p>
+  <Modal title={t('Virus scan warning')} onclose={closeDialog}>
+    <p class="error-text">{sayError(dialog.problem)}</p>
     <p class="note selectable">{dialog.file}</p>
     {#snippet footer()}
-      <button type="button" class="primary" onclick={closeDialog}>Close</button>
+      <button type="button" class="primary" onclick={closeDialog}>{t('Close')}</button>
     {/snippet}
   </Modal>
 {:else if dialog?.kind === 'info'}
-  <Modal title={dialog.title ?? 'Done'} onclose={closeDialog}>
+  <Modal title={dialog.title ?? t('Done')} onclose={closeDialog}>
     <p>{dialog.message}</p>
     {#snippet footer()}
-      <button type="button" class="primary" onclick={closeDialog}>Close</button>
+      <button type="button" class="primary" onclick={closeDialog}>{t('Close')}</button>
     {/snippet}
   </Modal>
 {:else if dialog?.kind === 'error'}
-  <Modal title="Something went wrong" onclose={closeDialog}>
+  <Modal title={t('Something went wrong')} onclose={closeDialog}>
     <p class="error-text">{dialog.message}</p>
     {#snippet footer()}
-      <button type="button" class="primary" onclick={closeDialog}>Close</button>
+      <button type="button" class="primary" onclick={closeDialog}>{t('Close')}</button>
     {/snippet}
   </Modal>
 {/if}

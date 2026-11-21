@@ -86,13 +86,13 @@ impl FinishPlan {
     /// What the list says while this is done.
     pub fn label(&self) -> &'static str {
         if self.mp3 {
-            "Converting to MP3…"
+            en!("Converting to MP3…")
         } else if self.section.is_some() {
-            "Cutting the part chosen…"
+            en!("Cutting the part chosen…")
         } else if !self.subtitles.is_empty() {
-            "Adding subtitles…"
+            en!("Adding subtitles…")
         } else {
-            "Adding the cover…"
+            en!("Adding the cover…")
         }
     }
 
@@ -388,7 +388,7 @@ pub fn put_extras_beside(
             return Ok(());
         }
         let to = beside(video, &name);
-        move_file(from, &to).map_err(|error| format!("couldn't save {name}: {error}"))?;
+        move_file(from, &to).map_err(|error| text!("couldn't save {name}: {error}"))?;
         placed.push(to);
         Ok(())
     };
@@ -432,7 +432,7 @@ pub fn finish_files(
     if sound.is_none() && !plan.mp3 && plan.section.is_none() && !anything_inside {
         put_extras_beside(video, plan, false)?;
         let size = fs::metadata(video)
-            .map_err(|error| format!("the video can't be read: {error}"))?
+            .map_err(|error| text!("the video can't be read: {error}"))?
             .len();
         return Ok(Finished {
             path: video.to_owned(),
@@ -450,32 +450,32 @@ pub fn finish_files(
         .stderr(Stdio::null())
         .creation_flags(CREATE_NO_WINDOW)
         .status()
-        .map_err(|error| format!("ffmpeg couldn't start: {error}"))?;
+        .map_err(|error| text!("ffmpeg couldn't start: {error}"))?;
 
     // A program that says it worked but made nothing failed all the same.
     if !status.success() || !working.is_file() {
         let _ = fs::remove_file(&working);
         return Err(if sound.is_some() {
-            "ffmpeg couldn't join the picture and sound, so they stay as two files".to_owned()
+            text!("ffmpeg couldn't join the picture and sound, so they stay as two files")
         } else if plan.mp3 {
-            format!(
-                "ffmpeg couldn't make an MP3, so the sound stays as {}",
-                extension_of(video).to_ascii_uppercase()
+            text!(
+                "ffmpeg couldn't make an MP3, so the sound stays as {kind}",
+                kind = extension_of(video).to_ascii_uppercase()
             )
         } else {
-            "ffmpeg couldn't put the subtitles and cover in the video".to_owned()
+            text!("ffmpeg couldn't put the subtitles and cover in the video")
         });
     }
 
     let size = fs::metadata(&working)
-        .map_err(|error| format!("the finished file can't be read: {error}"))?
+        .map_err(|error| text!("the finished file can't be read: {error}"))?
         .len();
     // ffmpeg wrote a new file, which needs the internet tag the downloaded one had.
     engine::copy_mark(video, &working);
-    fs::rename(&working, &output).map_err(|error| format!("could not save the file: {error}"))?;
+    fs::rename(&working, &output).map_err(|error| text!("could not save the file: {error}"))?;
     if output != video {
         remove_patiently(video, DELETE_ATTEMPTS, DELETE_WAIT).map_err(|error| {
-            format!("the MP3 is saved, but the original couldn't be deleted: {error}")
+            text!("the MP3 is saved, but the original couldn't be deleted: {error}")
         })?;
     }
     put_extras_beside(&output, plan, true)?;

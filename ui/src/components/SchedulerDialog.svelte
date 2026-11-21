@@ -1,6 +1,7 @@
 <script lang="ts">
+  import { languageCode, mark, t } from '../lib/locale.svelte';
   import { displayName, statusText } from '../lib/format';
-  import { DAY_NAMES, dayEnabled, minutesToTime, timeToMinutes, toggleDay } from '../lib/time';
+  import { DAY_NAMES, dayEnabled, dayName, minutesToTime, timeToMinutes, toggleDay } from '../lib/time';
   import { moveItem } from '../lib/toolbar';
   import type { DownloadRow, Queue } from '../lib/types';
   import Modal from './Modal.svelte';
@@ -22,14 +23,14 @@
 
   type Tab = 'schedule' | 'files' | 'end';
   const TABS: { id: Tab; label: string }[] = [
-    { id: 'schedule', label: 'Schedule' },
-    { id: 'files', label: 'Files' },
-    { id: 'end', label: 'When it ends' },
+    { id: 'schedule', label: mark('Schedule') },
+    { id: 'files', label: mark('Files') },
+    { id: 'end', label: mark('When it ends') },
   ];
 
   const NEW_QUEUE: Queue = {
     id: 0,
-    name: 'New queue',
+    name: t('New queue'),
     sync: false,
     concurrency: 2,
     retries: 5,
@@ -88,7 +89,7 @@
   }
 </script>
 
-<Modal title="Scheduler" wide {onclose}>
+<Modal title={t('Scheduler')} wide {onclose}>
   <div class="layout">
     <div class="queues">
       {#each queues as queue (queue.id)}
@@ -98,14 +99,14 @@
           class:active={queue.id === selectedId}
           onclick={() => load(queue)}
         >
-          {queue.name}
-          {#if queue.active}<span class="running">running</span>{/if}
+          {t(queue.name)}
+          {#if queue.active}<span class="running">{t('running')}</span>{/if}
         </button>
       {/each}
       {#if selectedId === 0}
         <button type="button" class="queue active">{draft.name}</button>
       {/if}
-      <button type="button" onclick={addQueue}>New queue</button>
+      <button type="button" onclick={addQueue}>{t('New queue')}</button>
     </div>
 
     <div class="details">
@@ -118,29 +119,29 @@
             class:active={tab === item.id}
             onclick={() => (tab = item.id)}
           >
-            {item.label}
+            {t(item.label)}
           </button>
         {/each}
       </div>
 
       {#if tab === 'schedule'}
         <label class="field">
-          Queue name
+          {t('Queue name')}
           <input type="text" bind:value={draft.name} />
         </label>
 
         <div class="pair">
           <label class="field">
-            Start at
+            {t('Start at')}
             <input type="time" bind:value={startTime} />
           </label>
           <label class="field">
-            Stop at
+            {t('Stop at')}
             <input type="time" bind:value={stopTime} />
           </label>
         </div>
 
-        <div class="days" role="group" aria-label="Days">
+        <div class="days" role="group" aria-label={t('Days')}>
           {#each DAY_NAMES as day, index (day)}
             <label class="check">
               <input
@@ -148,37 +149,37 @@
                 checked={dayEnabled(draft.days, index)}
                 onchange={() => (draft.days = toggleDay(draft.days, index))}
               />
-              {day}
+              {dayName(index, languageCode())}
             </label>
           {/each}
         </div>
 
         <div class="pair">
           <label class="field">
-            Files at once
+            {t('Files at once')}
             <input type="number" min="1" max="32" bind:value={draft.concurrency} />
           </label>
           <label class="field">
-            Retries per file
+            {t('Retries per file')}
             <input type="number" min="0" max="999" bind:value={draft.retries} />
           </label>
         </div>
 
         <label class="check">
           <input type="checkbox" bind:checked={draft.sync} />
-          Keep these files in sync with the server
+          {t('Keep these files in sync with the server')}
         </label>
         {#if draft.sync}
           <label class="field">
-            Check every (minutes)
+            {t('Check every (minutes)')}
             <input type="number" min="1" bind:value={draft.syncMinutes} />
           </label>
         {/if}
       {:else if tab === 'files'}
         {#if selectedId === 0}
-          <p class="note">Save the queue first, then add files to it.</p>
+          <p class="note">{t('Save the queue first, then add files to it.')}</p>
         {:else if files.length === 0}
-          <p class="note">No files. Right-click a download to add it to this queue.</p>
+          <p class="note">{t('No files. Right-click a download to add it to this queue.')}</p>
         {:else}
           <ul>
             {#each files as row, index (row.id)}
@@ -188,19 +189,19 @@
                 <span class="moves">
                   <button
                     type="button"
-                    aria-label="Move up"
+                    aria-label={t('Move up')}
                     disabled={index === 0}
                     onclick={() => move(index, -1)}>↑</button
                   >
                   <button
                     type="button"
-                    aria-label="Move down"
+                    aria-label={t('Move down')}
                     disabled={index === files.length - 1}
                     onclick={() => move(index, 1)}>↓</button
                   >
                   <button
                     type="button"
-                    aria-label="Remove from queue"
+                    aria-label={t('Remove from queue')}
                     onclick={() => onremovefile(row.id)}>✕</button
                   >
                 </span>
@@ -210,12 +211,12 @@
         {/if}
       {:else}
         <label class="field">
-          Run a program or open a file
-          <input type="text" bind:value={draft.after.program} placeholder="Optional" />
+          {t('Run a program or open a file')}
+          <input type="text" bind:value={draft.after.program} placeholder={t('Optional')} />
         </label>
         <label class="check">
           <input type="checkbox" bind:checked={draft.after.shutdown} />
-          Shut down the computer
+          {t('Shut down the computer')}
         </label>
         <label class="check indented">
           <input
@@ -223,15 +224,14 @@
             bind:checked={draft.after.force}
             disabled={!draft.after.shutdown}
           />
-          Force programs to close (unsaved work may be lost)
+          {t('Force programs to close (unsaved work may be lost)')}
         </label>
         <label class="check">
           <input type="checkbox" bind:checked={draft.after.wake} />
-          Wake the computer for the start time
+          {t('Wake the computer for the start time')}
         </label>
         <p class="note">
-          These run when the queue ends by itself, not when you stop it. A shutdown gives you 60
-          seconds to cancel.
+          {t('These run when the queue ends by itself, not when you stop it. A shutdown gives you 60 seconds to cancel.')}
         </p>
       {/if}
     </div>
@@ -239,15 +239,15 @@
 
   {#snippet footer()}
     {#if current && current.id !== 1}
-      <button type="button" class="left" onclick={() => ondelete(current.id)}>Delete queue</button>
+      <button type="button" class="left" onclick={() => ondelete(current.id)}>{t('Delete queue')}</button>
     {/if}
     {#if current?.active}
-      <button type="button" onclick={() => onstop(current.id)}>Stop queue</button>
+      <button type="button" onclick={() => onstop(current.id)}>{t('Stop queue')}</button>
     {:else if current}
-      <button type="button" onclick={() => onstart(current.id)}>Start now</button>
+      <button type="button" onclick={() => onstart(current.id)}>{t('Start now')}</button>
     {/if}
-    <button type="button" onclick={save}>Save</button>
-    <button type="button" class="primary" onclick={onclose}>Close</button>
+    <button type="button" onclick={save}>{t('Save')}</button>
+    <button type="button" class="primary" onclick={onclose}>{t('Close')}</button>
   {/snippet}
 </Modal>
 
@@ -272,7 +272,7 @@
     gap: 6px;
     background: transparent;
     border-color: transparent;
-    text-align: left;
+    text-align: start;
   }
 
   .queue.active {
@@ -329,7 +329,7 @@
   }
 
   .indented {
-    margin-left: 22px;
+    margin-inline-start: 22px;
   }
 
   ul {
@@ -357,6 +357,6 @@
   }
 
   .left {
-    margin-right: auto;
+    margin-inline-end: auto;
   }
 </style>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { sayError, t } from '../lib/locale.svelte';
   import { untrack } from 'svelte';
 
   import { pickFolder } from '../lib/api';
@@ -52,59 +53,59 @@
   }
 </script>
 
-<Modal title="Properties" wide {onclose}>
+<Modal title={t('Properties')} wide {onclose}>
   <dl>
-    <dt>File</dt>
+    <dt>{t('File')}</dt>
     <dd class="selectable">{displayName(row)}</dd>
-    <dt>Status</dt>
+    <dt>{t('Status')}</dt>
     <dd>{statusText(row)}</dd>
-    <dt>Size</dt>
+    <dt>{t('Size')}</dt>
     <dd>{formatBytes(row.size)}</dd>
-    <dt>Added</dt>
+    <dt>{t('Added')}</dt>
     <dd>{formatDate(row.addedAt)}</dd>
     {#if row.completedAt}
-      <dt>Finished</dt>
+      <dt>{t('Finished')}</dt>
       <dd>{formatDate(row.completedAt)}</dd>
     {/if}
     {#if row.finalPath}
-      <dt>Saved to</dt>
+      <dt>{t('Saved to')}</dt>
       <dd class="selectable">{row.finalPath}</dd>
     {/if}
     {#if row.checksum}
-      <dt>Checksum</dt>
+      <dt>{t('Checksum')}</dt>
       <dd class:error-text={row.checksumMatches === false}>{checksumText(row)}</dd>
     {/if}
   </dl>
 
   {#if row.error}
-    <p class="error-text">{row.error}</p>
+    <p class="error-text">{sayError(row.error)}</p>
   {/if}
 
   <label class="field">
-    Address
+    {t('Address')}
     <input type="url" bind:value={url} disabled={running || completed} />
   </label>
 
   <div class="field-block">
-    <label class="field" for="properties-folder">Folder</label>
+    <label class="field" for="properties-folder">{t('Folder')}</label>
     <div class="folder-row">
       <input id="properties-folder" type="text" bind:value={folder} disabled={running || completed} />
-      <button type="button" disabled={running || completed} onclick={browse}>Browse…</button>
+      <button type="button" disabled={running || completed} onclick={browse}>{t('Browse…')}</button>
     </div>
   </div>
 
   <label class="field">
-    Description
+    {t('Description')}
     <input type="text" bind:value={description} disabled={running} />
   </label>
 
   <label class="field">
-    Checksum
+    {t('Checksum')}
     <input
       type="text"
       bind:value={checksum}
       disabled={running}
-      placeholder="Optional: the MD5, SHA-1, SHA-256 or SHA-512 the site gives"
+      placeholder={t('Optional: the MD5, SHA-1, SHA-256 or SHA-512 the site gives')}
       spellcheck="false"
       autocomplete="off"
     />
@@ -114,28 +115,27 @@
   {/if}
 
   <label class="field">
-    Mirrors
+    {t('Mirrors')}
     <textarea
       rows="2"
       bind:value={mirrors}
       disabled={running || completed}
-      placeholder="Other addresses for the same file, one a line"
+      placeholder={t('Other addresses for the same file, one a line')}
       spellcheck="false"
     ></textarea>
   </label>
   <p class="note">
-    Parts of the file are fetched from these too. A mirror that fails, or has a file of another
-    size, is left out. Cookies and logins only go to the file's own site.
+    {t("Parts of the file are fetched from these too. A mirror that fails, or has a file of another size, is left out. Cookies and logins only go to the file's own site.")}
   </p>
 
   {#if running}
-    <p class="note">Stop the download to change these.</p>
+    <p class="note">{t('Stop the download to change these.')}</p>
   {/if}
 
   {#snippet footer()}
-    <button type="button" onclick={onclose}>Cancel</button>
+    <button type="button" onclick={onclose}>{t('Cancel')}</button>
     <button type="button" class="primary" disabled={running || !checksumOk} onclick={save}>
-      Save
+      {t('Save')}
     </button>
   {/snippet}
 </Modal>

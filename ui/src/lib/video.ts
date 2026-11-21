@@ -1,3 +1,4 @@
+import { t } from './locale.svelte';
 import type { SubtitleChoice } from './types';
 
 /** The language Windows shows, such as `en` for `en-GB`. */
@@ -46,8 +47,8 @@ export function clock(seconds: number): string {
 export function sectionProblem(from: string, to: string, seconds: number): string | null {
   const start = parseClock(from);
   const end = parseClock(to);
-  if (start === null || end === null) return 'Write the times as minutes and seconds, such as 1:30.';
-  if (end <= start) return 'The end has to come after the start.';
-  if (seconds > 0 && start >= seconds) return 'The start is after the end of the video.';
+  if (start === null || end === null) return t('Write the times as minutes and seconds, such as 1:30.');
+  if (end <= start) return t('The end has to come after the start.');
+  if (seconds > 0 && start >= seconds) return t('The start is after the end of the video.');
   return null;
 }

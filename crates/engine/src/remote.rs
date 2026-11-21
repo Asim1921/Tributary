@@ -14,7 +14,7 @@ use crate::name;
 use crate::store::Download;
 
 /// What a download reports when a server wants a login it doesn't have.
-pub const LOGIN_NEEDED: &str = "this site needs a login";
+pub const LOGIN_NEEDED: &str = en!("this site needs a login");
 
 /// The longest `Retry-After` obeyed, so a bad value can't stall a download for days.
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(300);
@@ -53,7 +53,7 @@ impl Problem {
     pub fn into_reason(self) -> String {
         match self {
             Self::Stopped => "stopped".to_owned(),
-            Self::Changed => "the file changed on the server".to_owned(),
+            Self::Changed => text!("the file changed on the server"),
             Self::Retry { reason, .. } | Self::Fatal(reason) => reason,
             Self::LoginRequired { .. } => LOGIN_NEEDED.to_owned(),
         }
@@ -71,7 +71,7 @@ impl Problem {
             };
         }
 
-        let reason = format!("the server answered {status}");
+        let reason = text!("the server answered {status}");
         let temporary = status.is_server_error()
             || status == StatusCode::REQUEST_TIMEOUT
             || status == StatusCode::TOO_MANY_REQUESTS;

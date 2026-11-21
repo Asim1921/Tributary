@@ -1,14 +1,15 @@
 <script lang="ts">
+  import { t } from '../lib/locale.svelte';
   import type { Segment } from '../lib/types';
 
   let { segments, size }: { segments: Segment[]; size: number } = $props();
 </script>
 
-<div class="chart" role="img" aria-label="Progress of each connection">
+<div class="chart" role="img" aria-label={t('Progress of each connection')}>
   {#each segments as segment (segment.start)}
     <span
       class="part"
-      style:left="{(segment.start / size) * 100}%"
+      style:inset-inline-start="{(segment.start / size) * 100}%"
       style:width="{((segment.end - segment.start) / size) * 100}%"
     >
       <span
@@ -35,7 +36,7 @@
     position: absolute;
     top: 0;
     bottom: 0;
-    border-right: 1px solid var(--surface);
+    border-inline-end: 1px solid var(--surface);
   }
 
   .done {

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../lib/locale.svelte';
   import { isDownloadableUrl } from '../lib/format';
   import Modal from './Modal.svelte';
 
@@ -19,10 +20,10 @@
   }
 </script>
 
-<Modal title="Add URL" {onclose}>
+<Modal title={t('Add URL')} {onclose}>
   <form id="add-url" autocomplete="off" onsubmit={submit}>
     <label class="field">
-      Address
+      {t('Address')}
       <!-- svelte-ignore a11y_autofocus -->
       <input
         type="url"
@@ -39,12 +40,12 @@
       {/each}
     </datalist>
     {#if url.trim() && !valid}
-      <p class="note">Enter a full address starting with http://, https://, ftp:// or magnet:</p>
+      <p class="note">{t('Enter a full address starting with http://, https://, ftp:// or magnet:')}</p>
     {/if}
   </form>
 
   {#snippet footer()}
-    <button type="button" onclick={onclose}>Cancel</button>
-    <button type="submit" form="add-url" class="primary" disabled={!valid}>Continue</button>
+    <button type="button" onclick={onclose}>{t('Cancel')}</button>
+    <button type="submit" form="add-url" class="primary" disabled={!valid}>{t('Continue')}</button>
   {/snippet}
 </Modal>

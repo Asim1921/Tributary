@@ -1,5 +1,7 @@
 //! The desktop app: connects the download engine to the window and the tray.
 
+#[macro_use]
+mod messages;
 mod after_queue;
 mod capture;
 mod commands;
@@ -99,7 +101,7 @@ pub(crate) fn sync_drop_target(app: &AppHandle, show: bool) {
                 DROP_TARGET_WINDOW,
                 WebviewUrl::App("index.html#drop".into()),
             )
-            .title("Tributary drop target")
+            .title(say!("Tributary drop target").local())
             .inner_size(84.0, 84.0)
             .decorations(false)
             .resizable(false)
@@ -238,11 +240,54 @@ fn stop_all(app: &AppHandle) {
     });
 }
 
+/// The tray menu's items, to say them again when the language changes.
+struct TrayItems {
+    open: MenuItem<tauri::Wry>,
+    stop: MenuItem<tauri::Wry>,
+    exit: MenuItem<tauri::Wry>,
+}
+
+impl TrayItems {
+    fn say(&self) {
+        let _ = self.open.set_text(say!("Open Tributary").local());
+        let _ = self.stop.set_text(say!("Stop all downloads").local());
+        let _ = self.exit.set_text(say!("Quit").local());
+    }
+}
+
+/// Speaks the language chosen in Options, or Windows' own if none is, in the tray and
+/// notifications from now on.
+pub fn apply_language(app: &AppHandle, chosen: &str) {
+    let code = messages::pick_language(chosen, &messages::windows_languages());
+    messages::set_language(&code);
+    if let Some(items) = app.try_state::<TrayItems>() {
+        items.say();
+    }
+    let _ = app.emit("language-changed", code);
+}
+
 fn build_tray(app: &App) -> tauri::Result<()> {
-    let open = MenuItem::with_id(app, "open", "Open Tributary", true, None::<&str>)?;
-    let stop = MenuItem::with_id(app, "stop-all", "Stop all downloads", true, None::<&str>)?;
-    let exit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    let open = MenuItem::with_id(
+        app,
+        "open",
+        say!("Open Tributary").local(),
+        true,
+        None::<&str>,
+    )?;
+    let stop = MenuItem::with_id(
+        app,
+        "stop-all",
+        say!("Stop all downloads").local(),
+        true,
+        None::<&str>,
+    )?;
+    let exit = MenuItem::with_id(app, "quit", say!("Quit").local(), true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &stop, &exit])?;
+    app.manage(TrayItems {
+        open: open.clone(),
+        stop: stop.clone(),
+        exit: exit.clone(),
+    });
 
     let mut tray = TrayIconBuilder::with_id("main")
         .tooltip("Tributary")
@@ -306,8 +351,8 @@ fn scan_finished_file(app: &AppHandle, id: DownloadId) {
         let result = scanner::scan(&settings.scanner_path, &settings.scanner_arguments, &path);
         let problem = match result {
             ScanResult::Clean => String::new(),
-            ScanResult::Flagged(code) => format!("the scanner reported a problem (code {code})"),
-            ScanResult::Failed(reason) => format!("the scanner couldn't run: {reason}"),
+            ScanResult::Flagged(code) => text!("the scanner reported a problem (code {code})"),
+            ScanResult::Failed(reason) => text!("the scanner couldn't run: {reason}"),
         };
         let _ = handle.emit(
             "scan-finished",
@@ -474,6 +519,10 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(&data_dir)?;
 
     let settings = Settings::load(&settings_path, &default_download_dir);
+    messages::set_language(&messages::pick_language(
+        &settings.language,
+        &messages::windows_languages(),
+    ));
     let engine = Engine::open(&data_dir.join("downloads.db"), Config::default())?;
     // A bad saved proxy shouldn't stop the app opening. Options can correct it.
     let _ = apply_to_engine(&engine, &settings);
@@ -644,6 +693,7 @@ pub fn run() {
             video::add_list,
             updates::check_for_update,
             phone::phone_status,
+            commands::app_language,
             torrents::inspect_torrent,
             torrents::add_torrent,
             torrents::choose_for_magnet_links,

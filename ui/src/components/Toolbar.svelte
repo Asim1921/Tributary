@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../lib/locale.svelte';
   import type { ToolbarAction, ToolbarButton } from '../lib/toolbar';
   import type { ToolbarSize } from '../lib/types';
   import Icon from './Icon.svelte';
@@ -13,17 +14,18 @@
   let { buttons, size, enabled, onaction }: Props = $props();
 </script>
 
-<div class="toolbar" class:small={size === 'small'} role="toolbar" aria-label="Downloads">
+<div class="toolbar" class:small={size === 'small'} role="toolbar" aria-label={t('Downloads')}>
   {#each buttons as button (button.id)}
     <button
       type="button"
-      title={button.label}
-      aria-label={button.label}
+      title={t(button.label)}
+      aria-label={t(button.label)}
       disabled={!enabled(button.id)}
+      data-action={button.id}
       onclick={() => onaction(button.id)}
     >
       <Icon name={button.icon} size={size === 'small' ? 18 : 22} />
-      {#if size === 'large'}<span>{button.label}</span>{/if}
+      {#if size === 'large'}<span>{t(button.label)}</span>{/if}
     </button>
   {/each}
 </div>

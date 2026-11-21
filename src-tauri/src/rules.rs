@@ -29,22 +29,25 @@ fn category(name: &str, extensions: &[&str]) -> Category {
 pub fn default_categories() -> Vec<Category> {
     vec![
         category(
-            "Compressed",
+            en!("Compressed"),
             &["zip", "rar", "7z", "gz", "tar", "bz2", "xz", "iso"],
         ),
         category(
-            "Documents",
+            en!("Documents"),
             &[
                 "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "epub",
             ],
         ),
-        category("Music", &["mp3", "wav", "flac", "aac", "ogg", "m4a", "wma"]),
         category(
-            "Programs",
+            en!("Music"),
+            &["mp3", "wav", "flac", "aac", "ogg", "m4a", "wma"],
+        ),
+        category(
+            en!("Programs"),
             &["exe", "msi", "msix", "apk", "dmg", "deb", "rpm"],
         ),
         category(
-            "Video",
+            en!("Video"),
             &["mp4", "mkv", "avi", "mov", "webm", "wmv", "flv", "m4v"],
         ),
     ]

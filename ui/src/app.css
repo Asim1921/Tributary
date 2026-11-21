@@ -68,7 +68,7 @@ body,
 body {
   background: var(--bg);
   color: var(--text);
-  font: 13px/1.45 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+  font: 13px/1.45 'Segoe UI Variable Text', 'Segoe UI', 'Nirmala UI', system-ui, sans-serif;
   overflow: hidden;
   user-select: none;
 }
@@ -161,6 +161,8 @@ label.check {
 
 .error-text {
   color: var(--danger);
+  /* Several messages can come together, a line each. */
+  white-space: pre-line;
   user-select: text;
 }
 

@@ -1,5 +1,14 @@
 export const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
+/** A weekday's short name in a language, Monday first, as Windows' own calendar says it. */
+export function dayName(index: number, lang: string): string {
+  // 1 January 2024 was a Monday.
+  return new Date(Date.UTC(2024, 0, 1 + index)).toLocaleDateString(lang, {
+    weekday: 'short',
+    timeZone: 'UTC',
+  });
+}
+
 /** Turns minutes after midnight into the text a time input uses. */
 export function minutesToTime(minutes: number | null): string {
   if (minutes === null) return '';

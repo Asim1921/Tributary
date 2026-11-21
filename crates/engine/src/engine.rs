@@ -976,7 +976,7 @@ async fn read_body(response: &mut Response) -> Result<String, Problem> {
     while let Some(chunk) = response.chunk().await.map_err(Problem::from_request)? {
         data.extend_from_slice(&chunk);
         if data.len() > MAX_TEXT_BYTES {
-            return Err(Problem::Fatal("the file is too large to read".to_owned()));
+            return Err(Problem::Fatal(text!("the file is too large to read")));
         }
     }
     Ok(String::from_utf8_lossy(&data).into_owned())
@@ -988,7 +988,7 @@ async fn read_small(mut response: Response, limit: usize) -> Result<Vec<u8>, Pro
     if !status.is_success() {
         return Err(Problem::from_status(status, response.headers()));
     }
-    let too_large = || Problem::Fatal("the file is larger than expected".to_owned());
+    let too_large = || Problem::Fatal(text!("the file is larger than expected"));
     if response
         .content_length()
         .is_some_and(|length| length > limit as u64)
@@ -1008,7 +1008,7 @@ async fn read_small(mut response: Response, limit: usize) -> Result<Vec<u8>, Pro
 /// Reads a published checksum list. Anything larger than a list could be is left unread,
 /// since some servers answer an unknown address with a whole file or a large page.
 async fn read_checksum_list(mut response: Response) -> Result<String, Problem> {
-    let too_large = || Problem::Fatal("too large to be a checksum list".to_owned());
+    let too_large = || Problem::Fatal(text!("too large to be a checksum list"));
     if !response.status().is_success() {
         return Err(Problem::Fatal(response.status().to_string()));
     }
@@ -1214,7 +1214,7 @@ async fn drive(
             }
         }
     }
-    Err("the file kept changing on the server".to_owned())
+    Err(text!("the file kept changing on the server"))
 }
 
 /// What a server said about a file, and how to log in for the requests that follow.
@@ -1302,7 +1302,7 @@ async fn attempt(
         .store
         .get(id)
         .map_err(|error| error.to_string())?
-        .ok_or("the download no longer exists")?;
+        .ok_or(en!("the download no longer exists"))?;
 
     let mut headers = to_header_map(&download.headers).map_err(|error| error.to_string())?;
     headers.extend(secrets.clone());
@@ -1326,7 +1326,7 @@ async fn attempt(
             store.get(id)
         })()
         .map_err(|error| error.to_string())?;
-        download = saved.ok_or("the download no longer exists")?;
+        download = saved.ok_or(en!("the download no longer exists"))?;
     }
 
     if download.is_stream {
@@ -1386,7 +1386,7 @@ async fn attempt(
             .map_err(|error| error.to_string())?;
         (PartFile::create(&path, remote.size), map)
     };
-    let file = file.map_err(|error| format!("could not open the file: {error}"))?;
+    let file = file.map_err(|error| text!("could not open the file: {error}"))?;
 
     let ftp = (parsed_url.scheme() == "ftp").then(|| inner.ftp_target(&parsed_url, login));
 
@@ -1468,8 +1468,11 @@ async fn attempt_stream(
     let first_url = parts
         .first()
         .map(|part| part.url.clone())
-        .ok_or("the video has no parts")?;
-    let file_name = download.file_name.clone().ok_or("the video has no name")?;
+        .ok_or(en!("the video has no parts"))?;
+    let file_name = download
+        .file_name
+        .clone()
+        .ok_or(en!("the video has no name"))?;
 
     let login = inner.logins().get(&id).cloned();
     let auth = match login {
@@ -1506,7 +1509,7 @@ async fn attempt_stream(
             .map_err(|error| error.to_string())?;
         PartFile::create(&path, None)
     }
-    .map_err(|error| format!("could not open the file: {error}"))?;
+    .map_err(|error| text!("could not open the file: {error}"))?;
 
     let setup = parts::Setup {
         client: live.client,
@@ -1562,7 +1565,7 @@ fn prepare_folders(
         .flatten()
     {
         std::fs::create_dir_all(folder)
-            .map_err(|error| format!("could not create the folder: {error}"))?;
+            .map_err(|error| text!("could not create the folder: {error}"))?;
     }
     Ok(path)
 }
@@ -1590,13 +1593,13 @@ async fn read_metalink(
     {
         data.extend_from_slice(&chunk);
         if data.len() > metalink::MAX_BYTES {
-            return Err("the Metalink is too large".to_owned());
+            return Err(text!("the Metalink is too large"));
         }
     }
     metalink::parse(&String::from_utf8_lossy(&data))?
         .into_iter()
         .next()
-        .ok_or_else(|| "the Metalink lists no file".to_owned())
+        .ok_or_else(|| text!("the Metalink lists no file"))
 }
 
 /// Mirrors worth keeping: web addresses, each once, up to a handful.
@@ -1663,7 +1666,7 @@ async fn conclude(
                     Some(target) => disk::replace(&path, &target).map(|()| target),
                     None => disk::finish(&path, &dest_dir, &file_name),
                 }
-                .map_err(|error| format!("could not finish the file: {error}"))?;
+                .map_err(|error| text!("could not finish the file: {error}"))?;
                 // Tagged before anyone hears it's finished, so it's never opened untagged.
                 if let Some((url, referrer)) = origin {
                     disk::mark_from_internet(&target, &url, referrer.as_deref());
@@ -1712,7 +1715,7 @@ impl Progress for Job {
 
         tokio::task::spawn_blocking(move || {
             file.sync()
-                .map_err(|error| format!("could not flush the file: {error}"))?;
+                .map_err(|error| text!("could not flush the file: {error}"))?;
             store
                 .save_segments(id, &snapshot)
                 .map_err(|error| error.to_string())
@@ -1743,7 +1746,7 @@ impl Progress for PartsJob {
 
         tokio::task::spawn_blocking(move || {
             file.sync()
-                .map_err(|error| format!("could not flush the file: {error}"))?;
+                .map_err(|error| text!("could not flush the file: {error}"))?;
             store
                 .save_stream_progress(id, parts, bytes)
                 .map_err(|error| error.to_string())

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../lib/locale.svelte';
   import { columnById, MIN_COLUMN_WIDTH, type SortOrder } from '../lib/columns';
   import { percent } from '../lib/format';
   import type { ColumnSetting, DownloadRow } from '../lib/types';
@@ -46,7 +47,9 @@
     handle.setPointerCapture(event.pointerId);
     const move = (moved: PointerEvent) => {
       // Positions are fractional on a scaled display, but widths are saved as whole numbers.
-      const width = Math.round(startWidth + moved.clientX - startX);
+      // Right to left, a column widens as the pointer moves left.
+      const along = document.documentElement.dir === 'rtl' ? startX - moved.clientX : moved.clientX - startX;
+      const width = Math.round(startWidth + along);
       onresize(column.id, Math.max(MIN_COLUMN_WIDTH, width));
     };
     const finish = () => {
@@ -86,7 +89,7 @@
                 onsort(column.id);
               }}
             >
-              {definition?.label}
+              {t(definition?.label ?? '')}
               {#if order.column === column.id}
                 <span aria-hidden="true">{order.ascending ? '▲' : '▼'}</span>
               {/if}
@@ -160,12 +163,12 @@
     background: var(--surface-2);
     border-bottom: 1px solid var(--line);
     font-weight: 600;
-    text-align: left;
+    text-align: start;
   }
 
   th.end,
   td.end {
-    text-align: right;
+    text-align: end;
   }
 
   .sort {
@@ -188,10 +191,10 @@
   .resize {
     position: absolute;
     top: 0;
-    right: 0;
+    inset-inline-end: 0;
     bottom: 0;
     width: 7px;
-    border-right: 1px solid var(--line);
+    border-inline-end: 1px solid var(--line);
     cursor: col-resize;
     touch-action: none;
   }
@@ -221,9 +224,9 @@
 
   .bar {
     position: absolute;
-    right: 10px;
+    inset-inline-end: 10px;
     bottom: 2px;
-    left: 10px;
+    inset-inline-start: 10px;
     height: 3px;
     overflow: hidden;
     background: var(--line);

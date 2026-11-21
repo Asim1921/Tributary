@@ -72,7 +72,7 @@
     padding: 5px 10px;
     background: transparent;
     border-color: transparent;
-    text-align: left;
+    text-align: start;
   }
 
   hr {

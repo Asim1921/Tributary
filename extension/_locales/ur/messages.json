@@ -1,0 +1,84 @@
+{
+  "extName": {
+    "message": "Tributary"
+  },
+  "extDescription": {
+    "message": "ڈاؤن لوڈز Tributary ڈاؤن لوڈ مینیجر کو بھیجتا ہے۔"
+  },
+  "commandSaveMedia": {
+    "message": "اس صفحے کی ہر تصویر اور ویڈیو Tributary سے محفوظ کریں"
+  },
+  "menuLink": {
+    "message": "Tributary سے ڈاؤن لوڈ کریں"
+  },
+  "menuSelection": {
+    "message": "منتخب لنکس Tributary سے ڈاؤن لوڈ کریں"
+  },
+  "menuAllLinks": {
+    "message": "تمام لنکس Tributary سے ڈاؤن لوڈ کریں"
+  },
+  "menuPageMedia": {
+    "message": "اس صفحے کی تمام تصاویر اور ویڈیوز Tributary سے ڈاؤن لوڈ کریں"
+  },
+  "panelSave": {
+    "message": "محفوظ کریں: $LABEL$",
+    "placeholders": {
+      "label": {
+        "content": "$1"
+      }
+    }
+  },
+  "panelDownloadVideo": {
+    "message": "یہ ویڈیو ڈاؤن لوڈ کریں"
+  },
+  "panelHide": {
+    "message": "چھپائیں"
+  },
+  "collectWaiting": {
+    "message": "اس ٹیب کے دوبارہ سامنے آنے کا انتظار…"
+  },
+  "collectLooking": {
+    "message": "Tributary تصاویر اور ویڈیوز تلاش کر رہا ہے…"
+  },
+  "collectStop": {
+    "message": "یہیں روکیں"
+  },
+  "collectCancel": {
+    "message": "منسوخ کریں"
+  },
+  "collectFound": {
+    "message": "اب تک ملیں: تصاویر $PICTURES$، ویڈیوز $VIDEOS$…",
+    "placeholders": {
+      "pictures": {
+        "content": "$1"
+      },
+      "videos": {
+        "content": "$2"
+      }
+    }
+  },
+  "collectNothing": {
+    "message": "Tributary کو اس صفحے پر کوئی تصویر یا ویڈیو نہیں ملی۔"
+  },
+  "collectClose": {
+    "message": "بند کریں"
+  },
+  "popupSaveAll": {
+    "message": "اس صفحے کی تمام تصاویر اور ویڈیوز محفوظ کریں"
+  },
+  "popupUnreadable": {
+    "message": "Tributary یہ صفحہ نہیں پڑھ سکتا۔ اگر یہ ایکسٹینشن لوڈ یا اپ ڈیٹ ہونے سے پہلے کھلا تھا تو اسے دوبارہ لوڈ کر کے پھر کوشش کریں۔ براؤزر کے اپنے صفحات نہیں پڑھے جا سکتے۔"
+  },
+  "popupVideoHeading": {
+    "message": "اس صفحے پر ویڈیو"
+  },
+  "popupNothing": {
+    "message": "ابھی کوئی ویڈیو نہیں ملی۔ اسے چلانا شروع کریں، پھر یہاں دوبارہ دیکھیں۔"
+  },
+  "labelVideoStream": {
+    "message": "ویڈیو اسٹریم"
+  },
+  "labelVideo": {
+    "message": "ویڈیو"
+  }
+}

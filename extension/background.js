@@ -324,20 +324,20 @@ async function sendPageMedia(message, sender) {
 }
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create({ id: MENU.link, title: 'Download with Tributary', contexts: ['link'] });
+  chrome.contextMenus.create({ id: MENU.link, title: chrome.i18n.getMessage('menuLink'), contexts: ['link'] });
   chrome.contextMenus.create({
     id: MENU.selection,
-    title: 'Download selected links with Tributary',
+    title: chrome.i18n.getMessage('menuSelection'),
     contexts: ['selection'],
   });
   chrome.contextMenus.create({
     id: MENU.page,
-    title: 'Download all links with Tributary',
+    title: chrome.i18n.getMessage('menuAllLinks'),
     contexts: ['page'],
   });
   chrome.contextMenus.create({
     id: MENU.pageMedia,
-    title: 'Download all images and videos on this page with Tributary',
+    title: chrome.i18n.getMessage('menuPageMedia'),
     contexts: ['page', 'image', 'video'],
   });
 });

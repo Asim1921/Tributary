@@ -42,7 +42,7 @@ fn check_protection(text: &str) -> Result<(), Error> {
 
 fn parse(text: &str) -> Result<Playlist, Error> {
     parse_playlist_res(text.as_bytes())
-        .map_err(|_| Error::Invalid("the playlist isn't valid".to_owned()))
+        .map_err(|_| Error::Invalid(text!("the playlist isn't valid")))
 }
 
 fn part_range(range: Option<&m3u8_rs::ByteRange>, next_start: u64) -> Option<ByteRange> {

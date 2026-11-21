@@ -373,7 +373,7 @@ fn save_quality(state: &AppState, quality: &Quality, to: &Destination) -> Result
     };
     let working = sound_folder(&state.settings_path);
     fs::create_dir_all(&working)
-        .map_err(|error| format!("couldn't make a folder for the sound: {error}"))?;
+        .map_err(|error| text!("couldn't make a folder for the sound: {error}"))?;
     let audio_name = format!("{}.audio.{}", to.name, audio.extension);
     let sound_to = Destination {
         url: to.url,
@@ -459,24 +459,25 @@ pub async fn add_video(
         .video_choices()
         .get(request.choice)
         .cloned()
-        .ok_or("that quality is no longer available")?;
+        .ok_or(en!("that quality is no longer available"))?;
     if request.mp3 && !quality.audio_only {
-        return Err("only sound saved on its own can be made into an MP3".to_owned());
+        return Err(text!("only sound saved on its own can be made into an MP3"));
     }
     if request.mp3 && ffmpeg_for(&state).is_none() {
-        return Err("Making an MP3 needs ffmpeg. Set it up under Options, Video.".to_owned());
+        return Err(text!(
+            "Making an MP3 needs ffmpeg. Set it up under Options, Video."
+        ));
     }
     if let Some(section) = request.section {
         if ffmpeg_for(&state).is_none() {
-            return Err(
+            return Err(text!(
                 "Saving only part of a video needs ffmpeg. Set it up under Options, Video."
-                    .to_owned(),
-            );
+            ));
         }
         if !section.fits(quality.video.seconds) {
-            return Err(
-                "The part chosen has to start before it ends, within the video.".to_owned(),
-            );
+            return Err(text!(
+                "The part chosen has to start before it ends, within the video."
+            ));
         }
     }
     let (plan, missed) = fetch_extras(&state, &request, quality.audio_only).await;
@@ -510,11 +511,15 @@ pub async fn add_video(
     if !missed.is_empty() {
         let _ = app.emit(
             "video-problem",
-            format!(
-                "Tributary couldn't fetch {}, so the video is being saved without {}.",
-                missed.join(" or "),
-                if missed.len() == 1 { "it" } else { "them" }
-            ),
+            missed
+                .iter()
+                .map(|what| {
+                    text!(
+                        "Tributary couldn't fetch {what}, so the video is being saved without it."
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
         );
     }
     Ok(())
@@ -590,7 +595,7 @@ pub async fn add_list(
         })
         .collect();
     if pages.is_empty() {
-        return Err("No videos were chosen.".to_owned());
+        return Err(text!("No videos were chosen."));
     }
     let count = pages.len();
     tauri::async_runtime::spawn(crate::commands::read_pages_in_turn(
@@ -669,14 +674,14 @@ async fn fetch_extras(
                 language: subtitle.language.clone(),
                 name: subtitle.name.clone(),
             }),
-            _ => missed.push(format!("the {} subtitles", subtitle.name)),
+            _ => missed.push(text!("the {name} subtitles", name = subtitle.name)),
         }
     }
     if let Some(url) = wanted_cover {
         let path = folder.join(format!("{stamp}-cover.{}", picture_extension(&url)));
         match state.engine.fetch_bytes(&url, &[], MAX_COVER_BYTES).await {
             Ok(bytes) if fs::write(&path, &bytes).is_ok() => plan.cover = Some(path),
-            _ => missed.push("the cover picture".to_owned()),
+            _ => missed.push(text!("the cover picture")),
         }
     }
     (plan, missed)
@@ -748,7 +753,7 @@ pub async fn save_best(app: &AppHandle, file: Captured, later: bool) -> Result<V
             offer
                 .qualities
                 .first()
-                .ok_or_else(|| "the stream lists nothing to save".to_owned())
+                .ok_or_else(|| text!("the stream lists nothing to save"))
                 .and_then(|best| save_quality(&state, best, &to))
         }
         Err(problem) => Err(problem),
@@ -767,7 +772,10 @@ async fn keep_apart(
     video_path: &Path,
     audio: &engine::Download,
 ) -> Result<PathBuf, String> {
-    let from = audio.final_path.clone().ok_or("the sound has no file")?;
+    let from = audio
+        .final_path
+        .clone()
+        .ok_or(en!("the sound has no file"))?;
     let name = from
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -777,7 +785,7 @@ async fn keep_apart(
     } else {
         let to = beside(video_path, &name);
         move_file(&from, &to)
-            .map_err(|error| format!("the sound couldn't be put beside the video: {error}"))?;
+            .map_err(|error| text!("the sound couldn't be put beside the video: {error}"))?;
         to
     };
     state
@@ -864,7 +872,7 @@ async fn finish(app: &AppHandle, job: &Job) -> Result<(), String> {
         .video
         .final_path
         .clone()
-        .ok_or("the video has no file")?;
+        .ok_or(en!("the video has no file"))?;
 
     let Some(ffmpeg) = ffmpeg_for(&state) else {
         // The dialog said they'd stay apart, so that's no surprise worth a message.
@@ -874,7 +882,9 @@ async fn finish(app: &AppHandle, job: &Job) -> Result<(), String> {
         }
         placed?;
         return if job.plan.mp3 {
-            Err("ffmpeg isn't set up any more, so the sound is saved as it came".to_owned())
+            Err(text!(
+                "ffmpeg isn't set up any more, so the sound is saved as it came"
+            ))
         } else {
             Ok(())
         };
@@ -912,7 +922,7 @@ async fn finish(app: &AppHandle, job: &Job) -> Result<(), String> {
             }
             // The video is fine, but the user should know a file was left behind.
             match finished.leftover {
-                Some(reason) => Err(format!(
+                Some(reason) => Err(text!(
                     "The video is joined, but the separate sound file couldn't be deleted: {reason}"
                 )),
                 None => Ok(()),
@@ -926,20 +936,22 @@ async fn finish(app: &AppHandle, job: &Job) -> Result<(), String> {
             if let Some(sound) = &job.sound {
                 match keep_apart(&state, &video_path, sound).await {
                     Ok(kept) => {
+                        let file = kept.file_name().unwrap_or_default().to_string_lossy();
                         message = format!(
-                            "{message}. The sound is saved beside the video, as {}",
-                            kept.file_name().unwrap_or_default().to_string_lossy()
+                            "{message}\n{}",
+                            text!("The sound is saved beside the video, as {file}.")
                         );
                     }
-                    Err(also) => message = format!("{message}. Also, {also}"),
+                    Err(also) => message = format!("{message}\n{}", text!("Also, {also}")),
                 }
             }
             match placed {
                 Ok(placed) if !placed.is_empty() => {
-                    message.push_str(". The subtitles and cover are saved beside it");
+                    message.push('\n');
+                    message.push_str(en!("The subtitles and cover are saved beside it."));
                 }
                 Ok(_) => {}
-                Err(also) => message = format!("{message}. Also, {also}"),
+                Err(also) => message = format!("{message}\n{}", text!("Also, {also}")),
             }
             Err(message)
         }

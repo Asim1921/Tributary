@@ -78,7 +78,7 @@ struct Reading {
 
 /// The files in a Metalink. Only web and FTP addresses are kept.
 pub fn parse(xml: &str) -> Result<Vec<MetaFile>, String> {
-    let unreadable = || "the Metalink isn't readable".to_owned();
+    let unreadable = || text!("the Metalink isn't readable");
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(false);
 
@@ -203,7 +203,7 @@ pub fn parse(xml: &str) -> Result<Vec<MetaFile>, String> {
         }
     }
     if files.is_empty() {
-        return Err("the Metalink lists no file Tributary can fetch".to_owned());
+        return Err(text!("the Metalink lists no file Tributary can fetch"));
     }
     Ok(files)
 }

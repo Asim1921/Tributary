@@ -214,7 +214,12 @@ impl Torrents {
         let started =
             Session::new_with_opts(download_dir, session_options(&self.folder, speed_limit))
                 .await
-                .map_err(|error| format!("torrents couldn't start: {error:#}"))?;
+                .map_err(|error| {
+                    text!(
+                        "torrents couldn't start: {error}",
+                        error = format!("{error:#}")
+                    )
+                })?;
         *session = Some(Arc::clone(&started));
         Ok(started)
     }
@@ -285,7 +290,7 @@ async fn session_for(app: &AppHandle) -> Result<Arc<Session>, String> {
 pub async fn inspect_torrent(app: AppHandle, url: String) -> Result<TorrentPreview, String> {
     let url = url.trim().to_owned();
     if !is_torrent_address(&url) {
-        return Err("That isn't a magnet link or a .torrent file.".to_owned());
+        return Err(text!("That isn't a magnet link or a .torrent file."));
     }
     let session = session_for(&app).await?;
     let add = if url.to_ascii_lowercase().starts_with("magnet:") {
@@ -306,12 +311,17 @@ pub async fn inspect_torrent(app: AppHandle, url: String) -> Result<TorrentPrevi
     };
     let listed = tokio::time::timeout(LIST_TIME, session.add_torrent(add, Some(options)))
         .await
-        .map_err(|_| "No one sharing this torrent could be found in time.".to_owned())?
-        .map_err(|error| format!("the torrent couldn't be read: {error:#}"))?;
+        .map_err(|_| text!("No one sharing this torrent could be found in time."))?
+        .map_err(|error| {
+            text!(
+                "the torrent couldn't be read: {error}",
+                error = format!("{error:#}")
+            )
+        })?;
     let list = match listed {
         AddTorrentResponse::ListOnly(list) => list,
         AddTorrentResponse::AlreadyManaged(..) | AddTorrentResponse::Added(..) => {
-            return Err("This torrent is already in your list.".to_owned());
+            return Err(text!("This torrent is already in your list."));
         }
     };
     let files: Vec<TorrentFile> = list
@@ -348,12 +358,12 @@ pub async fn add_torrent(
     later: bool,
 ) -> Result<i64, String> {
     if chosen.is_empty() {
-        return Err("No files were chosen.".to_owned());
+        return Err(text!("No files were chosen."));
     }
     let torrents = app.state::<Torrents>();
     let pending = lock(&torrents.pending)
         .take()
-        .ok_or("Read the torrent first.")?;
+        .ok_or(en!("Read the torrent first."))?;
     let session = session_for(&app).await?;
     // A torrent of several files keeps them together in a folder of its name.
     let dest_dir = if pending.several {
@@ -371,8 +381,15 @@ pub async fn add_torrent(
     let added = session
         .add_torrent(AddTorrent::from_bytes(pending.bytes), Some(options))
         .await
-        .map_err(|error| format!("the torrent couldn't be added: {error:#}"))?;
-    let handle = added.into_handle().ok_or("the torrent couldn't be added")?;
+        .map_err(|error| {
+            text!(
+                "the torrent couldn't be added: {error}",
+                error = format!("{error:#}")
+            )
+        })?;
+    let handle = added
+        .into_handle()
+        .ok_or(en!("the torrent couldn't be added"))?;
     if keep_sharing {
         lock(&torrents.sharing).insert(handle.id());
     }
@@ -521,15 +538,15 @@ async fn with_handle(
     app: &AppHandle,
     row: i64,
 ) -> Result<(Arc<Session>, Arc<ManagedTorrent>), String> {
-    let id = torrent_of(row).ok_or("not a torrent")?;
+    let id = torrent_of(row).ok_or(en!("not a torrent"))?;
     let session = app
         .state::<Torrents>()
         .running_session()
         .await
-        .ok_or("torrents aren't running")?;
+        .ok_or(en!("torrents aren't running"))?;
     let handle = session
         .get(TorrentIdOrHash::Id(id))
-        .ok_or("that torrent is no longer in the list")?;
+        .ok_or(en!("that torrent is no longer in the list"))?;
     Ok((session, handle))
 }
 

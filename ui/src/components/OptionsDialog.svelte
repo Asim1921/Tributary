@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { mark, sayError, t, tMarkup, useLanguage } from '../lib/locale.svelte';
+  import { LANGUAGES } from '../lib/i18n';
   import { untrack } from 'svelte';
 
   import {
@@ -15,6 +17,7 @@
     pickFolder,
     playSound,
     saveSiteLogin,
+    appLanguage,
   } from '../lib/api';
   import { columnById, resolveColumns } from '../lib/columns';
   import { moveItem, resolveToolbar, TOOLBAR_BUTTONS } from '../lib/toolbar';
@@ -44,7 +47,7 @@
     try {
       phone = await work();
     } catch (error) {
-      phone = { running: false, address: null, qrCode: null, problem: String(error) };
+      phone = { running: false, address: null, qrCode: null, problem: sayError(error) };
     } finally {
       phoneBusy = false;
     }
@@ -56,16 +59,22 @@
     .catch(() => {});
 
   /** Looks for a newer release now. One found shows in the bar above the list. */
+  /** Closes without saving, back in the language the app speaks. */
+  function cancel() {
+    if (draft.language !== settings.language) void appLanguage().then(useLanguage);
+    onclose();
+  }
+
   async function lookForUpdate() {
     looking = true;
     looked = null;
     try {
       const found = await checkForUpdate();
       looked = found
-        ? `Version ${found.version} is ready to install.`
-        : "You have the newest version.";
+        ? t('Version {version} is ready to install.', { version: found.version })
+        : t('You have the newest version.');
     } catch (error) {
-      looked = `Couldn't check: ${error}`;
+      looked = t("Couldn't check: {error}", { error: sayError(error) });
     } finally {
       looking = false;
     }
@@ -86,19 +95,19 @@
     | 'columns'
     | 'toolbar';
   const TABS: { id: Tab; label: string }[] = [
-    { id: 'general', label: 'General' },
-    { id: 'downloads', label: 'Downloads' },
-    { id: 'browser', label: 'Browser' },
-    { id: 'video', label: 'Video' },
-    { id: 'connection', label: 'Connection' },
-    { id: 'proxy', label: 'Proxy' },
-    { id: 'logins', label: 'Logins' },
-    { id: 'categories', label: 'Categories' },
-    { id: 'security', label: 'Security' },
-    { id: 'phone', label: 'Phone' },
-    { id: 'sounds', label: 'Sounds' },
-    { id: 'columns', label: 'Columns' },
-    { id: 'toolbar', label: 'Toolbar' },
+    { id: 'general', label: mark('General') },
+    { id: 'downloads', label: mark('Downloads') },
+    { id: 'browser', label: mark('Browser') },
+    { id: 'video', label: mark('Video') },
+    { id: 'connection', label: mark('Connection') },
+    { id: 'proxy', label: mark('Proxy') },
+    { id: 'logins', label: mark('Logins') },
+    { id: 'categories', label: mark('Categories') },
+    { id: 'security', label: mark('Security') },
+    { id: 'phone', label: mark('Phone') },
+    { id: 'sounds', label: mark('Sounds') },
+    { id: 'columns', label: mark('Columns') },
+    { id: 'toolbar', label: mark('Toolbar') },
   ];
 
   interface ToolbarEntry {
@@ -139,16 +148,16 @@
   });
 
   const KEYS = [
-    { value: 'ctrl', label: 'Ctrl' },
-    { value: 'alt', label: 'Alt' },
-    { value: 'shift', label: 'Shift' },
-    { value: 'none', label: 'None' },
+    { value: 'ctrl', label: mark('Ctrl') },
+    { value: 'alt', label: mark('Alt') },
+    { value: 'shift', label: mark('Shift') },
+    { value: 'none', label: mark('None') },
   ];
 
   const SOUND_EVENTS = [
-    { key: 'complete', label: 'Download finished' },
-    { key: 'failed', label: 'Download failed' },
-    { key: 'queue', label: 'Queue finished' },
+    { key: 'complete', label: mark('Download finished') },
+    { key: 'failed', label: mark('Download failed') },
+    { key: 'queue', label: mark('Queue finished') },
   ] as const;
 
   async function addSite() {
@@ -162,7 +171,7 @@
       newSite = { pattern: '', username: '', password: '' };
       loginProblem = '';
     } catch (error) {
-      loginProblem = String(error);
+      loginProblem = sayError(error);
     }
   }
 
@@ -172,12 +181,12 @@
   }
 
   async function browseSound(key: 'complete' | 'failed' | 'queue') {
-    const chosen = await pickFile('Sound', ['wav']);
+    const chosen = await pickFile(t('Sound'), ['wav']);
     if (chosen) draft.sounds[key] = chosen;
   }
 
   async function browseScanner() {
-    const chosen = await pickFile('Program', ['exe']);
+    const chosen = await pickFile(t('Program'), ['exe']);
     if (chosen) draft.scannerPath = chosen;
   }
 
@@ -189,21 +198,21 @@
     ytdlpMessage = null;
     try {
       await installYtdlp();
-      ytdlpMessage = 'yt-dlp is installed and up to date.';
+      ytdlpMessage = t('yt-dlp is installed and up to date.');
     } catch (error) {
-      ytdlpMessage = String(error);
+      ytdlpMessage = sayError(error);
     } finally {
       installingYtdlp = false;
     }
   }
 
   async function browseYtdlp() {
-    const chosen = await pickFile('Program', ['exe']);
+    const chosen = await pickFile(t('Program'), ['exe']);
     if (chosen) draft.ytdlpPath = chosen;
   }
 
   async function browseFfmpeg() {
-    const chosen = await pickFile('Program', ['exe']);
+    const chosen = await pickFile(t('Program'), ['exe']);
     if (chosen) draft.ffmpegPath = chosen;
   }
 
@@ -224,7 +233,7 @@
       .filter(Boolean);
 
   function addCategory() {
-    draft.categories.push({ name: 'New category', folder: null, extensions: [], sites: [] });
+    draft.categories.push({ name: t('New category'), folder: null, extensions: [], sites: [] });
   }
 
   async function browseCategory(index: number) {
@@ -243,7 +252,7 @@
   }
 </script>
 
-<Modal title="Options" wide {onclose}>
+<Modal title={t('Options')} wide onclose={cancel}>
   <div class="tabs" role="tablist">
     {#each TABS as item (item.id)}
       <button
@@ -253,7 +262,7 @@
         class:active={tab === item.id}
         onclick={() => (tab = item.id)}
       >
-        {item.label}
+        {t(item.label)}
       </button>
     {/each}
   </div>
@@ -261,88 +270,100 @@
   <div class="panel">
     {#if tab === 'general'}
       <div class="about">
-        <span>Tributary {version}</span>
+        <span>{t('Tributary {version}', { version })}</span>
         <button type="button" disabled={looking} onclick={lookForUpdate}>
-          {looking ? 'Looking…' : 'Check for updates'}
+          {looking ? t('Looking…') : t('Check for updates')}
         </button>
         {#if looked}<span class="note" role="status">{looked}</span>{/if}
       </div>
       <label class="check">
         <input type="checkbox" bind:checked={draft.checkForUpdates} />
-        Check for updates automatically
+        {t('Check for updates automatically')}
       </label>
       <label class="field">
-        Theme
+        {t('Language')}
+        <select
+          bind:value={draft.language}
+          onchange={() => void appLanguage(draft.language).then(useLanguage)}
+        >
+          <option value="">{t('The same as Windows')}</option>
+          {#each LANGUAGES as language (language.code)}
+            <option value={language.code} lang={language.code}>{language.name}</option>
+          {/each}
+        </select>
+      </label>
+      <label class="field">
+        {t('Theme')}
         <select bind:value={draft.theme}>
-          <option value="system">Match Windows</option>
-          <option value="light">Light</option>
-          <option value="dark">Dark</option>
+          <option value="system">{t('Match Windows')}</option>
+          <option value="light">{t('Light')}</option>
+          <option value="dark">{t('Dark')}</option>
         </select>
       </label>
       <label class="check">
         <input type="checkbox" bind:checked={draft.startWithWindows} />
-        Start with Windows
+        {t('Start with Windows')}
       </label>
       <label class="check">
         <input type="checkbox" bind:checked={draft.closeToTray} />
-        Keep running in the tray when the window is closed
+        {t('Keep running in the tray when the window is closed')}
       </label>
       <div class="data-buttons">
-        <button type="button" onclick={onexport}>Export settings and list…</button>
-        <button type="button" onclick={onimport}>Import…</button>
+        <button type="button" onclick={onexport}>{t('Export settings and list…')}</button>
+        <button type="button" onclick={onimport}>{t('Import…')}</button>
       </div>
-      <p class="note">Exports never include passwords.</p>
+      <p class="note">{t('Exports never include passwords.')}</p>
     {:else if tab === 'downloads'}
       <div class="block">
-        <label class="field" for="options-folder">Default folder</label>
+        <label class="field" for="options-folder">{t('Default folder')}</label>
         <div class="folder-row">
           <input id="options-folder" type="text" bind:value={draft.downloadDir} />
-          <button type="button" onclick={browseDownloads}>Browse…</button>
+          <button type="button" onclick={browseDownloads}>{t('Browse…')}</button>
         </div>
       </div>
 
       <div class="block">
-        <label class="field" for="options-temp">Temporary folder</label>
+        <label class="field" for="options-temp">{t('Temporary folder')}</label>
         <div class="folder-row">
           <input
             id="options-temp"
             type="text"
             value={draft.tempDir ?? ''}
-            placeholder="Same as the destination"
+            placeholder={t('Same as the destination')}
             readonly
           />
-          <button type="button" onclick={browseTemp}>Browse…</button>
+          <button type="button" onclick={browseTemp}>{t('Browse…')}</button>
           <button type="button" disabled={!draft.tempDir} onclick={() => (draft.tempDir = null)}>
-            Clear
+            {t('Clear')}
           </button>
         </div>
-        <p class="note">Partial files go here. Applies to new downloads.</p>
+        <p class="note">{t('Partial files go here. Applies to new downloads.')}</p>
       </div>
 
       <label class="field">
-        Connections per download
+        {t('Connections per download')}
         <input type="number" min="1" max="32" bind:value={draft.connections} />
       </label>
 
       <label class="check">
         <input type="checkbox" bind:checked={draft.rememberLastFolder} />
-        Offer the last folder used
+        {t('Offer the last folder used')}
       </label>
       <label class="check">
         <input type="checkbox" bind:checked={draft.showStartDialog} />
-        Ask before starting a download
+        {t('Ask before starting a download')}
       </label>
       <label class="check">
         <input type="checkbox" bind:checked={draft.showCompleteDialog} />
-        Show a message when a download finishes
+        {t('Show a message when a download finishes')}
       </label>
       <p class="note">
-        To open magnet links in Tributary, choose it for them in Windows' Default apps.
-        <button type="button" onclick={() => void chooseForMagnetLinks()}>Choose Tributary…</button>
+        {t("To open magnet links in Tributary, choose it for them in Windows' Default apps.")}
+        <button type="button" onclick={() => void chooseForMagnetLinks()}>{t('Choose Tributary…')}</button>
       </p>
       <label class="check">
         <input type="checkbox" bind:checked={draft.notifyInBackground} />
-        Show a Windows notification when downloads finish while Tributary is in the background
+        {t('Show a Windows notification when downloads finish while Tributary is in the background')}
       </label>
 
       <button
@@ -350,15 +371,15 @@
         disabled={draft.urlHistory.length === 0}
         onclick={() => (draft.urlHistory = [])}
       >
-        Clear address history
+        {t('Clear address history')}
       </button>
     {:else if tab === 'browser'}
       <label class="check">
         <input type="checkbox" bind:checked={draft.captureEnabled} />
-        Take over downloads from the browser
+        {t('Take over downloads from the browser')}
       </label>
       <label class="field">
-        File types to take over, separated by commas
+        {t('File types to take over, separated by commas')}
         <textarea
           rows="3"
           value={draft.captureTypes.join(', ')}
@@ -366,96 +387,95 @@
         ></textarea>
       </label>
       <label class="field">
-        Sites and addresses to leave to the browser, separated by commas
+        {t('Sites and addresses to leave to the browser, separated by commas')}
         <input
           type="text"
           value={draft.captureExclusions.join(', ')}
-          placeholder="*.example.com"
+          placeholder={t('*.example.com')}
           onchange={(event) => (draft.captureExclusions = splitList(event.currentTarget.value))}
         />
       </label>
       <div class="pair">
         <label class="field">
-          Hold to always take over
+          {t('Hold to always take over')}
           <select bind:value={draft.forceKey}>
             {#each KEYS as key (key.value)}
-              <option value={key.value}>{key.label}</option>
+              <option value={key.value}>{t(key.label)}</option>
             {/each}
           </select>
         </label>
         <label class="field">
-          Hold to leave to the browser
+          {t('Hold to leave to the browser')}
           <select bind:value={draft.skipKey}>
             {#each KEYS as key (key.value)}
-              <option value={key.value}>{key.label}</option>
+              <option value={key.value}>{t(key.label)}</option>
             {/each}
           </select>
         </label>
       </div>
       <label class="check">
         <input type="checkbox" bind:checked={draft.watchClipboard} />
-        Offer to download links copied to the clipboard
+        {t('Offer to download links copied to the clipboard')}
       </label>
       <label class="check">
         <input type="checkbox" bind:checked={draft.showDropTarget} />
-        Show a small window to drop links on
+        {t('Show a small window to drop links on')}
       </label>
 
-      <p class="heading">Setting up your browser</p>
+      <p class="heading">{t('Setting up your browser')}</p>
       <ol class="steps">
-        <li>Open <strong>chrome://extensions</strong>, or <strong>edge://extensions</strong> in Edge.</li>
-        <li>Turn on <strong>Developer mode</strong>.</li>
-        <li>Choose <strong>Load unpacked</strong> and select this folder:</li>
+        <!-- The app's own text: see tMarkup. -->
+        <li>{@html tMarkup('Open <strong>chrome://extensions</strong>, or <strong>edge://extensions</strong> in Edge.')}</li>
+        <li>{@html tMarkup('Turn on <strong>Developer mode</strong>.')}</li>
+        <li>{@html tMarkup('Choose <strong>Load unpacked</strong> and select this folder:')}</li>
       </ol>
       <p class="selectable path">{extensionPath}</p>
     {:else if tab === 'video'}
       <label class="check">
         <input type="checkbox" bind:checked={draft.videoPanel} />
-        Show a download panel over video players
+        {t('Show a download panel over video players')}
       </label>
       <div class="block">
-        <label class="field" for="options-ffmpeg">ffmpeg program</label>
+        <label class="field" for="options-ffmpeg">{t('ffmpeg program')}</label>
         <div class="folder-row">
           <input
             id="options-ffmpeg"
             type="text"
             bind:value={draft.ffmpegPath}
-            placeholder="Found automatically if it's installed"
+            placeholder={t("Found automatically if it's installed")}
           />
-          <button type="button" onclick={browseFfmpeg}>Browse…</button>
+          <button type="button" onclick={browseFfmpeg}>{t('Browse…')}</button>
         </div>
       </div>
       <div class="block">
-        <label class="field" for="options-ytdlp">yt-dlp program</label>
+        <label class="field" for="options-ytdlp">{t('yt-dlp program')}</label>
         <div class="folder-row">
           <input
             id="options-ytdlp"
             type="text"
             bind:value={draft.ytdlpPath}
-            placeholder="The copy Tributary installs, or one on your PATH"
+            placeholder={t('The copy Tributary installs, or one on your PATH')}
           />
-          <button type="button" onclick={browseYtdlp}>Browse…</button>
+          <button type="button" onclick={browseYtdlp}>{t('Browse…')}</button>
           <button type="button" disabled={installingYtdlp} onclick={installTool}>
-            {installingYtdlp ? 'Installing…' : 'Install or update'}
+            {installingYtdlp ? t('Installing…') : t('Install or update')}
           </button>
         </div>
         {#if ytdlpMessage}<p class="note" role="status">{ytdlpMessage}</p>{/if}
       </div>
       <p class="note">
-        yt-dlp finds the video on sites like YouTube, where it's fed to the player by script. It
-        is only used for the video panel and Add URL on such pages, and never sees your cookies.
+        {t("yt-dlp finds the video on sites like YouTube, where it's fed to the player by script. It is only used for the video panel and Add URL on such pages, and never sees your cookies.")}
       </p>
       <p class="note">
-        Some videos keep their picture and sound apart. With ffmpeg they're joined into one file.
-        Without it, they stay as two files. Protected and live videos can't be saved.
+        {t("Some videos keep their picture and sound apart. With ffmpeg they're joined into one file. Without it, they stay as two files. Protected and live videos can't be saved.")}
       </p>
     {:else if tab === 'connection'}
       <label class="check">
         <input type="checkbox" bind:checked={draft.speedLimitEnabled} />
-        Limit download speed
+        {t('Limit download speed')}
       </label>
       <label class="field">
-        Speed limit (KB per second, all downloads together)
+        {t('Speed limit (KB per second, all downloads together)')}
         <input
           type="number"
           min="1"
@@ -466,105 +486,105 @@
 
       <label class="check">
         <input type="checkbox" bind:checked={draft.quotaEnabled} />
-        Limit how much is downloaded
+        {t('Limit how much is downloaded')}
       </label>
       <div class="pair">
         <label class="field">
-          No more than (MB)
+          {t('No more than (MB)')}
           <input type="number" min="1" bind:value={draft.quotaMb} disabled={!draft.quotaEnabled} />
         </label>
         <label class="field">
-          Every (hours)
+          {t('Every (hours)')}
           <input type="number" min="1" bind:value={draft.quotaHours} disabled={!draft.quotaEnabled} />
         </label>
       </div>
-      <p class="note">Downloads wait when the limit is reached, and carry on by themselves.</p>
+      <p class="note">{t('Downloads wait when the limit is reached, and carry on by themselves.')}</p>
 
       <label class="field">
-        User agent (blank uses Tributary's own)
+        {t("User agent (blank uses Tributary's own)")}
         <input type="text" bind:value={draft.userAgent} />
       </label>
       <label class="check">
         <input type="checkbox" bind:checked={draft.ftpPassive} />
-        Use passive mode for FTP
+        {t('Use passive mode for FTP')}
       </label>
 
-      <p class="heading">Connections for particular servers</p>
+      <p class="heading">{t('Connections for particular servers')}</p>
       {#each draft.serverRules as rule, index (index)}
         <div class="rule">
-          <input type="text" aria-label="Server" bind:value={rule.pattern} placeholder="*.example.com" />
-          <input type="number" aria-label="Connections" min="1" max="32" bind:value={rule.connections} />
-          <button type="button" onclick={() => draft.serverRules.splice(index, 1)}>Remove</button>
+          <input type="text" aria-label={t('Server')} bind:value={rule.pattern} placeholder={t('*.example.com')} />
+          <input type="number" aria-label={t('Connections')} min="1" max="32" bind:value={rule.connections} />
+          <button type="button" onclick={() => draft.serverRules.splice(index, 1)}>{t('Remove')}</button>
         </div>
       {/each}
       <button
         type="button"
         onclick={() => draft.serverRules.push({ pattern: '', connections: 1 })}
       >
-        Add server
+        {t('Add server')}
       </button>
     {:else if tab === 'proxy'}
       <label class="field">
-        Connect through
+        {t('Connect through')}
         <select bind:value={draft.proxyChoice}>
-          <option value="system">Windows proxy settings</option>
-          <option value="direct">No proxy</option>
-          <option value="manual">This proxy</option>
+          <option value="system">{t('Windows proxy settings')}</option>
+          <option value="direct">{t('No proxy')}</option>
+          <option value="manual">{t('This proxy')}</option>
         </select>
       </label>
       {#if draft.proxyChoice === 'manual'}
         <label class="field">
-          Proxy address
+          {t('Proxy address')}
           <input
             type="text"
             bind:value={draft.proxyUrl}
-            placeholder="http://host:8080 or socks5://host:1080"
+            placeholder={t('http://host:8080 or socks5://host:1080')}
           />
         </label>
         <div class="pair">
           <label class="field">
-            Proxy user name
+            {t('Proxy user name')}
             <input type="text" bind:value={draft.proxyUsername} autocomplete="off" />
           </label>
           <label class="field">
-            Proxy password
+            {t('Proxy password')}
             <input
               type="password"
               bind:value={proxyPassword}
-              placeholder="Unchanged"
+              placeholder={t('Unchanged')}
               autocomplete="off"
             />
           </label>
         </div>
         <label class="field">
-          Don't use the proxy for (separated by commas)
-          <input type="text" bind:value={draft.proxyExceptions} placeholder="localhost, 192.168.*" />
+          {t("Don't use the proxy for (separated by commas)")}
+          <input type="text" bind:value={draft.proxyExceptions} placeholder={t('localhost, 192.168.*')} />
         </label>
       {/if}
     {:else if tab === 'logins'}
-      <p class="note">Passwords are kept in Windows Credential Manager.</p>
+      <p class="note">{t('Passwords are kept in Windows Credential Manager.')}</p>
       <ul>
         {#each draft.siteLogins as site (site.pattern)}
           <li>
             <span>{site.pattern} ({site.username})</span>
             <button type="button" aria-label="Remove {site.pattern}" onclick={() => removeSite(site.pattern)}>
-              Remove
+              {t('Remove')}
             </button>
           </li>
         {/each}
       </ul>
-      <p class="heading">Add a site</p>
+      <p class="heading">{t('Add a site')}</p>
       <label class="field">
-        Site
-        <input type="text" bind:value={newSite.pattern} placeholder="*.example.com" />
+        {t('Site')}
+        <input type="text" bind:value={newSite.pattern} placeholder={t('*.example.com')} />
       </label>
       <div class="pair">
         <label class="field">
-          User name
+          {t('User name')}
           <input type="text" bind:value={newSite.username} autocomplete="off" />
         </label>
         <label class="field">
-          Password
+          {t('Password')}
           <input type="password" bind:value={newSite.password} autocomplete="off" />
         </label>
       </div>
@@ -573,7 +593,7 @@
         disabled={!newSite.pattern.trim() || !newSite.username.trim()}
         onclick={addSite}
       >
-        Add login
+        {t('Add login')}
       </button>
       {#if loginProblem}<p class="error-text">{loginProblem}</p>{/if}
     {:else if tab === 'phone'}
@@ -587,65 +607,63 @@
             void changePhone(() => setPhone(on));
           }}
         />
-        Let my phone send links over the home network
+        {t('Let my phone send links over the home network')}
       </label>
       <p class="note">
-        Your phone opens a small page from this computer to send it links, which Tributary then
-        asks you about here, and to see how downloads are getting on. Only a phone on your home
-        network with the pairing code in this QR code can use it, and it can't reach your files or
-        settings. Windows may ask whether Tributary can use the network: allow private networks.
+        {t("Your phone opens a small page from this computer to send it links, which Tributary then asks you about here, and to see how downloads are getting on. Only a phone on your home network with the pairing code in this QR code can use it, and it can't reach your files or settings. Windows may ask whether Tributary can use the network: allow private networks.")}
       </p>
-      {#if phone?.problem}<p class="error-text" role="alert">{phone.problem}</p>{/if}
+      {#if phone?.problem}<p class="error-text" role="alert">{sayError(phone.problem)}</p>{/if}
       {#if phone?.running && phone.qrCode}
-        <div class="qr" aria-label="QR code for your phone">
+        <div class="qr" aria-label={t('QR code for your phone')}>
           <!-- Made by the app from the address alone, so it's safe to show as it is. -->
           {@html phone.qrCode}
         </div>
         <p class="selectable note">{phone.address}</p>
         <button type="button" disabled={phoneBusy} onclick={() => void changePhone(newPhoneCode)}>
-          New pairing code
+          {t('New pairing code')}
         </button>
       {/if}
     {:else if tab === 'security'}
       <label class="check">
         <input type="checkbox" bind:checked={draft.markDownloads} />
-        Mark downloads as coming from the internet, so Windows checks them before they open
-        (recommended)
+        {t('Mark downloads as coming from the internet, so Windows checks them before they open (recommended)')}
       </label>
       <label class="check">
         <input type="checkbox" bind:checked={draft.scanEnabled} />
-        Scan finished downloads for viruses
+        {t('Scan finished downloads for viruses')}
       </label>
       <div class="block">
-        <label class="field" for="options-scanner">Scanner program</label>
+        <label class="field" for="options-scanner">{t('Scanner program')}</label>
         <div class="folder-row">
           <input id="options-scanner" type="text" bind:value={draft.scannerPath} />
-          <button type="button" onclick={browseScanner}>Browse…</button>
+          <button type="button" onclick={browseScanner}>{t('Browse…')}</button>
         </div>
       </div>
       <label class="field">
-        Scanner arguments
+        {t('Scanner arguments')}
         <input type="text" bind:value={draft.scannerArguments} />
       </label>
-      <p class="note">{'{file}'} stands for the downloaded file. Windows Defender is set up by default.</p>
+      <p class="note">
+        {t('{file} stands for the downloaded file. Windows Defender is set up by default.', { file: '{file}' })}
+      </p>
     {:else if tab === 'sounds'}
       {#each SOUND_EVENTS as item (item.key)}
         <div class="block">
-          <label class="field" for="sound-{item.key}">{item.label}</label>
+          <label class="field" for="sound-{item.key}">{t(item.label)}</label>
           <div class="folder-row">
             <input
               id="sound-{item.key}"
               type="text"
               bind:value={draft.sounds[item.key]}
-              placeholder="No sound"
+              placeholder={t('No sound')}
             />
-            <button type="button" onclick={() => browseSound(item.key)}>Browse…</button>
+            <button type="button" onclick={() => browseSound(item.key)}>{t('Browse…')}</button>
             <button
               type="button"
               disabled={!draft.sounds[item.key]}
               onclick={() => playSound(draft.sounds[item.key])}
             >
-              Play
+              {t('Play')}
             </button>
           </div>
         </div>
@@ -655,11 +673,11 @@
         {#each draft.categories as category, index (index)}
           <div class="category">
             <label class="field">
-              Name
+              {t('Name')}
               <input type="text" bind:value={category.name} />
             </label>
             <label class="field">
-              File types, separated by commas
+              {t('File types, separated by commas')}
               <input
                 type="text"
                 value={category.extensions.join(', ')}
@@ -667,7 +685,7 @@
               />
             </label>
             <label class="field">
-              Sites, such as *.example.com
+              {t('Sites, such as *.example.com')}
               <input
                 type="text"
                 value={category.sites.join(', ')}
@@ -679,34 +697,34 @@
                 type="text"
                 aria-label="Folder for {category.name}"
                 value={category.folder ?? ''}
-                placeholder="Default folder"
+                placeholder={t('Default folder')}
                 onchange={(event) => (category.folder = event.currentTarget.value.trim() || null)}
               />
-              <button type="button" onclick={() => browseCategory(index)}>Browse…</button>
-              <button type="button" onclick={() => draft.categories.splice(index, 1)}>Remove</button>
+              <button type="button" onclick={() => browseCategory(index)}>{t('Browse…')}</button>
+              <button type="button" onclick={() => draft.categories.splice(index, 1)}>{t('Remove')}</button>
             </div>
           </div>
         {/each}
       </div>
-      <button type="button" onclick={addCategory}>Add category</button>
+      <button type="button" onclick={addCategory}>{t('Add category')}</button>
     {:else if tab === 'columns'}
       <ul>
         {#each columns as column, index (column.id)}
           <li>
             <label class="check">
               <input type="checkbox" bind:checked={column.visible} disabled={column.id === 'name'} />
-              {columnById(column.id)?.label}
+              {t(columnById(column.id)?.label ?? '')}
             </label>
             <span class="moves">
               <button
                 type="button"
-                aria-label="Move up"
+                aria-label={t('Move up')}
                 disabled={index === 0}
                 onclick={() => (columns = moveItem(columns, index, -1))}>↑</button
               >
               <button
                 type="button"
-                aria-label="Move down"
+                aria-label={t('Move down')}
                 disabled={index === columns.length - 1}
                 onclick={() => (columns = moveItem(columns, index, 1))}>↓</button
               >
@@ -716,10 +734,10 @@
       </ul>
     {:else}
       <label class="field">
-        Button size
+        {t('Button size')}
         <select bind:value={draft.toolbarSize}>
-          <option value="large">Large, with labels</option>
-          <option value="small">Small, icons only</option>
+          <option value="large">{t('Large, with labels')}</option>
+          <option value="small">{t('Small, icons only')}</option>
         </select>
       </label>
       <ul>
@@ -727,18 +745,18 @@
           <li>
             <label class="check">
               <input type="checkbox" bind:checked={entry.shown} />
-              {entry.label}
+              {t(entry.label)}
             </label>
             <span class="moves">
               <button
                 type="button"
-                aria-label="Move up"
+                aria-label={t('Move up')}
                 disabled={index === 0}
                 onclick={() => (toolbar = moveItem(toolbar, index, -1))}>↑</button
               >
               <button
                 type="button"
-                aria-label="Move down"
+                aria-label={t('Move down')}
                 disabled={index === toolbar.length - 1}
                 onclick={() => (toolbar = moveItem(toolbar, index, 1))}>↓</button
               >
@@ -750,8 +768,8 @@
   </div>
 
   {#snippet footer()}
-    <button type="button" onclick={onclose}>Cancel</button>
-    <button type="button" class="primary" onclick={save}>Save</button>
+    <button type="button" onclick={cancel}>{t('Cancel')}</button>
+    <button type="button" class="primary" onclick={save}>{t('Save')}</button>
   {/snippet}
 </Modal>
 
@@ -796,7 +814,7 @@
 
   .steps {
     margin: 0 0 6px;
-    padding-left: 20px;
+    padding-inline-start: 20px;
   }
 
   .path {

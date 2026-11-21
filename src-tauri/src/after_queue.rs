@@ -47,7 +47,7 @@ pub fn shutdown_arguments(force: bool) -> Vec<String> {
         "/t".to_owned(),
         SHUTDOWN_DELAY_SECONDS.to_string(),
         "/c".to_owned(),
-        "Tributary finished a queue. Open Tributary to cancel.".to_owned(),
+        say!("Tributary finished a queue. Open Tributary to cancel.").local(),
     ];
     if force {
         arguments.push("/f".to_owned());

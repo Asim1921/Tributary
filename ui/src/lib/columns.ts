@@ -1,3 +1,4 @@
+import { mark, t } from './locale.svelte';
 import { displayName, formatBytes, formatDate, formatSpeed, formatTimeLeft, percent, secondsLeft, statusText } from './format';
 import type { ColumnSetting, DownloadRow } from './types';
 
@@ -15,7 +16,7 @@ export interface ColumnDefinition {
 export const COLUMNS: ColumnDefinition[] = [
   {
     id: 'name',
-    label: 'File name',
+    label: mark('File name'),
     width: 300,
     visible: true,
     text: displayName,
@@ -23,7 +24,7 @@ export const COLUMNS: ColumnDefinition[] = [
   },
   {
     id: 'size',
-    label: 'Size',
+    label: mark('Size'),
     width: 90,
     visible: true,
     align: 'end',
@@ -32,7 +33,7 @@ export const COLUMNS: ColumnDefinition[] = [
   },
   {
     id: 'status',
-    label: 'Status',
+    label: mark('Status'),
     width: 150,
     visible: true,
     text: statusText,
@@ -40,7 +41,7 @@ export const COLUMNS: ColumnDefinition[] = [
   },
   {
     id: 'timeLeft',
-    label: 'Time left',
+    label: mark('Time left'),
     width: 90,
     visible: true,
     align: 'end',
@@ -49,7 +50,7 @@ export const COLUMNS: ColumnDefinition[] = [
   },
   {
     id: 'speed',
-    label: 'Speed',
+    label: mark('Speed'),
     width: 100,
     visible: true,
     align: 'end',
@@ -58,7 +59,7 @@ export const COLUMNS: ColumnDefinition[] = [
   },
   {
     id: 'added',
-    label: 'Added',
+    label: mark('Added'),
     width: 150,
     visible: true,
     text: (row) => formatDate(row.addedAt),
@@ -66,15 +67,15 @@ export const COLUMNS: ColumnDefinition[] = [
   },
   {
     id: 'category',
-    label: 'Category',
+    label: mark('Category'),
     width: 110,
     visible: false,
-    text: (row) => row.category ?? '',
+    text: (row) => t(row.category ?? ''),
     sortValue: (row) => row.category?.toLowerCase() ?? null,
   },
   {
     id: 'description',
-    label: 'Description',
+    label: mark('Description'),
     width: 200,
     visible: false,
     text: (row) => row.description ?? '',
@@ -82,7 +83,7 @@ export const COLUMNS: ColumnDefinition[] = [
   },
   {
     id: 'folder',
-    label: 'Folder',
+    label: mark('Folder'),
     width: 220,
     visible: false,
     text: (row) => row.destDir,

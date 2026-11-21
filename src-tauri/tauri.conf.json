@@ -47,6 +47,11 @@
       "../extension/popup.html": "extension/popup.html",
       "../extension/popup.js": "extension/popup.js",
       "../extension/rules.js": "extension/rules.js",
+      "../extension/_locales/ar/messages.json": "extension/_locales/ar/messages.json",
+      "../extension/_locales/en/messages.json": "extension/_locales/en/messages.json",
+      "../extension/_locales/es/messages.json": "extension/_locales/es/messages.json",
+      "../extension/_locales/hi/messages.json": "extension/_locales/hi/messages.json",
+      "../extension/_locales/ur/messages.json": "extension/_locales/ur/messages.json",
       "../extension/icons/32.png": "extension/icons/32.png",
       "../extension/icons/128.png": "extension/icons/128.png"
     },

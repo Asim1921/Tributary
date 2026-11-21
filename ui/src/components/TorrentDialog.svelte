@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { sayError, t } from '../lib/locale.svelte';
   import { untrack } from 'svelte';
 
   import { addTorrent, inspectTorrent, pickFolder } from '../lib/api';
@@ -33,7 +34,7 @@
           preview = found;
           chosen = new Set(found.files.map((_, index) => index));
         })
-        .catch((error) => (problem = String(error)));
+        .catch((error) => (problem = sayError(error)));
     });
   });
 
@@ -55,26 +56,32 @@
       await addTorrent([...chosen].sort((a, b) => a - b), folder, keepSharing, later);
       onadded();
     } catch (error) {
-      problem = String(error);
+      problem = sayError(error);
       adding = false;
     }
   }
 </script>
 
-<Modal title={preview ? preview.name : 'Torrent'} wide {onclose}>
+<Modal title={preview ? preview.name : t('Torrent')} wide {onclose}>
   <p class="selectable note address">{url}</p>
 
   {#if problem}
     <p class="refused" role="alert">{problem}</p>
   {:else if !preview}
-    <p>Reading the torrent…</p>
+    <p>{t('Reading the torrent…')}</p>
   {:else}
     <div class="tools">
-      <span>{chosen.size} of {preview.files.length} files, {formatBytes(chosenSize)}</span>
+      <span>
+        {t('{chosen} of {count, plural, one {# file} other {# files}}, {size}', {
+          chosen: chosen.size,
+          count: preview.files.length,
+          size: formatBytes(chosenSize),
+        })}
+      </span>
       <button type="button" onclick={() => (chosen = new Set(preview?.files.map((_, index) => index)))}>
-        Choose all
+        {t('Choose all')}
       </button>
-      <button type="button" onclick={() => (chosen = new Set())}>Choose none</button>
+      <button type="button" onclick={() => (chosen = new Set())}>{t('Choose none')}</button>
     </div>
     <ul class="files">
       {#each preview.files as file, index (index)}
@@ -89,28 +96,27 @@
     </ul>
 
     <div class="field-block">
-      <label class="field" for="torrent-folder">Folder</label>
+      <label class="field" for="torrent-folder">{t('Folder')}</label>
       <div class="folder-row">
         <input id="torrent-folder" type="text" bind:value={folder} />
-        <button type="button" onclick={browse}>Browse…</button>
+        <button type="button" onclick={browse}>{t('Browse…')}</button>
       </div>
     </div>
 
     <label class="check">
       <input type="checkbox" bind:checked={keepSharing} />
-      Keep sharing until I've sent as much as I got
+      {t("Keep sharing until I've sent as much as I got")}
     </label>
     <p class="note">
-      A torrent shares what it has with others while it downloads. Unless you tick the box above,
-      it stops once it has finished. Only download what you have the right to.
+      {t('A torrent shares what it has with others while it downloads. Unless you tick the box above, it stops once it has finished. Only download what you have the right to.')}
     </p>
   {/if}
 
   {#snippet footer()}
-    <button type="button" onclick={onclose}>{problem ? 'Close' : 'Cancel'}</button>
+    <button type="button" onclick={onclose}>{problem ? t('Close') : t('Cancel')}</button>
     {#if !problem}
       <button type="button" disabled={!preview || chosen.size === 0 || adding} onclick={() => add(true)}>
-        Download later
+        {t('Download later')}
       </button>
       <button
         type="button"
@@ -118,7 +124,7 @@
         disabled={!preview || chosen.size === 0 || adding}
         onclick={() => add(false)}
       >
-        Download
+        {t('Download')}
       </button>
     {/if}
   {/snippet}
