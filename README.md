@@ -112,6 +112,10 @@ On a page full of photos or posts, such as a public profile, open the extension'
 - Downloads, queues and settings are in `%APPDATA%\app.tributary.desktop`.
 - Passwords are in Windows Credential Manager. Cookies are held in memory only, so a captured download may need its link again after a restart.
 
+## From your phone
+
+Turn on **Options > Phone** and scan the QR code with your phone's camera. A small page opens where you can paste a link: Tributary asks about it on your computer, just as it does a link from your browser, and the page shows how downloads are getting on. Only a phone on your home network, with the pairing code from the QR code, can use it, and it can't reach your files or settings. **New pairing code** stops phones paired before from using it. Windows may ask whether Tributary can use the network the first time: allow private networks. It's off until you turn it on.
+
 ## Updates
 
 Tributary looks for a newer version a minute after it starts and once a day after that. A new version is fetched in the background and checked against the signature it was released with, then a bar above the list offers **Restart to update**. It never restarts while files are downloading or a video is being finished. **Options > General** shows the version you have, can check at once, and can turn the daily check off.
