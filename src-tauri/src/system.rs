@@ -35,11 +35,14 @@ const HOST_NAME: &str = "app.tributary.capture";
 /// Fixed by the public key in the extension's manifest.
 pub const EXTENSION_ID: &str = "khhpmnkkeejcjhbnknnghhahncphbobk";
 
-/// Where each browser looks for native messaging hosts, under the current user.
-const BROWSER_KEYS: [&str; 3] = [
+/// Where each browser looks for native messaging hosts, under the current user. Opera reads
+/// Chrome's.
+const BROWSER_KEYS: [&str; 5] = [
     r"Software\Google\Chrome\NativeMessagingHosts",
     r"Software\Microsoft\Edge\NativeMessagingHosts",
     r"Software\BraveSoftware\Brave-Browser\NativeMessagingHosts",
+    r"Software\Vivaldi\NativeMessagingHosts",
+    r"Software\Chromium\NativeMessagingHosts",
 ];
 
 /// Stops the browser engine remembering what's typed into the window. It would otherwise
@@ -283,6 +286,15 @@ pub fn register_with_browsers(data_dir: &Path, host_path: &Path) -> io::Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uninstalling_removes_what_every_browser_was_given() {
+        let hooks = include_str!("../nsis-hooks.nsh");
+        for key in BROWSER_KEYS {
+            let line = format!("DeleteRegKey HKCU \"{key}\\{HOST_NAME}\"");
+            assert!(hooks.contains(&line), "the uninstaller leaves {key}");
+        }
+    }
 
     fn types() -> Vec<String> {
         ["zip", "mp4"].map(str::to_owned).to_vec()
