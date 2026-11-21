@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use reqwest::header::{
     AUTHORIZATION, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG,
-    HeaderMap, HeaderName, HeaderValue, LAST_MODIFIED, RANGE, RETRY_AFTER, WWW_AUTHENTICATE,
+    HeaderMap, HeaderName, HeaderValue, LAST_MODIFIED, LINK, RANGE, RETRY_AFTER, WWW_AUTHENTICATE,
 };
 use reqwest::{Client, RequestBuilder, StatusCode, Url};
 
@@ -151,6 +151,54 @@ pub struct Remote {
     pub last_modified: Option<String>,
     pub suggested_name: Option<String>,
     pub content_type: Option<String>,
+    /// Other servers with the same file, as the server names them with
+    /// `Link: <…>; rel=duplicate` (RFC 6249).
+    pub mirrors: Vec<String>,
+}
+
+/// The most mirrors used for one download.
+pub const MAX_MIRRORS: usize = 8;
+
+/// The duplicates a server names in its `Link` headers, as absolute web addresses.
+pub fn duplicates(headers: &HeaderMap, base: &Url) -> Vec<String> {
+    let mut found = Vec::new();
+    for value in headers
+        .get_all(LINK)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+    {
+        let mut rest = value;
+        while let Some(open) = rest.find('<') {
+            let Some(close) = rest[open..].find('>') else {
+                break;
+            };
+            let target = &rest[open + 1..open + close];
+            let after = &rest[open + close + 1..];
+            // The parameters run to the next link, which starts at the next `<`.
+            let params_end = after.find('<').unwrap_or(after.len());
+            let is_duplicate = after[..params_end].split(';').any(|param| {
+                let Some((name, value)) = param.split_once('=') else {
+                    return false;
+                };
+                name.trim().eq_ignore_ascii_case("rel")
+                    && value
+                        .trim()
+                        .trim_matches(['"', ','])
+                        .split_whitespace()
+                        .any(|rel| rel.eq_ignore_ascii_case("duplicate"))
+            });
+            if is_duplicate
+                && let Ok(url) = base.join(target.trim())
+                && matches!(url.scheme(), "http" | "https")
+                && !found.contains(&url.to_string())
+            {
+                found.push(url.to_string());
+            }
+            rest = &after[params_end..];
+        }
+    }
+    found.truncate(MAX_MIRRORS);
+    found
 }
 
 impl Remote {
@@ -252,7 +300,9 @@ pub async fn probe(
         .and_then(|value| name::from_content_disposition(&value))
         .or_else(|| name::from_url(response.url()));
 
+    let mirrors = duplicates(response_headers, response.url());
     let remote = Remote {
+        mirrors,
         url: response.url().to_string(),
         size,
         ranged,
@@ -287,7 +337,47 @@ mod tests {
             last_modified: Some("yesterday".to_owned()),
             suggested_name: None,
             content_type: None,
+            mirrors: Vec::new(),
         }
+    }
+
+    #[test]
+    fn duplicates_are_read_from_link_headers() {
+        let base = Url::parse("https://main.test/files/a.iso").unwrap();
+        let mut headers = HeaderMap::new();
+        headers.append(
+            LINK,
+            HeaderValue::from_static(
+                "<https://m1.test/a.iso>; rel=duplicate; pri=1, </other/a.iso>; rel=\"duplicate\", <https://x.test/style.css>; rel=stylesheet",
+            ),
+        );
+        headers.append(
+            LINK,
+            HeaderValue::from_static("<ftp://m2.test/a.iso>; rel=duplicate"),
+        );
+        headers.append(
+            LINK,
+            HeaderValue::from_static("<https://m1.test/a.iso>; rel=duplicate"),
+        );
+
+        assert_eq!(
+            duplicates(&headers, &base),
+            ["https://m1.test/a.iso", "https://main.test/other/a.iso"]
+        );
+    }
+
+    #[test]
+    fn a_page_naming_many_duplicates_gives_a_few() {
+        let base = Url::parse("https://main.test/a").unwrap();
+        let mut headers = HeaderMap::new();
+        for index in 0..20 {
+            headers.append(
+                LINK,
+                HeaderValue::from_str(&format!("<https://m{index}.test/a>; rel=duplicate"))
+                    .unwrap(),
+            );
+        }
+        assert_eq!(duplicates(&headers, &base).len(), MAX_MIRRORS);
     }
 
     #[test]
@@ -332,6 +422,7 @@ mod tests {
             checksum: None,
             checksum_matches: None,
             finish_plan: None,
+            mirrors: Vec::new(),
         }
     }
 

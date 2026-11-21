@@ -23,6 +23,7 @@ use crate::disk::{self, PartFile};
 use crate::error::Error;
 use crate::ftp::{self, FtpTarget};
 use crate::limits::{Limits, Quota};
+use crate::metalink;
 use crate::name;
 use crate::parts::{self, PartsJob, Position};
 use crate::remote::{self, Problem, Remote};
@@ -120,6 +121,8 @@ pub struct NewDownload {
     pub checksum: Option<Checksum>,
     /// What the app still has to do to the file once it's finished, in its own words.
     pub finish_plan: Option<String>,
+    /// Other servers with the same file, which take some of the parts.
+    pub mirrors: Vec<String>,
 }
 
 /// A proxy the user has set up by hand.
@@ -636,6 +639,16 @@ impl Engine {
         let login = take_url_login(&mut url).or(login);
         let headers = to_header_map(headers)?;
 
+        // A Metalink is looked through, to the file it describes.
+        let mut described = None;
+        if metalink::is_metalink(url.as_str()) {
+            let file = read_metalink(&self.inner.client(), url.as_str(), &headers)
+                .await
+                .map_err(Error::Request)?;
+            url = parse_url(&file.urls[0])?;
+            described = Some(file);
+        }
+
         // One try only, because someone is waiting for the answer.
         let stop = CancellationToken::new();
         let (remote, _) = probe_once(&self.inner, url.as_str(), &headers, login, &stop)
@@ -645,7 +658,12 @@ impl Engine {
                 other => Error::Request(other.into_reason()),
             })?;
 
-        let suggested = remote.suggested_name.as_deref().unwrap_or_default();
+        let suggested = described
+            .as_ref()
+            .map(|file| file.name.as_str())
+            .filter(|name| !name.is_empty())
+            .or(remote.suggested_name.as_deref())
+            .unwrap_or_default();
         Ok(FileInfo {
             file_name: name::sanitize(suggested),
             size: remote.size,
@@ -699,6 +717,11 @@ impl Engine {
         if let Some(plan) = &new.finish_plan {
             self.inner.store.set_finish_plan(id, Some(plan))?;
         }
+        if !new.mirrors.is_empty() {
+            self.inner
+                .store
+                .set_mirrors(id, &usable_mirrors(&new.mirrors))?;
+        }
         if !secret.is_empty() {
             self.inner.secrets().insert(id, secret);
         }
@@ -736,6 +759,13 @@ impl Engine {
     /// Records that a finished file became another one, at another path.
     pub fn file_moved(&self, id: DownloadId, path: &Path, size: u64) -> Result<(), Error> {
         Ok(self.inner.store.set_final_file(id, path, size)?)
+    }
+
+    /// Sets the other servers a download's file can come from. Only web addresses are kept,
+    /// up to a handful. Takes effect the next time it runs.
+    pub fn set_mirrors(&self, id: DownloadId, mirrors: &[String]) -> Result<(), Error> {
+        self.get(id)?;
+        Ok(self.inner.store.set_mirrors(id, &usable_mirrors(mirrors))?)
     }
 
     /// Sets or clears what the app still has to do to a file once it's finished.
@@ -1277,6 +1307,28 @@ async fn attempt(
     let mut headers = to_header_map(&download.headers).map_err(|error| error.to_string())?;
     headers.extend(secrets.clone());
 
+    // A Metalink becomes the file it describes, fetched from its servers at once, the first
+    // time the download runs.
+    if metalink::is_metalink(&download.url) {
+        let file = read_metalink(&inner.client(), &download.url, &headers).await?;
+        let store = &inner.store;
+        let saved = (|| {
+            store.edit(id, Some(&file.urls[0]), None, None)?;
+            store.set_mirrors(id, &usable_mirrors(&file.urls[1..]))?;
+            if download.checksum.is_none()
+                && let Some(checksum) = &file.checksum
+            {
+                store.set_checksum(id, Some(checksum))?;
+            }
+            if download.file_name.is_none() && !file.name.is_empty() {
+                store.set_name(id, &name::sanitize(&file.name))?;
+            }
+            store.get(id)
+        })()
+        .map_err(|error| error.to_string())?;
+        download = saved.ok_or("the download no longer exists")?;
+    }
+
     if download.is_stream {
         return attempt_stream(inner, id, download, headers, stop).await;
     }
@@ -1338,10 +1390,29 @@ async fn attempt(
 
     let ftp = (parsed_url.scheme() == "ftp").then(|| inner.ftp_target(&parsed_url, login));
 
+    // Mirrors share the parts of a download over several connections. FTP and a server
+    // without ranges keep to the one address.
+    let mirrors = if segmented && ftp.is_none() {
+        let mut addresses = download.mirrors.clone();
+        addresses.extend(remote.mirrors.iter().cloned());
+        usable_mirrors(&addresses)
+            .into_iter()
+            .filter(|mirror| *mirror != remote.url && *mirror != download.url)
+            .map(|mirror| {
+                let sent = mirror_headers(&headers, &remote.url, &mirror);
+                transfer::Mirror::new(mirror, sent)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     let job = Arc::new(Job {
         client,
         url: remote.url.clone(),
         headers,
+        mirrors,
+        main_active: std::sync::atomic::AtomicUsize::new(0),
         if_range: remote.if_range().map(str::to_owned),
         etag: remote.etag.clone(),
         size: remote.size,
@@ -1494,6 +1565,70 @@ fn prepare_folders(
             .map_err(|error| format!("could not create the folder: {error}"))?;
     }
     Ok(path)
+}
+
+/// Reads a Metalink and returns the first file it describes.
+async fn read_metalink(
+    client: &Client,
+    url: &str,
+    headers: &HeaderMap,
+) -> Result<metalink::MetaFile, String> {
+    let mut response = client
+        .get(url)
+        .headers(headers.clone())
+        .send()
+        .await
+        .map_err(|error| Problem::from_request(error).into_reason())?;
+    if !response.status().is_success() {
+        return Err(Problem::from_status(response.status(), response.headers()).into_reason());
+    }
+    let mut data = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| Problem::from_request(error).into_reason())?
+    {
+        data.extend_from_slice(&chunk);
+        if data.len() > metalink::MAX_BYTES {
+            return Err("the Metalink is too large".to_owned());
+        }
+    }
+    metalink::parse(&String::from_utf8_lossy(&data))?
+        .into_iter()
+        .next()
+        .ok_or_else(|| "the Metalink lists no file".to_owned())
+}
+
+/// Mirrors worth keeping: web addresses, each once, up to a handful.
+fn usable_mirrors(mirrors: &[String]) -> Vec<String> {
+    let mut kept: Vec<String> = Vec::new();
+    for mirror in mirrors {
+        let Ok(url) = Url::parse(mirror.trim()) else {
+            continue;
+        };
+        if matches!(url.scheme(), "http" | "https") && !kept.contains(&url.to_string()) {
+            kept.push(url.to_string());
+        }
+    }
+    kept.truncate(remote::MAX_MIRRORS);
+    kept
+}
+
+/// What's sent to a mirror: the same request headers, but cookies and logins only go to
+/// the host they were meant for.
+fn mirror_headers(headers: &HeaderMap, main: &str, mirror: &str) -> HeaderMap {
+    let host = |address: &str| {
+        Url::parse(address)
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_owned))
+    };
+    let mut headers = headers.clone();
+    if host(main) != host(mirror) {
+        for name in SECRET_HEADERS {
+            headers.remove(name);
+        }
+    }
+    headers
 }
 
 /// The page a download was found on, if it came with one.

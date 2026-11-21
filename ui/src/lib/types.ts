@@ -39,6 +39,8 @@ export interface Download {
   linkExpired?: boolean;
   /** Waiting for the browser to hand over a fresh link. */
   awaitingLink?: boolean;
+  /** Other servers with the same file. */
+  mirrors?: string[];
 }
 
 export interface Checksum {
@@ -96,6 +98,8 @@ export interface EditRequest {
   description?: string;
   /** A new checksum, or empty for none. Left out, it stays as it is. */
   checksum?: string;
+  /** Mirror addresses, one a line. Left out, they stay as they are. */
+  mirrors?: string[];
 }
 
 export type Theme = 'system' | 'light' | 'dark';

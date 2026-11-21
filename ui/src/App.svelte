@@ -312,9 +312,10 @@
   async function saveEdit(id: number, edit: EditRequest) {
     closeDialog();
     try {
-      const { checksum, ...rest } = edit;
+      const { checksum, mirrors, ...rest } = edit;
       await api.editDownload(id, rest);
       if (checksum !== undefined) await api.setChecksum(id, checksum || null);
+      if (mirrors !== undefined) await api.setMirrors(id, mirrors);
       await downloads.refresh();
     } catch (error) {
       showError(error);

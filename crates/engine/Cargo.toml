@@ -13,6 +13,7 @@ futures-util = "0.3"
 md-5 = "0.10"
 media = { path = "../media" }
 percent-encoding = "2"
+quick-xml = "0.39"
 # native-tls uses Windows' own TLS and certificate store, and needs no extra build
 # tools. HTTP/2 stays off on purpose: it shares one TCP connection, and the speed
 # gain here comes from running several.

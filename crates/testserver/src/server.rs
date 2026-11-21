@@ -470,6 +470,10 @@ async fn respond(state: &State, stream: &mut TcpStream, head: &RequestHead) -> S
             send_small(stream, head, 200, &headers, VIDEO_PAGE.as_bytes()).await
         }
         _ => {
+            if let Some(xml) = metalink(path, head.header("host").unwrap_or_default()) {
+                let headers = [("Content-Type", "application/metalink4+xml".to_owned())];
+                return send_small(stream, head, 200, &headers, xml.as_bytes()).await;
+            }
             if let Some(text) = checksum_list(path) {
                 let headers = [("Content-Type", "text/plain".to_owned())];
                 return send_small(stream, head, 200, &headers, text.as_bytes()).await;
@@ -502,6 +506,27 @@ async fn respond(state: &State, stream: &mut TcpStream, head: &RequestHead) -> S
             }
         }
     }
+}
+
+/// A Metalink at `/metalink/<name>.meta4` for the plain test file `<name>`, listing it at
+/// two addresses, each a little slow so both are used, with its size and SHA-256.
+fn metalink(path: &str, host: &str) -> Option<String> {
+    let name = path.strip_prefix("/metalink/")?.strip_suffix(".meta4")?;
+    let file = Scenario::parse(name, "").ok()?;
+    let sha256 = content::sha256(file.seed, file.size);
+    Some(format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<metalink xmlns="urn:ietf:params:xml:ns:metalink">
+  <file name="{name}">
+    <size>{size}</size>
+    <hash type="sha-256">{sha256}</hash>
+    <url priority="1">http://{host}/file/{name}?rate=2M&amp;token=a</url>
+    <url priority="2">http://{host}/file/{name}?rate=2M&amp;token=b</url>
+  </file>
+</metalink>
+"#,
+        size = file.size
+    ))
 }
 
 /// Checksums published beside test files, as many sites publish theirs: a `.sha256` file
@@ -685,6 +710,12 @@ async fn serve_file(
     };
 
     let mut headers = vec![("Content-Type", content_type(name).to_owned())];
+    if let Some(token) = &scenario.duplicate {
+        headers.push((
+            "Link",
+            format!("</file/{name}?token={token}>; rel=duplicate"),
+        ));
+    }
     if scenario.ranges {
         headers.push(("Accept-Ranges", "bytes".to_owned()));
     }

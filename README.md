@@ -52,6 +52,12 @@ If Tributary is already running, these go to the running copy.
 
 Many sites give links that only work for a while. If one stops working before a download finishes, the list says **Link expired**. Right-click it and choose **Get a fresh link**: the page the file came from opens in your browser, and the next time the browser hands Tributary a file of the same name, the download carries on from where it stopped, with the browser's new link and cookies, instead of starting again. If the server says the file itself has changed, it starts again so the result is never a mix. A download added by its address alone doesn't know its page, so Tributary asks you to find it.
 
+## Mirrors and Metalinks
+
+- **Mirrors.** If a file is on more than one server, put the other addresses in **Properties > Mirrors**, one a line. Parts of the file then come from all of them at once, with each new connection going to whichever server is least busy. A mirror that fails, or turns out to hold a file of another size, is left out and the others carry on. Cookies and logins only ever go to the file's own site. Mirrors don't check each other's contents, so add a checksum when you can.
+- **Servers that name their mirrors** with a `Link: <…>; rel=duplicate` header (RFC 6249) have them used without asking.
+- **Metalinks.** Give Tributary the address of a `.meta4` or `.metalink` file and it downloads the file the Metalink describes, from every server listed, under its own name, and checks it against the Metalink's checksum when it's done.
+
 ## Video
 
 The extension shows a panel in the corner of any video player on a page, and lists what it finds in its toolbar popup. Any HLS (`.m3u8`) or DASH (`.mpd`) address also works in **Add URL**, and so does the address of a page with a video on it.

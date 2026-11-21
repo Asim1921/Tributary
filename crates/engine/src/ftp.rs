@@ -343,6 +343,7 @@ pub async fn probe(target: &FtpTarget) -> Result<Remote, Problem> {
         last_modified,
         suggested_name: name::from_url(&target.url),
         content_type: None,
+        mirrors: Vec::new(),
     })
 }
 

@@ -1,7 +1,7 @@
 //! Moves bytes from the network to the file: several connections when the server
 //! supports ranges, one otherwise.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -72,6 +72,59 @@ pub struct Job {
     pub auth: Option<Arc<Authenticator>>,
     /// Set for an FTP download.
     pub ftp: Option<FtpTarget>,
+    /// Other servers with the same file, which take some of the parts.
+    pub mirrors: Vec<Mirror>,
+    /// Connections open to the download's own address.
+    pub main_active: AtomicUsize,
+}
+
+/// Another server with the same file. One that fails, or turns out to hold a different
+/// file, is dropped for the rest of the run, and its parts go back to the others.
+pub struct Mirror {
+    pub url: String,
+    /// What's sent to it. Cookies and logins only go to the download's own host.
+    pub headers: HeaderMap,
+    active: AtomicUsize,
+    dropped: AtomicBool,
+}
+
+impl Mirror {
+    pub fn new(url: String, headers: HeaderMap) -> Self {
+        Self {
+            url,
+            headers,
+            active: AtomicUsize::new(0),
+            dropped: AtomicBool::new(false),
+        }
+    }
+
+    pub fn dropped(&self) -> bool {
+        self.dropped.load(Ordering::Relaxed)
+    }
+}
+
+/// Where one connection is fetching from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Source {
+    Main,
+    Mirror(usize),
+}
+
+/// Holds a connection's place at its source, so the busiest source gets fewer new ones.
+struct InUse<'a> {
+    job: &'a Job,
+    source: Source,
+}
+
+impl Drop for InUse<'_> {
+    fn drop(&mut self) {
+        match self.source {
+            Source::Main => self.job.main_active.fetch_sub(1, Ordering::Relaxed),
+            Source::Mirror(index) => self.job.mirrors[index]
+                .active
+                .fetch_sub(1, Ordering::Relaxed),
+        };
+    }
 }
 
 /// The bytes of a file arriving from a server.
@@ -100,6 +153,28 @@ impl Body {
 impl Job {
     pub fn map(&self) -> MutexGuard<'_, SegmentMap> {
         self.map.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The source with the fewest connections now. The download's own address wins a tie.
+    fn pick(&self) -> InUse<'_> {
+        let main = self.main_active.load(Ordering::Relaxed);
+        let quietest = self
+            .mirrors
+            .iter()
+            .enumerate()
+            .filter(|(_, mirror)| !mirror.dropped())
+            .min_by_key(|(_, mirror)| mirror.active.load(Ordering::Relaxed));
+        let source = match quietest {
+            Some((index, mirror)) if mirror.active.load(Ordering::Relaxed) < main => {
+                mirror.active.fetch_add(1, Ordering::Relaxed);
+                Source::Mirror(index)
+            }
+            _ => {
+                self.main_active.fetch_add(1, Ordering::Relaxed);
+                Source::Main
+            }
+        };
+        InUse { job: self, source }
     }
 
     async fn send(&self, request: RequestBuilder) -> Result<Response, Problem> {
@@ -218,13 +293,37 @@ async fn worker(job: Arc<Job>) -> Ended {
     }
 }
 
-/// Opens one part of the file, by whichever protocol it uses.
-async fn open_range(job: &Job, claim: Claim) -> Result<Body, Problem> {
+/// Opens one part of the file, by whichever protocol it uses, from the download's own
+/// address or a mirror.
+async fn open_range(job: &Job, claim: Claim) -> Result<(Body, Option<InUse<'_>>), Problem> {
     if let Some(target) = &job.ftp {
         let opening = FtpBody::open(target, claim.from);
         return tokio::select! {
             () = job.stop.cancelled() => Err(Problem::Stopped),
-            body = opening => Ok(Body::Ftp(Box::new(body?))),
+            body = opening => Ok((Body::Ftp(Box::new(body?)), None)),
+        };
+    }
+
+    let in_use = job.pick();
+    if let Source::Mirror(index) = in_use.source {
+        let mirror = &job.mirrors[index];
+        let request = job
+            .client
+            .get(&mirror.url)
+            .headers(mirror.headers.clone())
+            .header(RANGE, format!("bytes={}-{}", claim.from, claim.end - 1));
+        // A mirror that can't serve the part is dropped; another source takes it.
+        let checked = match job.send(request).await {
+            Ok(response) => check_mirror(job, &response, claim).map(|()| response),
+            Err(Problem::Stopped) => return Err(Problem::Stopped),
+            Err(problem) => Err(problem_reason(&problem)),
+        };
+        return match checked {
+            Ok(response) => Ok((Body::Http(response), Some(in_use))),
+            Err(reason) => {
+                mirror.dropped.store(true, Ordering::Relaxed);
+                Err(Problem::retry(format!("a mirror was left out: {reason}")))
+            }
         };
     }
 
@@ -240,11 +339,37 @@ async fn open_range(job: &Job, claim: Claim) -> Result<Body, Problem> {
 
     let response = job.send(request).await?;
     check_partial(job, &response, claim)?;
-    Ok(Body::Http(response))
+    Ok((Body::Http(response), Some(in_use)))
+}
+
+/// Whether a mirror's answer is the part asked for, of a file the same size. A mirror's
+/// own validators mean nothing here, since they come from another server.
+fn check_mirror(job: &Job, response: &Response, claim: Claim) -> Result<(), String> {
+    if response.status() != StatusCode::PARTIAL_CONTENT {
+        return Err(format!("it answered {}", response.status()));
+    }
+    let range = ContentRange::from_headers(response.headers()).ok_or("it gave no range")?;
+    if range.total != job.size {
+        return Err("its file is a different size".to_owned());
+    }
+    if range.start != Some(claim.from) {
+        return Err("it sent a different part".to_owned());
+    }
+    Ok(())
+}
+
+fn problem_reason(problem: &Problem) -> String {
+    match problem {
+        Problem::Retry { reason, .. } | Problem::Fatal(reason) => reason.clone(),
+        Problem::LoginRequired { .. } => "it wants a login".to_owned(),
+        Problem::Changed => "its file changed".to_owned(),
+        Problem::Stopped => "stopped".to_owned(),
+    }
 }
 
 async fn fetch_segment(job: &Job, claim: Claim) -> Result<(), Problem> {
-    let mut body = open_range(job, claim).await?;
+    // The place at the source is held while the part arrives.
+    let (mut body, _in_use) = open_range(job, claim).await?;
 
     let mut buffer = Vec::with_capacity(WRITE_BUFFER_BYTES);
     let mut position = claim.from;

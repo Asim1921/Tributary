@@ -20,6 +20,14 @@
   let folder = $state(untrack(() => row.destDir));
   let description = $state(untrack(() => row.description ?? ''));
   let checksum = $state(untrack(() => row.checksum?.hex ?? ''));
+  let mirrors = $state(untrack(() => (row.mirrors ?? []).join('\n')));
+
+  /** The mirror addresses typed, one a line. */
+  const mirrorLines = (text: string) =>
+    text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
   const checksumOk = $derived(looksLikeChecksum(checksum));
 
   const running = $derived(row.state === 'running');
@@ -36,6 +44,10 @@
       destDir: folder === row.destDir ? undefined : folder,
       description: description === (row.description ?? '') ? undefined : description,
       checksum: checksum.trim() === (row.checksum?.hex ?? '') ? undefined : checksum.trim(),
+      mirrors:
+        mirrorLines(mirrors).join('\n') === (row.mirrors ?? []).join('\n')
+          ? undefined
+          : mirrorLines(mirrors),
     });
   }
 </script>
@@ -100,6 +112,21 @@
   {#if !checksumOk}
     <p class="error-text" role="alert">{NOT_A_CHECKSUM}</p>
   {/if}
+
+  <label class="field">
+    Mirrors
+    <textarea
+      rows="2"
+      bind:value={mirrors}
+      disabled={running || completed}
+      placeholder="Other addresses for the same file, one a line"
+      spellcheck="false"
+    ></textarea>
+  </label>
+  <p class="note">
+    Parts of the file are fetched from these too. A mirror that fails, or has a file of another
+    size, is left out. Cookies and logins only go to the file's own site.
+  </p>
 
   {#if running}
     <p class="note">Stop the download to change these.</p>

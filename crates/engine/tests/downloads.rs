@@ -415,6 +415,182 @@ async fn an_expired_link_fails_and_a_fresh_one_carries_on() {
     );
 }
 
+/// The bytes the server sent for one address, in parts of the file.
+fn bytes_sent_for(fixture: &Fixture, target: &str) -> u64 {
+    fixture
+        .server
+        .records()
+        .iter()
+        .filter(|record| record.target.contains(target) && record.status == 206)
+        .filter_map(range_of)
+        .filter(|range| *range != "bytes=0-0")
+        .filter_map(|range| {
+            let (start, end) = range.strip_prefix("bytes=")?.split_once('-')?;
+            Some(end.parse::<u64>().ok()? - start.parse::<u64>().ok()? + 1)
+        })
+        .sum()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_mirror_takes_some_of_the_parts() {
+    let fixture = fixture().await;
+    let id = fixture
+        .engine
+        .add(NewDownload {
+            mirrors: vec![fixture.server.url("/file/12M.bin?rate=2M&token=mirror")],
+            ..fixture.new_download("/file/12M.bin?rate=2M&token=main")
+        })
+        .unwrap();
+    let download = fixture.engine.wait(id).await.unwrap();
+
+    assert_completed(&download, 1, 12 * MIB);
+    let (main, mirror) = (
+        bytes_sent_for(&fixture, "token=main"),
+        bytes_sent_for(&fixture, "token=mirror"),
+    );
+    assert!(mirror > 0, "the mirror sent nothing");
+    assert!(main > 0, "the download's own address sent nothing");
+    assert_eq!(
+        fixture.engine.get(id).unwrap().mirrors.len(),
+        1,
+        "the mirror is kept"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_mirror_with_another_file_or_none_at_all_is_left_out() {
+    let fixture = fixture().await;
+    let id = fixture
+        .engine
+        .add(NewDownload {
+            mirrors: vec![
+                // A different size means a different file.
+                fixture.server.url("/file/9M.bin?token=wrong"),
+                fixture
+                    .server
+                    .url("/file/8M.bin?fail=404&fail_times=1000&token=gone"),
+                "ftp://not.a.mirror/8M.bin".to_owned(),
+            ],
+            ..fixture.new_download("/file/8M.bin?rate=4M")
+        })
+        .unwrap();
+    let download = fixture.engine.wait(id).await.unwrap();
+
+    // The file is right, so nothing from the wrong mirror was kept, and each bad mirror
+    // was asked no more than once a connection before being left out.
+    assert_completed(&download, 1, 8 * MIB);
+    let asked = |token: &str| {
+        fixture
+            .server
+            .records()
+            .iter()
+            .filter(|record| record.target.contains(token))
+            .count()
+    };
+    assert!(
+        (1..=8).contains(&asked("token=wrong")),
+        "asked {}",
+        asked("token=wrong")
+    );
+    assert!(
+        (1..=8).contains(&asked("token=gone")),
+        "asked {}",
+        asked("token=gone")
+    );
+    // Only web addresses are kept.
+    assert_eq!(fixture.engine.get(id).unwrap().mirrors.len(), 2);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_duplicate_the_server_names_is_used() {
+    let fixture = fixture().await;
+    let download = fixture
+        .download("/file/12M.bin?rate=2M&duplicate=named")
+        .await;
+
+    assert_completed(&download, 1, 12 * MIB);
+    assert!(
+        bytes_sent_for(&fixture, "token=named") > 0,
+        "the named duplicate was never used"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cookies_never_go_to_a_mirror_on_another_host() {
+    let fixture = fixture().await;
+    // The same server under another name stands in for another host.
+    let elsewhere = fixture
+        .server
+        .url("/file/12M.bin?rate=2M&token=elsewhere")
+        .replace("127.0.0.1", "localhost");
+    let id = fixture
+        .engine
+        .add(NewDownload {
+            headers: vec![("Cookie".to_owned(), "session=secret".to_owned())],
+            mirrors: vec![elsewhere],
+            ..fixture.new_download("/file/12M.bin?rate=2M&token=home")
+        })
+        .unwrap();
+    let download = fixture.engine.wait(id).await.unwrap();
+    assert_completed(&download, 1, 12 * MIB);
+
+    let records = fixture.server.records();
+    let has_cookie = |record: &Record| {
+        record
+            .headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("cookie"))
+    };
+    let mirror: Vec<&Record> = records
+        .iter()
+        .filter(|record| record.target.contains("token=elsewhere"))
+        .collect();
+    assert!(!mirror.is_empty(), "the mirror was never used");
+    assert!(
+        mirror.iter().all(|record| !has_cookie(record)),
+        "a cookie went to the mirror"
+    );
+    assert!(
+        records
+            .iter()
+            .filter(|record| record.target.contains("token=home"))
+            .all(has_cookie),
+        "the download's own host lost its cookie"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_metalink_becomes_its_file_from_every_server_with_its_checksum() {
+    let fixture = fixture().await;
+
+    let info = fixture
+        .engine
+        .inspect(&fixture.server.url("/metalink/12M.bin.meta4"), &[], None)
+        .await
+        .unwrap();
+    assert_eq!(info.file_name, "12M.bin");
+    assert_eq!(info.size, Some(12 * MIB));
+
+    let download = fixture.download("/metalink/12M.bin.meta4").await;
+
+    assert_completed(&download, 1, 12 * MIB);
+    assert_eq!(download.file_name.as_deref(), Some("12M.bin"));
+    assert!(download.url.contains("token=a"), "{}", download.url);
+    assert_eq!(download.mirrors.len(), 1);
+    assert_eq!(
+        download
+            .checksum
+            .as_ref()
+            .map(|checksum| checksum.hex.clone()),
+        Some(content::sha256(1, 12 * MIB))
+    );
+    assert!(bytes_sent_for(&fixture, "token=a") > 0);
+    assert!(
+        bytes_sent_for(&fixture, "token=b") > 0,
+        "the second server was never used"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn an_empty_file_works() {
     let fixture = fixture().await;
@@ -1026,9 +1202,16 @@ async fn removing_the_speed_limit_takes_effect_on_a_running_download() {
 
     fixture.engine.set_speed_limit(None);
 
+    // Only the download is timed, not checking the file afterwards, which a slow machine
+    // takes a while over.
     let began = Instant::now();
-    assert_completed(&fixture.engine.wait(id).await.unwrap(), 1, 32 * MIB);
-    assert!(began.elapsed() < Duration::from_secs(10), "still limited");
+    let done = fixture.engine.wait(id).await.unwrap();
+    let took = began.elapsed();
+    assert_completed(&done, 1, 32 * MIB);
+    assert!(
+        took < Duration::from_secs(10),
+        "still limited: took {took:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

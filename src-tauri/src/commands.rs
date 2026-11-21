@@ -314,6 +314,8 @@ pub struct DownloadView {
     link_expired: bool,
     /// Waiting for the browser to hand over a fresh link.
     awaiting_link: bool,
+    /// Other servers with the same file.
+    mirrors: Vec<String>,
 }
 
 /// A checksum as the window shows it.
@@ -412,6 +414,7 @@ impl From<Download> for DownloadView {
             finishing: None,
             link_expired,
             awaiting_link: false,
+            mirrors: download.mirrors,
         }
     }
 }
@@ -747,6 +750,23 @@ pub async fn find_checksum(
         .map(ChecksumView::from))
 }
 
+/// Sets the other servers a download's file can come from, one address a line. Only web
+/// addresses are kept. A running download uses them the next time it starts.
+#[tauri::command]
+pub async fn set_mirrors(
+    app: AppHandle,
+    state: Managed<'_, AppState>,
+    id: i64,
+    mirrors: Vec<String>,
+) -> Result<(), String> {
+    state
+        .engine
+        .set_mirrors(DownloadId(id), &mirrors)
+        .map_err(text)?;
+    let _ = app.emit("queues-changed", ());
+    Ok(())
+}
+
 /// Sets what a download's checksum should be, or none, and checks a finished file at once.
 #[tauri::command]
 pub async fn set_checksum(
@@ -1017,6 +1037,7 @@ pub fn add_download_now(
             parts: request.parts,
             checksum,
             finish_plan: request.finish_plan,
+            mirrors: Vec::new(),
         })
         .map_err(text)?;
 
@@ -1392,6 +1413,7 @@ mod tests {
             checksum: None,
             checksum_matches: None,
             finish_plan: None,
+            mirrors: Vec::new(),
         }
     }
 

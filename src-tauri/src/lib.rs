@@ -631,6 +631,7 @@ pub fn run() {
             updates::app_version,
             updates::restart_to_update,
             commands::set_checksum,
+            commands::set_mirrors,
             commands::add_batch,
             commands::extension_folder,
             commands::add_dropped_link,

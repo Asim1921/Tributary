@@ -11,6 +11,7 @@ mod engine;
 mod error;
 mod ftp;
 mod limits;
+pub mod metalink;
 pub mod name;
 mod parts;
 mod remote;

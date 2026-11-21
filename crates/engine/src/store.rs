@@ -24,7 +24,7 @@ const SETTINGS: &str = "
 
 /// Each entry upgrades the database by one version, tracked in `PRAGMA user_version`.
 /// Add new entries to the end. Never change an entry that has been released.
-const MIGRATIONS: [&str; 5] = [
+const MIGRATIONS: [&str; 6] = [
     "
     CREATE TABLE IF NOT EXISTS downloads (
         id            INTEGER PRIMARY KEY,
@@ -85,6 +85,9 @@ const MIGRATIONS: [&str; 5] = [
     ALTER TABLE downloads ADD COLUMN checksum_ok INTEGER;
     ALTER TABLE downloads ADD COLUMN finish_plan TEXT;
     ",
+    "
+    ALTER TABLE downloads ADD COLUMN mirrors TEXT;
+    ",
 ];
 
 const SELECT_DOWNLOAD: &str = "
@@ -94,7 +97,7 @@ const SELECT_DOWNLOAD: &str = "
            d.description, d.added_at, d.completed_at, d.part_dir,
            d.queue_id, d.category, d.replace_on_finish,
            d.stream_parts IS NOT NULL, d.parts_done, d.companion,
-           d.checksum, d.checksum_ok, d.finish_plan
+           d.checksum, d.checksum_ok, d.finish_plan, d.mirrors
     FROM downloads d
 ";
 
@@ -182,6 +185,8 @@ pub struct Download {
     pub checksum_matches: Option<bool>,
     /// What the app still has to do to the file once it's finished, in its own words.
     pub finish_plan: Option<String>,
+    /// Other servers with the same file, given by hand or by a Metalink.
+    pub mirrors: Vec<String>,
 }
 
 impl Download {
@@ -224,6 +229,10 @@ impl Download {
                 .and_then(Checksum::parse),
             checksum_matches: row.get(24)?,
             finish_plan: row.get(25)?,
+            mirrors: row
+                .get::<_, Option<String>>(26)?
+                .and_then(|text| serde_json::from_str(&text).ok())
+                .unwrap_or_default(),
         })
     }
 }
@@ -459,6 +468,17 @@ impl Store {
         self.lock().execute(
             "UPDATE downloads SET checksum = ?2, checksum_ok = NULL WHERE id = ?1",
             params![id.0, checksum.map(Checksum::to_string)],
+        )?;
+        Ok(())
+    }
+
+    /// Sets the other servers a download's file can come from.
+    pub fn set_mirrors(&self, id: DownloadId, mirrors: &[String]) -> rusqlite::Result<()> {
+        let text = (!mirrors.is_empty())
+            .then(|| serde_json::to_string(mirrors).unwrap_or_else(|_| "[]".to_owned()));
+        self.lock().execute(
+            "UPDATE downloads SET mirrors = ?2 WHERE id = ?1",
+            params![id.0, text],
         )?;
         Ok(())
     }

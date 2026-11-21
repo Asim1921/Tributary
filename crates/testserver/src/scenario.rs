@@ -54,6 +54,9 @@ pub struct Scenario {
     /// first asked for, as a signed link that expires does. Another address for the same
     /// file, say with a different `token`, starts afresh.
     pub expire_after_ms: Option<u64>,
+    /// Names the same file at `/file/<name>?token=<this>` as a duplicate, in a
+    /// `Link: <…>; rel=duplicate` header (RFC 6249).
+    pub duplicate: Option<String>,
     pub require_cookie: Option<String>,
     pub require_referer: Option<String>,
     pub filename: Option<String>,
@@ -82,6 +85,7 @@ impl Scenario {
             redirects: 0,
             change_after: None,
             expire_after_ms: None,
+            duplicate: None,
             require_cookie: None,
             require_referer: None,
             filename: None,
@@ -108,6 +112,7 @@ impl Scenario {
                 "redirects" => scenario.redirects = number(key, value)?,
                 "change_after" => scenario.change_after = Some(number(key, value)?),
                 "expire_after_ms" => scenario.expire_after_ms = Some(number(key, value)?),
+                "duplicate" => scenario.duplicate = Some(header_safe(key, decode(key, value)?)?),
                 // Only there to make another address for the same file.
                 "token" => {}
                 "require_cookie" => scenario.require_cookie = Some(decode(key, value)?),
