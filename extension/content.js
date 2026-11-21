@@ -47,6 +47,10 @@ const PANEL_STYLE = `
 
 // These match `MIN_PLAYER_LONG_SIDE` and `MIN_PLAYER_SHORT_SIDE` in rules.js, which a test
 // checks. A content script can't import that file, so the two numbers are kept here too.
+// Set by scripts/build-extension.mjs for the browser stores, whose rules don't allow
+// saving YouTube's videos: no button on YouTube there.
+const STORE_BUILD = false;
+
 const MIN_PLAYER_LONG_SIDE = 320;
 const MIN_PLAYER_SHORT_SIDE = 180;
 
@@ -133,6 +137,7 @@ function currentPlayer() {
 let pointerOnPanel = false;
 
 function playerWorthPanel() {
+  if (STORE_BUILD && /(^|\.)youtube\.com$|^youtu\.be$/.test(location.hostname)) return false;
   const video = largestVideo();
   if (!video) return false;
 

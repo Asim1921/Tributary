@@ -7,7 +7,7 @@ import { DocSection } from "@/components/pages/doc-section";
 import { PageHeader } from "@/components/pages/page-header";
 import { FlowList, InlineCode } from "@/components/pages/text";
 
-const updated = "2026-11-19";
+const updated = "2026-11-21";
 
 const description =
   "What Tributary's website keeps (a download count and short server logs, no cookies, no analytics) and what the app keeps: everything stays on your computer.";
@@ -104,6 +104,9 @@ export default function PrivacyPage() {
             "Cookies that your browser passes on for a download are held in memory only and never written to disk, so after a restart such a download may need its link again.",
             "The browser extension talks only to Tributary on your computer.",
             "Tributary connects to the sites you download from, and to the place yt-dlp is published when you ask it to install or update yt-dlp. yt-dlp is never given your cookies or logins.",
+            "Once a day, Tributary asks this website whether there's a newer version. It sends only the version it is and that it runs on 64-bit Windows, and you can turn this off under Options, General.",
+            "When you press Find in its start dialog, Tributary asks the site you're downloading from for the checksum it publishes beside the file, without your cookies.",
+            "Mirrors and Metalink servers you or a site name get the parts of the file they serve. Your cookies and logins only go to the file's own site.",
           ]}
         />
       </DocSection>

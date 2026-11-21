@@ -16,6 +16,12 @@ Chrome and Edge don't allow outside installs, so this is a one-time step per bro
 
 Turn off any other download manager's extension, because both would try to take the same downloads.
 
+**Other browsers.** Brave, Vivaldi, Opera and Chromium load the same extension folder the same way, and Tributary registers itself with each of them.
+
+**Firefox** only runs add-ons Mozilla has signed. `node scripts/build-extension.mjs firefox` makes the Firefox version in `dist/firefox/` and a zip beside it, for its publisher to have signed as an unlisted add-on on addons.mozilla.org. Once installed, it talks to Tributary like the others: the app registers a host for it with its own ID.
+
+**Store versions.** `node scripts/build-extension.mjs store` makes a version for the Chrome Web Store and Edge Add-ons in `dist/store/`. Their rules don't allow downloading YouTube's videos, so it shows no button on YouTube; everything else is the same. Submitting it needs a developer account with each store.
+
 **After updating Tributary, reload the extension.** Open `chrome://extensions` and press the circular arrow on Tributary's card. Chrome often keeps running in the background after its windows are closed, still holding the old extension in memory, so new features such as the YouTube button won't appear until it's reloaded.
 
 Hold **Ctrl** while clicking to force a download into Tributary, or **Alt** to leave it with the browser. Both keys can be changed in Options.

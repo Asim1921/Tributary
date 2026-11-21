@@ -18,9 +18,14 @@ import {
   shouldCapture,
   usableLinks,
   shouldReload,
+  isYouTubeAddress,
 } from './rules.js';
 
 const HOST = 'app.tributary.capture';
+
+// Set by scripts/build-extension.mjs for the browser stores, whose rules don't allow
+// saving YouTube's videos.
+const STORE_BUILD = false;
 const SETTINGS_MAX_AGE_MS = 15_000;
 
 let settingsAt = 0;
@@ -228,6 +233,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
  */
 async function savePage(message, sender) {
   if (!sender.tab) return;
+  if (STORE_BUILD && (isYouTubeAddress(message.page) || isYouTubeAddress(sender.tab.url))) return;
   const page = message.page;
   const player = message.player ?? {};
   const url = videoPageAddress({

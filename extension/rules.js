@@ -457,3 +457,13 @@ export function usableLinks(urls) {
 export function shouldReload(appVersion, ownVersion, reloadedFor) {
   return Boolean(appVersion) && appVersion !== ownVersion && reloadedFor !== appVersion;
 }
+
+/** Whether an address is on YouTube, which the store builds leave alone. */
+export function isYouTubeAddress(text) {
+  try {
+    const url = new URL(text);
+    return isYouTube(url) || url.hostname === 'youtu.be';
+  } catch {
+    return false;
+  }
+}

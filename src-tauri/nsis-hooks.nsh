@@ -5,4 +5,5 @@
   DeleteRegKey HKCU "Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\app.tributary.capture"
   DeleteRegKey HKCU "Software\Vivaldi\NativeMessagingHosts\app.tributary.capture"
   DeleteRegKey HKCU "Software\Chromium\NativeMessagingHosts\app.tributary.capture"
+  DeleteRegKey HKCU "Software\Mozilla\NativeMessagingHosts\app.tributary.capture"
 !macroend

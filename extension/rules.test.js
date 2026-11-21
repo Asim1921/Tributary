@@ -32,6 +32,7 @@ import {
   wildcardMatch,
   worthSaving,
   shouldReload,
+  isYouTubeAddress,
 } from './rules.js';
 
 describe('mediaKind', () => {
@@ -786,5 +787,24 @@ describe('shouldReload', () => {
     expect(shouldReload('0.2.0', '0.2.0', undefined)).toBe(false);
     expect(shouldReload(undefined, '0.1.0', undefined)).toBe(false);
     expect(shouldReload('', '0.1.0', undefined)).toBe(false);
+  });
+});
+
+describe('isYouTubeAddress', () => {
+  it('knows YouTube and its short links', () => {
+    for (const url of [
+      'https://www.youtube.com/watch?v=abc',
+      'https://youtube.com/',
+      'https://music.youtube.com/watch?v=abc',
+      'https://youtu.be/abc',
+    ]) {
+      expect(isYouTubeAddress(url), url).toBe(true);
+    }
+  });
+
+  it('leaves everything else', () => {
+    for (const url of ['https://notyoutube.com/', 'https://youtube.com.evil.test/', 'not an address', undefined]) {
+      expect(isYouTubeAddress(url), String(url)).toBe(false);
+    }
   });
 });

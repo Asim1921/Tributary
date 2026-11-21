@@ -35,6 +35,13 @@ const HOST_NAME: &str = "app.tributary.capture";
 /// Fixed by the public key in the extension's manifest.
 pub const EXTENSION_ID: &str = "khhpmnkkeejcjhbnknnghhahncphbobk";
 
+/// The Firefox add-on's ID, fixed in its manifest by `scripts/build-extension.mjs`.
+pub const FIREFOX_ID: &str = "{8e47a714-dbc1-470d-a416-9dddedafd3a6}";
+
+/// Where Firefox looks for native messaging hosts, under the current user. Its manifest
+/// names the add-ons allowed in, not the extensions.
+const FIREFOX_KEY: &str = r"Software\Mozilla\NativeMessagingHosts";
+
 /// Where each browser looks for native messaging hosts, under the current user. Opera reads
 /// Chrome's.
 const BROWSER_KEYS: [&str; 5] = [
@@ -252,6 +259,17 @@ fn host_manifest(host_path: &Path) -> String {
     .to_string()
 }
 
+fn firefox_manifest(host_path: &Path) -> String {
+    json!({
+        "name": HOST_NAME,
+        "description": "Tributary download manager",
+        "path": plain_path(host_path),
+        "type": "stdio",
+        "allowed_extensions": [FIREFOX_ID],
+    })
+    .to_string()
+}
+
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(iter::once(0)).collect()
 }
@@ -261,24 +279,32 @@ fn wide(text: &str) -> Vec<u16> {
 pub fn register_with_browsers(data_dir: &Path, host_path: &Path) -> io::Result<()> {
     let manifest_path = data_dir.join("native-host.json");
     fs::write(&manifest_path, host_manifest(host_path))?;
-
-    let value = wide(&manifest_path.to_string_lossy());
     for key in BROWSER_KEYS {
-        let subkey = wide(&format!(r"{key}\{HOST_NAME}"));
-        // SAFETY: the strings are null-terminated, and the size covers the whole value.
-        let status = unsafe {
-            RegSetKeyValueW(
-                HKEY_CURRENT_USER,
-                subkey.as_ptr(),
-                ptr::null(),
-                REG_SZ,
-                value.as_ptr().cast(),
-                (value.len() * size_of::<u16>()) as u32,
-            )
-        };
-        if status != ERROR_SUCCESS {
-            return Err(io::Error::from_raw_os_error(status as i32));
-        }
+        point_key_at(key, &manifest_path)?;
+    }
+
+    let firefox_path = data_dir.join("native-host-firefox.json");
+    fs::write(&firefox_path, firefox_manifest(host_path))?;
+    point_key_at(FIREFOX_KEY, &firefox_path)
+}
+
+/// Sets a browser's key for the host to the manifest at `path`.
+fn point_key_at(key: &str, path: &Path) -> io::Result<()> {
+    let value = wide(&path.to_string_lossy());
+    let subkey = wide(&format!(r"{key}\{HOST_NAME}"));
+    // SAFETY: the strings are null-terminated, and the size covers the whole value.
+    let status = unsafe {
+        RegSetKeyValueW(
+            HKEY_CURRENT_USER,
+            subkey.as_ptr(),
+            ptr::null(),
+            REG_SZ,
+            value.as_ptr().cast(),
+            (value.len() * size_of::<u16>()) as u32,
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return Err(io::Error::from_raw_os_error(status as i32));
     }
     Ok(())
 }
@@ -288,9 +314,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn firefox_is_told_which_add_on_may_talk_to_the_host() {
+        let manifest: serde_json::Value =
+            serde_json::from_str(&firefox_manifest(Path::new(r"C:\Tributary\host.exe"))).unwrap();
+        assert_eq!(manifest["allowed_extensions"], json!([FIREFOX_ID]));
+        assert!(manifest.get("allowed_origins").is_none());
+        assert_eq!(manifest["name"], HOST_NAME);
+        // The build script fixes the same ID in the add-on.
+        let script = include_str!("../../scripts/build-extension.mjs");
+        assert!(script.contains(FIREFOX_ID));
+    }
+
+    #[test]
     fn uninstalling_removes_what_every_browser_was_given() {
         let hooks = include_str!("../nsis-hooks.nsh");
-        for key in BROWSER_KEYS {
+        for key in BROWSER_KEYS.into_iter().chain([FIREFOX_KEY]) {
             let line = format!("DeleteRegKey HKCU \"{key}\\{HOST_NAME}\"");
             assert!(hooks.contains(&line), "the uninstaller leaves {key}");
         }
