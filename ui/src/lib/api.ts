@@ -24,6 +24,7 @@ import type {
   UpdateInfo,
   ListView,
   PhoneStatus,
+  TorrentPreview,
 } from './types';
 
 /** What the app says when a server wants a login it doesn't have. */
@@ -62,6 +63,12 @@ export const setMirrors = (id: number, mirrors: string[]) => invoke<void>('set_m
 export const phoneStatus = () => invoke<PhoneStatus>('phone_status');
 export const setPhone = (on: boolean) => invoke<PhoneStatus>('set_phone', { on });
 export const newPhoneCode = () => invoke<PhoneStatus>('new_phone_code');
+export const inspectTorrent = (url: string) => invoke<TorrentPreview>('inspect_torrent', { url });
+export const addTorrent = (chosen: number[], destDir: string, keepSharing: boolean, later: boolean) =>
+  invoke<number>('add_torrent', { chosen, destDir, keepSharing, later });
+export const chooseForMagnetLinks = () => invoke<void>('choose_for_magnet_links');
+export const onTorrentOffered = (handler: (url: string) => void): Promise<UnlistenFn> =>
+  listen<string>('torrent-offered', (event) => handler(event.payload));
 export const findChecksum = (url: string, fileName?: string) =>
   invoke<Checksum | null>('find_checksum', { url, fileName });
 export const setChecksum = (id: number, checksum: string | null) =>

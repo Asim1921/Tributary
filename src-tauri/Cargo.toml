@@ -13,6 +13,7 @@ crate-type = ["rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+bytes = "1"
 drag = "2.1.1"
 engine = { path = "../crates/engine" }
 grabber = { path = "../crates/grabber" }
@@ -52,6 +53,7 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 getrandom = "0.3"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+librqbit = { version = "9.1", default-features = false, features = ["default-tls"] }
 
 [dev-dependencies]
 tempfile = "3"

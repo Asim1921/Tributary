@@ -288,6 +288,80 @@ pub fn register_with_browsers(data_dir: &Path, host_path: &Path) -> io::Result<(
     point_key_at(FIREFOX_KEY, &firefox_path)
 }
 
+/// Values to set under the current user, each `(key, value name, data)`, with `None` for
+/// the key's default value.
+type RegistryValue = (String, Option<&'static str>, String);
+
+/// What lists Tributary among the apps that can open magnet links, in Windows' Default
+/// apps. It doesn't take magnet links over: the user chooses there.
+fn magnet_values(app_path: &Path) -> Vec<RegistryValue> {
+    let app = plain_path(app_path).to_string_lossy().into_owned();
+    let class = r"Software\Classes\Tributary.Magnet".to_owned();
+    vec![
+        (class.clone(), None, "Magnet link".to_owned()),
+        (class.clone(), Some("URL Protocol"), String::new()),
+        (
+            format!(r"{class}\DefaultIcon"),
+            None,
+            format!("\"{app}\",0"),
+        ),
+        (
+            format!(r"{class}\shell\open\command"),
+            None,
+            format!("\"{app}\" --add \"%1\""),
+        ),
+        (
+            r"Software\Tributary\Capabilities".to_owned(),
+            Some("ApplicationName"),
+            "Tributary".to_owned(),
+        ),
+        (
+            r"Software\Tributary\Capabilities".to_owned(),
+            Some("ApplicationDescription"),
+            "Downloads files, video and torrents".to_owned(),
+        ),
+        (
+            r"Software\Tributary\Capabilities\URLAssociations".to_owned(),
+            Some("magnet"),
+            "Tributary.Magnet".to_owned(),
+        ),
+        (
+            r"Software\RegisteredApplications".to_owned(),
+            Some("Tributary"),
+            r"Software\Tributary\Capabilities".to_owned(),
+        ),
+    ]
+}
+
+/// Lists Tributary as an app that can open magnet links. Safe to repeat.
+pub fn offer_for_magnet_links(app_path: &Path) -> io::Result<()> {
+    for (key, name, data) in magnet_values(app_path) {
+        set_value(&key, name, &data)?;
+    }
+    Ok(())
+}
+
+fn set_value(key: &str, name: Option<&str>, data: &str) -> io::Result<()> {
+    let value = wide(data);
+    let subkey = wide(key);
+    let name = name.map(wide);
+    // SAFETY: the strings are null-terminated, and the size covers the whole value.
+    let status = unsafe {
+        RegSetKeyValueW(
+            HKEY_CURRENT_USER,
+            subkey.as_ptr(),
+            name.as_ref().map_or(ptr::null(), |name| name.as_ptr()),
+            REG_SZ,
+            value.as_ptr().cast(),
+            (value.len() * size_of::<u16>()) as u32,
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return Err(io::Error::from_raw_os_error(status as i32));
+    }
+    Ok(())
+}
+
 /// Sets a browser's key for the host to the manifest at `path`.
 fn point_key_at(key: &str, path: &Path) -> io::Result<()> {
     let value = wide(&path.to_string_lossy());
@@ -312,6 +386,52 @@ fn point_key_at(key: &str, path: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn magnet_links_are_offered_not_taken() {
+        let values = magnet_values(Path::new(
+            r"\\?\C:\Users\a\AppData\Local\Tributary\tributary.exe",
+        ));
+        let find = |key: &str, name: Option<&str>| {
+            values
+                .iter()
+                .find(|(k, n, _)| k == key && *n == name)
+                .map(|(_, _, data)| data.clone())
+        };
+        assert_eq!(
+            find(
+                r"Software\Classes\Tributary.Magnet\shell\open\command",
+                None
+            )
+            .as_deref(),
+            Some(r#""C:\Users\a\AppData\Local\Tributary\tributary.exe" --add "%1""#)
+        );
+        assert_eq!(
+            find(
+                r"Software\Tributary\Capabilities\URLAssociations",
+                Some("magnet")
+            )
+            .as_deref(),
+            Some("Tributary.Magnet")
+        );
+        // Windows' own magnet key, whichever app owns it now, is never touched.
+        assert!(
+            values
+                .iter()
+                .all(|(key, _, _)| !key.eq_ignore_ascii_case(r"Software\Classes\magnet"))
+        );
+        // And the uninstaller removes what was added.
+        let hooks = include_str!("../nsis-hooks.nsh");
+        for key in [r"Software\Classes\Tributary.Magnet", r"Software\Tributary"] {
+            assert!(
+                hooks.contains(&format!("DeleteRegKey HKCU \"{key}\"")),
+                "{key}"
+            );
+        }
+        assert!(
+            hooks.contains(r#"DeleteRegValue HKCU "Software\RegisteredApplications" "Tributary""#)
+        );
+    }
 
     #[test]
     fn firefox_is_told_which_add_on_may_talk_to_the_host() {

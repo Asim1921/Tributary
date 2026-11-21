@@ -147,8 +147,8 @@ fn default_capture_types() -> Vec<String> {
     [
         "7z", "aac", "apk", "avi", "bin", "bz2", "deb", "dmg", "doc", "docx", "exe", "flac", "flv",
         "gz", "img", "iso", "m4a", "m4v", "mkv", "mov", "mp3", "mp4", "msi", "msix", "ogg", "pdf",
-        "ppt", "pptx", "rar", "rpm", "tar", "wav", "webm", "wma", "wmv", "xls", "xlsx", "xz",
-        "zip",
+        "ppt", "pptx", "rar", "rpm", "tar", "torrent", "wav", "webm", "wma", "wmv", "xls", "xlsx",
+        "xz", "zip",
     ]
     .map(str::to_owned)
     .to_vec()

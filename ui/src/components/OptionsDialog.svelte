@@ -4,6 +4,7 @@
   import {
     appVersion,
     checkForUpdate,
+    chooseForMagnetLinks,
     deleteSiteLogin,
     extensionFolder,
     installYtdlp,
@@ -335,6 +336,10 @@
         <input type="checkbox" bind:checked={draft.showCompleteDialog} />
         Show a message when a download finishes
       </label>
+      <p class="note">
+        To open magnet links in Tributary, choose it for them in Windows' Default apps.
+        <button type="button" onclick={() => void chooseForMagnetLinks()}>Choose Tributary…</button>
+      </p>
       <label class="check">
         <input type="checkbox" bind:checked={draft.notifyInBackground} />
         Show a Windows notification when downloads finish while Tributary is in the background

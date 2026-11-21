@@ -6,4 +6,7 @@
   DeleteRegKey HKCU "Software\Vivaldi\NativeMessagingHosts\app.tributary.capture"
   DeleteRegKey HKCU "Software\Chromium\NativeMessagingHosts\app.tributary.capture"
   DeleteRegKey HKCU "Software\Mozilla\NativeMessagingHosts\app.tributary.capture"
+  DeleteRegKey HKCU "Software\Classes\Tributary.Magnet"
+  DeleteRegKey HKCU "Software\Tributary"
+  DeleteRegValue HKCU "Software\RegisteredApplications" "Tributary"
 !macroend

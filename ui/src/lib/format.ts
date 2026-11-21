@@ -130,7 +130,20 @@ export function droppedLink(data: Pick<DataTransfer, 'getData'> | null): string 
   return line && isDownloadableUrl(line) ? line : null;
 }
 
+/** Whether an address is a torrent: a magnet link, or a `.torrent` file on the web. */
+export function isTorrentAddress(text: string): boolean {
+  const trimmed = text.trim();
+  if (/^magnet:/i.test(trimmed)) return /xt=urn:btih:/i.test(trimmed);
+  try {
+    const url = new URL(trimmed);
+    return (url.protocol === 'http:' || url.protocol === 'https:') && url.pathname.toLowerCase().endsWith('.torrent');
+  } catch {
+    return false;
+  }
+}
+
 export function isDownloadableUrl(text: string): boolean {
+  if (isTorrentAddress(text)) return true;
   try {
     const { protocol } = new URL(text.trim());
     return protocol === 'http:' || protocol === 'https:' || protocol === 'ftp:';

@@ -30,6 +30,9 @@ const ROOT = resolve(import.meta.dirname, '..');
 const APP = process.env.E2E_APP ?? join(ROOT, 'target', 'release', 'tributary.exe');
 const SERVER = join(ROOT, 'target', 'release', 'testserver.exe');
 const HOST = join(ROOT, 'target', 'release', 'tributary-host.exe');
+// Shares a small torrent from this computer only: cargo build --release --example seed -p tributary
+const SEEDER = join(ROOT, 'target', 'release', 'examples', 'seed.exe');
+const SEEDER_PORT = 8799;
 const PIPE = `\\\\.\\pipe\\tributary-e2e-${process.pid}`;
 const SERVER_PORT = 8791;
 const DEBUG_PORT = 9333;
@@ -279,6 +282,9 @@ try {
     TRIBUTARY_NO_NOTIFICATIONS: '1',
     // The phone page listens on this computer only, not the home network.
     TRIBUTARY_PHONE_ADDRESS: '127.0.0.1',
+    // Torrents find the local seeder directly, and nothing reaches the internet.
+    TRIBUTARY_NO_DHT: '1',
+    TRIBUTARY_TORRENT_PEERS: `127.0.0.1:${SEEDER_PORT}`,
     WEBVIEW2_USER_DATA_FOLDER: join(dataDir, 'webview'),
     WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${DEBUG_PORT}`,
   };
@@ -929,6 +935,54 @@ try {
     await page.getByLabel('Let my phone send links over the home network').uncheck();
     await page.getByRole('button', { name: 'Cancel' }).click();
     await assert.rejects(fetch(`${origin}/`));
+  });
+
+  await step('a torrent downloads only the files chosen, into a folder of its own', async () => {
+    const seeder = spawn(SEEDER, [videoDir, String(SEEDER_PORT)], { stdio: ['ignore', 'pipe', 'ignore'] });
+    try {
+      const said = await new Promise((resolve, reject) => {
+        let text = '';
+        seeder.stdout.on('data', (data) => {
+          text += data;
+          if (text.includes('seeding')) resolve(text);
+        });
+        seeder.on('exit', () => reject(new Error('the seeder stopped')));
+        setTimeout(() => reject(new Error('the seeder never started')), 60_000);
+      });
+      const sha = /sha256 a\.bin ([0-9a-f]{64})/.exec(said)[1];
+
+      await page.getByRole('button', { name: 'Add URL' }).first().click();
+      await page.getByLabel('Address').fill(`${BASE}/static/album.torrent`);
+      await page.getByRole('button', { name: 'Continue' }).click();
+      await page.getByRole('heading', { name: 'album' }).waitFor({ timeout: 60_000 });
+      assert.equal(await page.getByRole('checkbox', { name: /\.bin/ }).count(), 2);
+      await page.getByRole('checkbox', { name: /b\.bin/ }).uncheck();
+      await page.getByText('1 of 2 files', { exact: false }).waitFor();
+      await page.getByLabel('Folder').fill(downloadDir);
+      await shot(page, '55-torrent');
+      await page.getByRole('button', { name: 'Download', exact: true }).click();
+      await page.getByRole('dialog').waitFor({ state: 'hidden' });
+
+      const row = rowFor(page, 'album');
+      await row.getByText('Complete', { exact: true }).waitFor({ timeout: 60_000 });
+      if (await page.getByRole('heading', { name: 'Download complete' }).count()) {
+        await page.getByRole('button', { name: 'Close' }).click();
+      }
+      assert.equal(await sha256(join(downloadDir, 'album', 'a.bin')), sha);
+      assert.equal(await row.getAttribute('data-state'), 'completed');
+      // Its size is the chosen file's, not the whole torrent's.
+      await row.getByText('1.4 MB', { exact: true }).waitFor();
+
+      // The engine's own tools don't apply to a torrent; its magnet link can be copied.
+      await row.click({ button: 'right' });
+      await shot(page, '56-torrent-menu');
+      assert.ok(await page.getByRole('menuitem', { name: 'Properties' }).isDisabled());
+      assert.ok(await page.getByRole('menuitem', { name: 'Get a fresh link' }).isDisabled());
+      assert.ok(await page.getByRole('menuitem', { name: 'Copy address' }).isEnabled());
+      await page.keyboard.press('Escape');
+    } finally {
+      seeder.kill();
+    }
   });
 
   await step('a site that publishes no checksum says so, and a mistyped one is refused', async () => {

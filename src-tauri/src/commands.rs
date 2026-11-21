@@ -323,6 +323,41 @@ pub struct DownloadView {
     awaiting_link: bool,
     /// Other servers with the same file.
     mirrors: Vec<String>,
+    /// `download`, or `torrent` for a torrent, whose id is below zero.
+    kind: &'static str,
+}
+
+impl DownloadView {
+    /// A torrent's row, beside the engine's downloads.
+    fn torrent(row: crate::torrents::TorrentRow) -> Self {
+        Self {
+            id: row.id,
+            url: row.address,
+            file_name: Some(row.name),
+            dest_dir: row.folder,
+            final_path: None,
+            size: Some(row.size).filter(|size| *size > 0),
+            downloaded: row.done,
+            state: row.state,
+            error: row.error,
+            description: None,
+            resumable: true,
+            added_at: row.added_at,
+            completed_at: None,
+            queue_id: None,
+            category: None,
+            part_of: None,
+            adding_sound: false,
+            checksum: None,
+            checksum_matches: None,
+            checking: false,
+            finishing: None,
+            link_expired: false,
+            awaiting_link: false,
+            mirrors: Vec::new(),
+            kind: "torrent",
+        }
+    }
 }
 
 /// A checksum as the window shows it.
@@ -422,6 +457,7 @@ impl From<Download> for DownloadView {
             link_expired,
             awaiting_link: false,
             mirrors: download.mirrors,
+            kind: "download",
         }
     }
 }
@@ -622,7 +658,10 @@ fn blank_to_none(value: Option<String>) -> Option<String> {
 }
 
 #[tauri::command]
-pub async fn list_downloads(state: Managed<'_, AppState>) -> Result<Vec<DownloadView>, String> {
+pub async fn list_downloads(
+    app: AppHandle,
+    state: Managed<'_, AppState>,
+) -> Result<Vec<DownloadView>, String> {
     let downloads = state.engine.list().map_err(text)?;
     let sounds: Vec<Option<Download>> = downloads
         .iter()
@@ -633,7 +672,7 @@ pub async fn list_downloads(state: Managed<'_, AppState>) -> Result<Vec<Download
             downloads.iter().find(|other| other.id == sound).cloned()
         })
         .collect();
-    Ok(downloads
+    let views = downloads
         .into_iter()
         .zip(sounds)
         .map(|(download, sound)| {
@@ -647,7 +686,15 @@ pub async fn list_downloads(state: Managed<'_, AppState>) -> Result<Vec<Download
                 ..DownloadView::from(download).with_sound(sound.as_ref())
             }
         })
-        .collect())
+        .collect::<Vec<_>>();
+    let mut views = views;
+    views.extend(
+        crate::torrents::rows(&app)
+            .await
+            .into_iter()
+            .map(DownloadView::torrent),
+    );
+    Ok(views)
 }
 
 #[tauri::command]
@@ -1137,7 +1184,14 @@ pub async fn cancel_shutdown() -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn pause_download(state: Managed<'_, AppState>, id: i64) -> Result<(), String> {
+pub async fn pause_download(
+    app: AppHandle,
+    state: Managed<'_, AppState>,
+    id: i64,
+) -> Result<(), String> {
+    if crate::torrents::torrent_of(id).is_some() {
+        return crate::torrents::pause(&app, id).await;
+    }
     if let Some(sound) = sound_of(&state, DownloadId(id))
         && sound.state == State::Running
     {
@@ -1151,7 +1205,14 @@ pub async fn pause_download(state: Managed<'_, AppState>, id: i64) -> Result<(),
 }
 
 #[tauri::command]
-pub async fn resume_download(state: Managed<'_, AppState>, id: i64) -> Result<(), String> {
+pub async fn resume_download(
+    app: AppHandle,
+    state: Managed<'_, AppState>,
+    id: i64,
+) -> Result<(), String> {
+    if crate::torrents::torrent_of(id).is_some() {
+        return crate::torrents::resume(&app, id).await;
+    }
     state.attach_site_logins();
     // A video saved as two parts carries on with whichever part isn't finished.
     let picture = state.engine.get(DownloadId(id)).map_err(text)?;
@@ -1246,10 +1307,14 @@ pub async fn stop_all(state: Managed<'_, AppState>) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn remove_download(
+    app: AppHandle,
     state: Managed<'_, AppState>,
     id: i64,
     delete_file: bool,
 ) -> Result<(), String> {
+    if crate::torrents::torrent_of(id).is_some() {
+        return crate::torrents::remove(&app, id, delete_file).await;
+    }
     // A video's sound goes with it. While it waits in Tributary's own folder, its file is
     // only a working file, so it goes too.
     if let Some(sound) = sound_of(&state, DownloadId(id)) {
@@ -1303,7 +1368,11 @@ pub async fn open_file(
     state: Managed<'_, AppState>,
     id: i64,
 ) -> Result<(), String> {
-    let path = finished_file(&state, id)?;
+    // A torrent can hold many files, so its folder is what's opened.
+    let path = match crate::torrents::torrent_of(id) {
+        Some(_) => crate::torrents::folder_of(&app, id).await?,
+        None => finished_file(&state, id)?,
+    };
     app.opener()
         .open_path(path.to_string_lossy(), None::<&str>)
         .map_err(text)
@@ -1315,6 +1384,13 @@ pub async fn show_in_folder(
     state: Managed<'_, AppState>,
     id: i64,
 ) -> Result<(), String> {
+    if crate::torrents::torrent_of(id).is_some() {
+        let folder = crate::torrents::folder_of(&app, id).await?;
+        return app
+            .opener()
+            .open_path(folder.to_string_lossy(), None::<&str>)
+            .map_err(text);
+    }
     let download = state.engine.get(DownloadId(id)).map_err(text)?;
     match finished_file(&state, id) {
         Ok(path) => app.opener().reveal_item_in_dir(path).map_err(text),

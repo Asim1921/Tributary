@@ -42,6 +42,7 @@ import {
   secondsLeft,
   statusText,
   checksumText,
+  isTorrentAddress,
 } from './format';
 import type { Download, DownloadRow } from './types';
 
@@ -230,5 +231,14 @@ describe('isDownloadableUrl', () => {
     expect(isDownloadableUrl('x.test/a.zip')).toBe(false);
     expect(isDownloadableUrl('file:///C:/Windows/win.ini')).toBe(false);
     expect(isDownloadableUrl('javascript:alert(1)')).toBe(false);
+  });
+});
+
+describe('torrent addresses', () => {
+  it('knows magnet links and .torrent files', () => {
+    expect(isTorrentAddress('magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=a')).toBe(true);
+    expect(isTorrentAddress('https://releases.test/ubuntu.iso.torrent?x=1')).toBe(true);
+    expect(isTorrentAddress('magnet:?dn=no-hash')).toBe(false);
+    expect(isTorrentAddress('https://x.test/a.iso')).toBe(false);
   });
 });

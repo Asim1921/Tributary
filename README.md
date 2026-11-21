@@ -36,7 +36,7 @@ tributary --minimized
 
 | Option | What it does |
 |--------|--------------|
-| `--add URL` | Adds a download. Without `--silent`, you're asked first. |
+| `--add URL` | Adds a download. Without `--silent`, you're asked first. A magnet link or `.torrent` address opens the torrent's list of files. |
 | `--folder FOLDER` | Where to save it. |
 | `--name NAME` | What to call it. |
 | `--checksum HASH` | The file's MD5, SHA-1, SHA-256 or SHA-512, checked once it's in. `sha256:` in front is optional. |
@@ -107,6 +107,15 @@ On a page full of photos or posts, such as a public profile, open the extension'
 - Links that only exist once a page's scripts run aren't found.
 - Logins can't go in the starting address, because projects are saved as plain text. Add the site under **Options**, **Logins**.
 
+## Torrents
+
+Paste a magnet link or a `.torrent` file's address into **Add URL**, or click one in your browser. Tributary reads the torrent and shows its files: tick the ones you want, choose a folder, and press **Download**. A torrent of several files goes in a folder of its own name. Torrents sit in the list with your other downloads, and **Stop**, **Resume**, **Delete** and **Open folder** work on them as on any other.
+
+- **Sharing.** While a torrent downloads, it shares what it has with others, as torrents do. When it's finished it stops. Tick **Keep sharing until I've sent as much as I got** to have it carry on until it has uploaded as much as it downloaded, then stop.
+- **Speed.** The speed limit in **Options** applies to torrents too.
+- **Magnet links from the browser.** **Options > Downloads > Choose Tributary…** opens Windows' Default apps, where Tributary is listed for magnet links. Tributary never takes them over by itself, and uninstalling it removes the listing.
+- **Finding others.** Tributary finds others sharing a torrent through its trackers and the DHT network. It doesn't search for torrents. Only download what you have the right to.
+
 ## Where things are kept
 
 - Downloads, queues and settings are in `%APPDATA%\app.tributary.desktop`.
@@ -158,4 +167,4 @@ npm run e2e:edge            # the same in Microsoft Edge
 
 The end-to-end tests use their own data folders, so they run beside a copy you already have open. Set `E2E_SKIP_TIMED=1` to skip the step that waits for a real scheduled queue.
 
-The video steps of `npm run e2e` need `ffmpeg` and `ffprobe` on the `PATH`.
+The video steps of `npm run e2e` need `ffmpeg` and `ffprobe` on the `PATH`. Its torrent step shares a made-up torrent from this computer alone, with a seeder built by `cargo build --release --example seed -p tributary`; nothing reaches other computers.

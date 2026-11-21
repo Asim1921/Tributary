@@ -14,6 +14,7 @@ mod secrets;
 mod settings;
 mod site_grabber;
 mod system;
+mod torrents;
 mod updates;
 mod video;
 mod ytdlp;
@@ -130,7 +131,14 @@ async fn carry_out(handle: AppHandle, invocation: Invocation) {
     let app = &handle;
     let state = app.state::<AppState>();
 
-    if let Some(add) = invocation.add {
+    if let Some(add) = invocation.add.as_ref()
+        && torrents::is_torrent_address(&add.url)
+    {
+        // A magnet link from the browser, or a torrent's address: the window asks which
+        // files to get.
+        show_main_window(app);
+        let _ = app.emit("torrent-offered", add.url.trim().to_owned());
+    } else if let Some(add) = invocation.add {
         let file = Captured {
             url: add.url,
             file_name: add.name,
@@ -495,6 +503,8 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
 
     app.manage(Mutex::new(updates::Pending::default()));
     app.manage(phone::Phone::default());
+    app.manage(torrents::Torrents::new(&data_dir));
+    torrents::watch(app.handle().clone());
     phone::start_if_wanted(app.handle());
     updates::watch(app.handle().clone());
     capture::serve(app.handle().clone());
@@ -509,6 +519,9 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
         let host = resources.join(HOST_FILE);
         if host.exists() {
             let _ = system::register_with_browsers(&data_dir, &host);
+        }
+        if let Ok(own) = std::env::current_exe() {
+            let _ = system::offer_for_magnet_links(&own);
         }
     }
 
@@ -631,6 +644,9 @@ pub fn run() {
             video::add_list,
             updates::check_for_update,
             phone::phone_status,
+            torrents::inspect_torrent,
+            torrents::add_torrent,
+            torrents::choose_for_magnet_links,
             phone::set_phone,
             phone::new_phone_code,
             updates::waiting_update,

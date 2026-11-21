@@ -13,6 +13,7 @@
   import OptionsDialog from './components/OptionsDialog.svelte';
   import ProgressDialog from './components/ProgressDialog.svelte';
   import PlaylistDialog from './components/PlaylistDialog.svelte';
+  import TorrentDialog from './components/TorrentDialog.svelte';
   import PropertiesDialog from './components/PropertiesDialog.svelte';
   import SchedulerDialog from './components/SchedulerDialog.svelte';
   import Sidebar from './components/Sidebar.svelte';
@@ -32,7 +33,7 @@
     statusEntries,
     type Filter,
   } from './lib/filters';
-  import { droppedLink, formatSpeed, isStreamAddress } from './lib/format';
+  import { droppedLink, formatSpeed, isStreamAddress, isTorrentAddress } from './lib/format';
   import {
     clickRow,
     dragIds,
@@ -64,6 +65,7 @@
       }
     | { kind: 'video'; url: string; token?: number; fileName?: string | null; page?: boolean }
     | { kind: 'list'; url: string }
+    | { kind: 'torrent'; url: string }
     | { kind: 'progress'; id: number }
     | { kind: 'properties'; id: number }
     | { kind: 'complete'; id: number }
@@ -125,6 +127,9 @@
       if (problem) dialog = { kind: 'scan', file, problem };
     });
     void api.onVideoProblem(showError);
+    void api.onTorrentOffered((url) => {
+      if (!dialog) dialog = { kind: 'torrent', url };
+    });
     void api.onUpdateReady((ready) => (update = ready));
     api
       .waitingUpdate()
@@ -154,6 +159,10 @@
         title: event.title,
         gallery: event.gallery,
       };
+    } else if (isTorrentAddress(first.url)) {
+      // A torrent is read by the app itself, so the browser's capture isn't needed.
+      void api.discardCapture(event.token);
+      dialog = { kind: 'torrent', url: first.url };
     } else {
       const kind = first.video ? 'video' : 'start';
       dialog = {
@@ -275,7 +284,9 @@
   }
 
   function submitUrl(url: string) {
-    if (isStreamAddress(url)) {
+    if (isTorrentAddress(url)) {
+      dialog = { kind: 'torrent', url };
+    } else if (isStreamAddress(url)) {
       dialog = { kind: 'video', url };
     } else if (settings?.showStartDialog) {
       dialog = { kind: 'start', url };
@@ -421,6 +432,7 @@
     const first = selectedRows[0];
     const single = selectedRows.length === 1 ? first : undefined;
     const finished = single?.state === 'completed';
+    const torrent = selectedRows.some((row) => row.kind === 'torrent');
 
     return [
       {
@@ -451,7 +463,7 @@
         (queue, index): MenuItem => ({
           label: `Add to ${queue.name}`,
           separatorBefore: index === 0,
-          disabled: selectedRows.every((row) => row.queueId === queue.id),
+          disabled: torrent || selectedRows.every((row) => row.queueId === queue.id),
           run: () =>
             void forEachRow(selectedRows, (id) => api.setDownloadQueue(id, queue.id)),
         }),
@@ -469,7 +481,7 @@
       },
       {
         label: 'Enter login…',
-        disabled: single?.state !== 'failed',
+        disabled: torrent || single?.state !== 'failed',
         run: () => {
           if (single) dialog = { kind: 'login', id: single.id };
         },
@@ -477,7 +489,7 @@
       {
         // Opens the page the file came from; the browser's next file of that name carries on.
         label: single?.awaitingLink ? 'Stop waiting for a fresh link' : 'Get a fresh link',
-        disabled: !single || single.state === 'running' || single.state === 'completed',
+        disabled: torrent || !single || single.state === 'running' || single.state === 'completed',
         run: () => {
           if (!single) return;
           const id = single.id;
@@ -502,7 +514,7 @@
       },
       {
         label: 'Properties',
-        disabled: !single,
+        disabled: !single || torrent,
         run: () => {
           if (single) dialog = { kind: 'properties', id: single.id };
         },
@@ -663,6 +675,16 @@
       closeDialog();
       if (token !== undefined) void api.discardCapture(token);
     }}
+  />
+{:else if dialog?.kind === 'torrent'}
+  <TorrentDialog
+    url={dialog.url}
+    {defaultFolder}
+    onadded={() => {
+      closeDialog();
+      void downloads.refresh();
+    }}
+    onclose={closeDialog}
   />
 {:else if dialog?.kind === 'list'}
   <PlaylistDialog

@@ -41,6 +41,8 @@ export interface Download {
   awaitingLink?: boolean;
   /** Other servers with the same file. */
   mirrors?: string[];
+  /** Set for a torrent, whose id is below zero. */
+  kind?: 'download' | 'torrent';
 }
 
 export interface Checksum {
@@ -346,4 +348,10 @@ export interface PhoneStatus {
   /** That address as an SVG QR code, made by the app from the address alone. */
   qrCode: string | null;
   problem: string | null;
+}
+
+/** What a torrent holds, read before it's added. */
+export interface TorrentPreview {
+  name: string;
+  files: { name: string; size: number }[];
 }
