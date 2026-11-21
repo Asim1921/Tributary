@@ -274,6 +274,8 @@ try {
     TRIBUTARY_PIPE: PIPE,
     // "Get a fresh link" would open the file's page in the real browser.
     TRIBUTARY_NO_BROWSER: '1',
+    // The phone page listens on this computer only, not the home network.
+    TRIBUTARY_PHONE_ADDRESS: '127.0.0.1',
     WEBVIEW2_USER_DATA_FOLDER: join(dataDir, 'webview'),
     WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${DEBUG_PORT}`,
   };
@@ -880,6 +882,50 @@ try {
     }
     assert.equal(await sha256(join(downloadDir, '16M.fresh')), expectedSha256('16M.fresh'));
     assert.equal(await page.locator('tbody tr', { hasText: '16M.fresh' }).count(), 1, 'a second download was added');
+  });
+
+  await step('a paired phone can send a link, which the PC asks about, and nothing else', async () => {
+    await page.getByRole('button', { name: 'Options' }).click();
+    await page.getByRole('tab', { name: 'Phone' }).click();
+    await page.getByLabel('Let my phone send links over the home network').check();
+    await page.getByLabel('QR code for your phone').waitFor();
+    const address = (await page.getByText(/^http:\/\/127\.0\.0\.1:\d+\/#[0-9a-f]{64}$/).textContent()).trim();
+    await shot(page, '54-phone');
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    const [origin, code] = address.split('/#');
+
+    const send = (body, token = code) =>
+      fetch(`${origin}/add`, {
+        method: 'POST',
+        headers: { 'x-tributary-token': token, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    // The page itself needs no code; everything else does.
+    assert.equal((await fetch(`${origin}/`)).status, 200);
+    assert.equal((await fetch(`${origin}/list`)).status, 403);
+    assert.equal((await send({ url: `${BASE}/file/1M.phone` }, 'f'.repeat(64))).status, 403);
+    assert.equal((await send({ url: 'file:///C:/Windows/win.ini' })).status, 400);
+    assert.equal((await send({ url: `${BASE}/file/1M.phone`, padding: 'x'.repeat(20_000) })).status, 413);
+
+    assert.equal((await send({ url: `${BASE}/file/1M.phone` })).status, 202);
+    // The PC asks about it, as it does a link from the browser.
+    await page.getByRole('heading', { name: 'Download file' }).waitFor();
+    await page.getByLabel('Folder').fill(downloadDir);
+    await page.getByRole('button', { name: 'Start download' }).click();
+    await rowFor(page, '1M.phone').getByText('Complete', { exact: true }).waitFor();
+    if (await page.getByRole('heading', { name: 'Download complete' }).count()) {
+      await page.getByRole('button', { name: 'Close' }).click();
+    }
+    const listed = await (await fetch(`${origin}/list`, { headers: { 'x-tributary-token': code } })).json();
+    assert.ok(listed.some((item) => item.name === '1M.phone' && item.state === 'complete'));
+    assert.ok(listed.every((item) => Object.keys(item).sort().join() === 'name,percent,state'), 'the list says more than it should');
+
+    // Turned off, nothing listens.
+    await page.getByRole('button', { name: 'Options' }).click();
+    await page.getByRole('tab', { name: 'Phone' }).click();
+    await page.getByLabel('Let my phone send links over the home network').uncheck();
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    await assert.rejects(fetch(`${origin}/`));
   });
 
   await step('a site that publishes no checksum says so, and a mistyped one is refused', async () => {

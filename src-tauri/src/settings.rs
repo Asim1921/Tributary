@@ -87,6 +87,12 @@ pub struct Settings {
     pub notify_in_background: bool,
     /// Looks for a newer release once a day.
     pub check_for_updates: bool,
+    /// Lets a phone on the home network send links.
+    pub phone_enabled: bool,
+    /// The phone's pairing code, as hex. Empty until it's first turned on.
+    pub phone_token: String,
+    /// The port it last listened on, so a phone's bookmark keeps working. 0 for any.
+    pub phone_port: u16,
     /// Tags finished files as coming from the internet, as browsers do, so Windows
     /// SmartScreen and Office's Protected View check them before they're opened.
     pub mark_downloads: bool,
@@ -159,6 +165,9 @@ impl Default for Settings {
             show_complete_dialog: true,
             notify_in_background: true,
             check_for_updates: true,
+            phone_enabled: false,
+            phone_token: String::new(),
+            phone_port: 0,
             mark_downloads: true,
             close_to_tray: true,
             start_with_windows: false,
@@ -356,6 +365,7 @@ mod tests {
         assert!(settings.mark_downloads);
         assert!(settings.notify_in_background);
         assert!(settings.check_for_updates);
+        assert!(!settings.phone_enabled, "the phone is never on until asked");
     }
 
     #[test]

@@ -23,6 +23,7 @@ import type {
   VideoDetails,
   UpdateInfo,
   ListView,
+  PhoneStatus,
 } from './types';
 
 /** What the app says when a server wants a login it doesn't have. */
@@ -58,6 +59,9 @@ export const addList = (chosen: number[], destDir: string, later: boolean) =>
 export const getFreshLink = (id: number) => invoke<string | null>('get_fresh_link', { id });
 export const stopWaitingForLink = (id: number) => invoke<void>('stop_waiting_for_link', { id });
 export const setMirrors = (id: number, mirrors: string[]) => invoke<void>('set_mirrors', { id, mirrors });
+export const phoneStatus = () => invoke<PhoneStatus>('phone_status');
+export const setPhone = (on: boolean) => invoke<PhoneStatus>('set_phone', { on });
+export const newPhoneCode = () => invoke<PhoneStatus>('new_phone_code');
 export const findChecksum = (url: string, fileName?: string) =>
   invoke<Checksum | null>('find_checksum', { url, fileName });
 export const setChecksum = (id: number, checksum: string | null) =>

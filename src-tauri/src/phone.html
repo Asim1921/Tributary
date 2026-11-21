@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Tributary</title>
+<style>
+  :root { --accent: #2a9d8f; --line: #8884; }
+  body { margin: 0; padding: 20px 16px 40px; font: 16px/1.45 system-ui, sans-serif; max-width: 34rem; margin-inline: auto; }
+  h1 { font-size: 1.3rem; margin: 0 0 4px; }
+  p { margin: 0 0 14px; opacity: 0.8; }
+  form { display: flex; gap: 8px; margin-bottom: 8px; }
+  input { flex: 1; min-width: 0; padding: 12px; font: inherit; border: 1px solid var(--line); border-radius: 8px; }
+  button { padding: 12px 16px; font: inherit; font-weight: 600; color: #fff; background: var(--accent); border: 0; border-radius: 8px; }
+  #said { min-height: 1.5em; margin-bottom: 18px; }
+  ul { margin: 0; padding: 0; list-style: none; }
+  li { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  li span:first-child { overflow-wrap: anywhere; }
+  li span:last-child { white-space: nowrap; opacity: 0.75; }
+</style>
+</head>
+<body>
+<h1>Send to Tributary</h1>
+<p>Paste a link, and Tributary on your computer asks what to do with it.</p>
+<form id="send">
+  <input id="link" type="url" inputmode="url" placeholder="https://" required autocomplete="off">
+  <button>Send</button>
+</form>
+<div id="said" role="status"></div>
+<ul id="list"></ul>
+<script>
+  // The pairing code comes in the address after #, which never reaches a server, and is kept
+  // so the page can be bookmarked.
+  if (location.hash.length > 1) {
+    localStorage.setItem('tributary-code', location.hash.slice(1));
+    history.replaceState(null, '', location.pathname);
+  }
+  const code = localStorage.getItem('tributary-code') || '';
+  const said = document.getElementById('said');
+  const ask = (path, options = {}) =>
+    fetch(path, { ...options, headers: { 'x-tributary-token': code, 'content-type': 'application/json' } });
+
+  document.getElementById('send').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const link = document.getElementById('link');
+    said.textContent = 'Sending…';
+    try {
+      const answer = await ask('/add', { method: 'POST', body: JSON.stringify({ url: link.value }) });
+      const body = await answer.json();
+      said.textContent = answer.ok ? 'Sent. Tributary is asking about it on your computer.' : body.error;
+      if (answer.ok) link.value = '';
+    } catch {
+      said.textContent = "Couldn't reach Tributary. Is your phone on the same network?";
+    }
+  });
+
+  async function refresh() {
+    try {
+      const answer = await ask('/list');
+      if (answer.status === 403) {
+        said.textContent = 'Scan the code in Tributary’s Options, under Phone, to pair this phone.';
+        return;
+      }
+      const items = await answer.json();
+      const list = document.getElementById('list');
+      list.replaceChildren(
+        ...items.map((item) => {
+          const row = document.createElement('li');
+          const name = document.createElement('span');
+          const state = document.createElement('span');
+          name.textContent = item.name;
+          state.textContent =
+            item.state === 'downloading' && item.percent != null ? `${item.percent}%` : item.state;
+          row.append(name, state);
+          return row;
+        }),
+      );
+    } catch {}
+  }
+  refresh();
+  setInterval(refresh, 3000);
+</script>
+</body>
+</html>

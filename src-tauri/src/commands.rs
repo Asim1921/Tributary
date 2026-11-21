@@ -156,6 +156,13 @@ impl AppState {
         self.settings().clone()
     }
 
+    /// Saves settings changed by the app itself, rather than by Options.
+    pub fn replace_settings(&self, settings: Settings) -> Result<(), String> {
+        settings.save(&self.settings_path).map_err(text)?;
+        *self.settings() = settings;
+        Ok(())
+    }
+
     pub fn pending(&self) -> MutexGuard<'_, Pending> {
         self.pending.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -1361,6 +1368,13 @@ pub async fn save_settings(
     mut settings: Settings,
 ) -> Result<(), String> {
     settings.connections = settings.connections.clamp(MIN_CONNECTIONS, MAX_CONNECTIONS);
+    // Only the phone's own switch changes these, so Options open meanwhile can't undo it.
+    {
+        let current = state.settings_snapshot();
+        settings.phone_enabled = current.phone_enabled;
+        settings.phone_token = current.phone_token;
+        settings.phone_port = current.phone_port;
+    }
 
     let autolaunch = app.autolaunch();
     if autolaunch.is_enabled().unwrap_or(false) != settings.start_with_windows {

@@ -337,3 +337,13 @@ export interface ListView {
   title: string | null;
   entries: { title: string; seconds: number | null; available: boolean }[];
 }
+
+/** Sending links from a phone on the home network. */
+export interface PhoneStatus {
+  running: boolean;
+  /** The address for the phone, pairing code included. */
+  address: string | null;
+  /** That address as an SVG QR code, made by the app from the address alone. */
+  qrCode: string | null;
+  problem: string | null;
+}

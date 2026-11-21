@@ -6,6 +6,7 @@ mod commands;
 mod data;
 mod finishing;
 mod notices;
+mod phone;
 mod refresh;
 mod rules;
 mod scanner;
@@ -493,6 +494,8 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     build_tray(app)?;
 
     app.manage(Mutex::new(updates::Pending::default()));
+    app.manage(phone::Phone::default());
+    phone::start_if_wanted(app.handle());
     updates::watch(app.handle().clone());
     capture::serve(app.handle().clone());
     video::finish_leftovers(app.handle());
@@ -627,6 +630,9 @@ pub fn run() {
             refresh::stop_waiting_for_link,
             video::add_list,
             updates::check_for_update,
+            phone::phone_status,
+            phone::set_phone,
+            phone::new_phone_code,
             updates::waiting_update,
             updates::app_version,
             updates::restart_to_update,

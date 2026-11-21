@@ -7,6 +7,9 @@
     deleteSiteLogin,
     extensionFolder,
     installYtdlp,
+    newPhoneCode,
+    phoneStatus,
+    setPhone,
     pickFile,
     pickFolder,
     playSound,
@@ -14,7 +17,7 @@
   } from '../lib/api';
   import { columnById, resolveColumns } from '../lib/columns';
   import { moveItem, resolveToolbar, TOOLBAR_BUTTONS } from '../lib/toolbar';
-  import type { ColumnSetting, Settings } from '../lib/types';
+  import type { ColumnSetting, PhoneStatus, Settings } from '../lib/types';
   import Modal from './Modal.svelte';
 
   interface Props {
@@ -28,6 +31,23 @@
   let { settings, onsave, onexport, onimport, onclose }: Props = $props();
 
   let version = $state('');
+  let phone = $state<PhoneStatus | null>(null);
+  let phoneBusy = $state(false);
+  phoneStatus()
+    .then((found) => (phone = found))
+    .catch(() => {});
+
+  /** Turns the phone page on or off at once, rather than on Save. */
+  async function changePhone(work: () => Promise<PhoneStatus>) {
+    phoneBusy = true;
+    try {
+      phone = await work();
+    } catch (error) {
+      phone = { running: false, address: null, qrCode: null, problem: String(error) };
+    } finally {
+      phoneBusy = false;
+    }
+  }
   let looking = $state(false);
   let looked = $state<string | null>(null);
   appVersion()
@@ -60,6 +80,7 @@
     | 'logins'
     | 'categories'
     | 'security'
+    | 'phone'
     | 'sounds'
     | 'columns'
     | 'toolbar';
@@ -73,6 +94,7 @@
     { id: 'logins', label: 'Logins' },
     { id: 'categories', label: 'Categories' },
     { id: 'security', label: 'Security' },
+    { id: 'phone', label: 'Phone' },
     { id: 'sounds', label: 'Sounds' },
     { id: 'columns', label: 'Columns' },
     { id: 'toolbar', label: 'Toolbar' },
@@ -549,6 +571,36 @@
         Add login
       </button>
       {#if loginProblem}<p class="error-text">{loginProblem}</p>{/if}
+    {:else if tab === 'phone'}
+      <label class="check">
+        <input
+          type="checkbox"
+          checked={phone?.running ?? false}
+          disabled={phoneBusy}
+          onchange={(event) => {
+            const on = event.currentTarget.checked;
+            void changePhone(() => setPhone(on));
+          }}
+        />
+        Let my phone send links over the home network
+      </label>
+      <p class="note">
+        Your phone opens a small page from this computer to send it links, which Tributary then
+        asks you about here, and to see how downloads are getting on. Only a phone on your home
+        network with the pairing code in this QR code can use it, and it can't reach your files or
+        settings. Windows may ask whether Tributary can use the network: allow private networks.
+      </p>
+      {#if phone?.problem}<p class="error-text" role="alert">{phone.problem}</p>{/if}
+      {#if phone?.running && phone.qrCode}
+        <div class="qr" aria-label="QR code for your phone">
+          <!-- Made by the app from the address alone, so it's safe to show as it is. -->
+          {@html phone.qrCode}
+        </div>
+        <p class="selectable note">{phone.address}</p>
+        <button type="button" disabled={phoneBusy} onclick={() => void changePhone(newPhoneCode)}>
+          New pairing code
+        </button>
+      {/if}
     {:else if tab === 'security'}
       <label class="check">
         <input type="checkbox" bind:checked={draft.markDownloads} />
@@ -699,6 +751,20 @@
 </Modal>
 
 <style>
+  .qr {
+    width: 200px;
+    margin: 8px 0;
+    padding: 8px;
+    background: #fff;
+    border-radius: 6px;
+  }
+
+  .qr :global(svg) {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+
   .about {
     display: flex;
     gap: 12px;
