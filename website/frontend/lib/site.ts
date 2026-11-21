@@ -10,21 +10,21 @@ export const site = {
 } as const;
 
 export const facts = {
-  fallbackVersion: "0.1.0",
-  fallbackFile: "Tributary_0.1.0_x64-setup.exe",
+  fallbackVersion: "0.3.0",
+  fallbackFile: "Tributary_0.3.0_x64-setup.exe",
   requirements: [
     "Windows 10 or 11, 64-bit",
     "Installs for your user only, so it needs no administrator rights",
     "Microsoft Edge WebView2, which is part of Windows 11; the installer fetches it if it's missing",
   ],
   builtWith: ["Rust", "Tauri", "Svelte"],
-  /** Accurate on 2026-11-19. */
+  /** Accurate on 2026-11-21. */
   proof: {
-    rustTests: 609,
-    interfaceTests: 189,
-    endToEndSteps: 66,
+    rustTests: 691,
+    interfaceTests: 240,
+    endToEndSteps: 78,
     browsers: ["Chrome", "Edge"],
-    checkedOn: "2026-11-19",
+    checkedOn: "2026-11-21",
   },
   history: [
     {

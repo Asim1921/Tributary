@@ -1,6 +1,30 @@
 {
   "releases": [
     {
+      "version": "0.3.0",
+      "file": "Tributary_0.3.0_x64-setup.exe",
+      "size": 8588656,
+      "sha256": "b59f172963fe9bd1c3063f14f762612d43c21ced94a6cddc8c17aeae7a9a2a27",
+      "published": "2026-11-21",
+      "notes": [
+        "Downloads torrents and magnet links: you choose which files to get, and it stops sharing when done unless you ask it to share as much as it got.",
+        "Speaks Urdu, Arabic, Hindi and Spanish as well as English, right to left for Urdu and Arabic, following the language of Windows until you choose another.",
+        "Updates itself: a newer version is fetched in the background, checked against its signature, and installed when you say so.",
+        "Checks downloads against the checksum a site gives, and marks them as coming from the internet so Windows checks them before they open.",
+        "Saves whole playlists and channels, only part of a video, or just its sound as M4A or MP3, with subtitles and the cover put inside.",
+        "Fetches one file from several servers at once, from mirrors and Metalinks, and carries on with a fresh link when a link expires.",
+        "Works in Chromium browsers such as Vivaldi, Brave and Opera as well as Chrome and Edge, and takes links sent from your phone on the home network.",
+        "Shows a Windows notification when downloads finish in the background, one for a whole batch or queue."
+      ],
+      "requirements": [
+        "Windows 10 or 11, 64-bit",
+        "Installs for your user only; no administrator rights needed",
+        "Microsoft Edge WebView2 (part of Windows 11; the installer fetches it if it is missing)",
+        "Chrome or Edge for the browser extension (optional)"
+      ],
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSeENvdVh0bFlDK0cxOTAwQkNJaTdzRklvTTlQSjU1WWJac3lTYVEwTFFrR0x0ZUVxK2xqT0Zwdm9rVi9wTy85Qk5UVG8rQmFkb1h2bkpWaHkxNUY1U21ubzhGNk9NWHdNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1MjY3ODA1CWZpbGU6VHJpYnV0YXJ5XzAuMy4wX3g2NC1zZXR1cC5leGUJdmVyc2lvbjowLjMuMAo1VHVWODAwM1Vrd202VEhGQ05lb3pwb2JtVDFmQnFicmtLamg4WVlNK0xsc0dyeE1kVmplenEwaGk4UW5mbzhpOXdxbHdhSEtVbUIvM25hdy9Nb3dBQT09Cg=="
+    },
+    {
       "version": "0.1.0",
       "file": "Tributary_0.1.0_x64-setup.exe",
       "size": 5455644,

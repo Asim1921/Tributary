@@ -323,7 +323,8 @@ export const es: Words = {
     browserOthers: "Desactiva la extensión de cualquier otro gestor de descargas. Las dos intentarían quedarse con las mismas descargas.",
     browserKeys:
       "Mantén <key>Ctrl</key> al hacer clic en un enlace para enviarlo a Tributary, o <key>Alt</key> para dejárselo al navegador. Puedes cambiar las dos teclas en <b>Opciones</b>.",
-    updateIntro: "Tributary no se actualiza solo. Las versiones nuevas aparecen en las novedades.",
+    updateIntro:
+      "Desde la versión 0.2.0, Tributary se actualiza solo: cuando hay una versión nueva lista, una barra sobre la lista ofrece reiniciar e instalarla. Para pasar desde la 0.1.0, sigue estos pasos una vez. Todas las versiones aparecen en las novedades.",
     changelogLink: "Ver las novedades",
     updateSteps: {
       installTitle: "Instala la versión nueva",
@@ -360,6 +361,16 @@ export const es: Words = {
     releasedOn: "Publicada como versión {version} el {date}",
     getIt: "Consíguela, con su suma y los pasos de instalación",
     notes: {
+      "0.3.0": [
+        "Descarga torrents y enlaces magnet: eliges qué archivos obtener, y deja de compartir al terminar salvo que le pidas compartir tanto como recibió.",
+        "Habla urdu, árabe, hindi y español además de inglés, de derecha a izquierda en urdu y árabe, y sigue el idioma de Windows hasta que elijas otro.",
+        "Se actualiza solo: descarga en segundo plano la versión nueva, la comprueba con su firma y la instala cuando tú digas.",
+        "Comprueba las descargas con la suma que indica el sitio y las marca como procedentes de internet para que Windows las revise antes de abrirlas.",
+        "Guarda listas de reproducción y canales enteros, solo una parte de un vídeo o solo su sonido en M4A o MP3, con los subtítulos y la portada dentro.",
+        "Descarga un archivo desde varios servidores a la vez, con réplicas y Metalinks, y continúa con un enlace nuevo cuando uno caduca.",
+        "Funciona en navegadores Chromium como Vivaldi, Brave y Opera además de Chrome y Edge, y acepta enlaces enviados desde tu teléfono por la red de casa.",
+        "Muestra una notificación de Windows cuando terminan descargas en segundo plano, una por lote o por cola.",
+      ],
       "0.1.0": [
         "Reparte cada descarga entre varias conexiones y continúa tras un fallo, un apagado o una conexión caída.",
         "Captura las descargas de Chrome y Edge, con un menú contextual para enlaces y un botón de descarga junto a los reproductores de vídeo.",

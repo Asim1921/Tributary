@@ -326,7 +326,8 @@ export const en = {
     browserOthers: "Turn off any other download manager's extension. Both would try to take the same downloads.",
     browserKeys:
       "Hold <key>Ctrl</key> while you click a link to send it to Tributary, or <key>Alt</key> to leave it with the browser. You can change both keys in <b>Options</b>.",
-    updateIntro: "Tributary doesn't update itself. New versions are listed in the changelog.",
+    updateIntro:
+      "From version 0.2.0, Tributary updates itself: when a newer version is ready, a bar above the list offers to restart and install it. To move up from 0.1.0, follow these steps once. Every version is listed in the changelog.",
     changelogLink: "See the changelog",
     updateSteps: {
       installTitle: "Install the new version",

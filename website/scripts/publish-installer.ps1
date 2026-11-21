@@ -40,6 +40,17 @@ $requirements = @(
 )
 
 $notesByVersion = @{
+    # The first release since 0.1.0 to be published, so its notes cover 0.2.0 as well.
+    '0.3.0' = @(
+        'Downloads torrents and magnet links: you choose which files to get, and it stops sharing when done unless you ask it to share as much as it got.',
+        'Speaks Urdu, Arabic, Hindi and Spanish as well as English, right to left for Urdu and Arabic, following the language of Windows until you choose another.',
+        'Updates itself: a newer version is fetched in the background, checked against its signature, and installed when you say so.',
+        'Checks downloads against the checksum a site gives, and marks them as coming from the internet so Windows checks them before they open.',
+        'Saves whole playlists and channels, only part of a video, or just its sound as M4A or MP3, with subtitles and the cover put inside.',
+        'Fetches one file from several servers at once, from mirrors and Metalinks, and carries on with a fresh link when a link expires.',
+        'Works in Chromium browsers such as Vivaldi, Brave and Opera as well as Chrome and Edge, and takes links sent from your phone on the home network.',
+        'Shows a Windows notification when downloads finish in the background, one for a whole batch or queue.'
+    )
     '0.2.0' = @(
         'Updates itself: a newer version is fetched in the background, checked against its signature, and installed when you say so.',
         'Checks downloads against the MD5, SHA-1, SHA-256 or SHA-512 a site gives, and can find one published beside the file.',
