@@ -28,10 +28,10 @@ export function FlowList({ items, className = "" }: { items: readonly ReactNode[
   return (
     <ul className={`space-y-3 ${className}`}>
       {items.map((item, index) => (
-        <li key={index} className="relative pl-6">
+        <li key={index} className="relative ps-6">
           <span
             aria-hidden="true"
-            className="absolute left-0 top-[0.8em] h-px w-3 bg-(--current)"
+            className="absolute start-0 top-[0.8em] h-px w-3 bg-(--current)"
           />
           {item}
         </li>

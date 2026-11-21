@@ -6,6 +6,8 @@ import { CheckIcon, CopyIcon } from "./icons";
 
 type Props = {
   value: string;
+  /** The word on the button, in the page's language. */
+  copyText?: string;
   /** What is copied, for the button's name: "Copy the SHA-256 checksum". */
   label: string;
   copiedLabel?: string;
@@ -13,7 +15,7 @@ type Props = {
 };
 
 /** Copies a value, says so on screen and to screen readers, and falls back to selecting it. */
-export function CopyButton({ value, label, copiedLabel = "Copied", className = "" }: Props) {
+export function CopyButton({ value, label, copyText = "Copy", copiedLabel = "Copied", className = "" }: Props) {
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -56,7 +58,7 @@ export function CopyButton({ value, label, copiedLabel = "Copied", className = "
       }
     >
       {copied ? <CheckIcon className="text-stream" /> : <CopyIcon />}
-      <span aria-hidden="true">{copied ? copiedLabel : "Copy"}</span>
+      <span aria-hidden="true">{copied ? copiedLabel : copyText}</span>
       <span role="status" aria-live="polite" className="sr-only">
         {copied ? copiedLabel : ""}
       </span>

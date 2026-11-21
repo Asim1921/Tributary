@@ -26,7 +26,7 @@ function subscribe(changed: () => void) {
 }
 
 /** Switches between the river by night and by day, and remembers the choice. */
-export function ThemeToggle() {
+export function ThemeToggle({ toDark, toLight }: { toDark: string; toLight: string }) {
   // Unknown until the page is in the browser, so the server renders no icon.
   const theme = useSyncExternalStore<Theme | null>(subscribe, currentTheme, () => null);
 
@@ -41,7 +41,7 @@ export function ThemeToggle() {
     window.dispatchEvent(new CustomEvent(CHANGED, { detail: next }));
   }
 
-  const label = theme === "light" ? "Switch to the dark theme" : "Switch to the light theme";
+  const label = theme === "light" ? toDark : toLight;
   return (
     <button
       type="button"

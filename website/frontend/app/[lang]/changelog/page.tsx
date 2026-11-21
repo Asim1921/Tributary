@@ -2,6 +2,9 @@ import type { Metadata } from "next";
 
 import { getReleases } from "@/lib/release";
 import { facts, site } from "@/lib/site";
+import { fill, localPath } from "@/lib/i18n/languages";
+import { alternatesFor } from "@/lib/i18n/metadata";
+import { getWords } from "@/lib/i18n/server";
 import { History } from "@/components/pages/changelog/history";
 import { ReleaseEntry } from "@/components/pages/changelog/release-entry";
 import { DocSection } from "@/components/pages/doc-section";
@@ -12,25 +15,32 @@ import { PageHeader } from "@/components/pages/page-header";
 export const dynamic = "force-dynamic";
 
 
-const description =
-  "Every release of Tributary, the download manager for Windows, newest first, and the milestones that built the first one.";
-
-export const metadata: Metadata = {
-  title: "Changelog",
-  description,
-  alternates: { canonical: "/changelog" },
-  openGraph: { type: "website", siteName: site.name, url: "/changelog", title: "Tributary changelog", description },
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const { lang, w } = await getWords();
+  return {
+    title: w.meta.changelogTitle,
+    description: w.meta.changelogDescription,
+    alternates: alternatesFor(lang, "/changelog"),
+    openGraph: {
+      type: "website",
+      siteName: site.name,
+      url: localPath(lang, "/changelog"),
+      title: w.meta.changelogOgTitle,
+      description: w.meta.changelogDescription,
+    },
+  };
+}
 
 export default async function ChangelogPage() {
   const releases = await getReleases();
+  const { w } = await getWords();
   const first = releases.at(-1);
 
   return (
     <>
       <PageHeader
-        title="Changelog"
-        lede="What each release of Tributary brought, newest first, and how the first one was built."
+        title={w.changelog.title}
+        lede={w.changelog.lede}
       />
 
       {releases.length > 0 ? (
@@ -43,8 +53,8 @@ export default async function ChangelogPage() {
 
       <DocSection
         id="history"
-        title={`How ${first?.version ?? facts.fallbackVersion} was built`}
-        intro="Milestones from the project's commit history, oldest first."
+        title={fill(w.changelog.builtTitle, { version: first?.version ?? facts.fallbackVersion })}
+        intro={w.changelog.builtIntro}
       >
         <History version={first?.version ?? facts.fallbackVersion} published={first?.published} />
       </DocSection>

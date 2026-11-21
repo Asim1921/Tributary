@@ -26,6 +26,48 @@ for (const path of pages) {
   });
 }
 
+const languages = [
+  ["ur", "rtl"],
+  ["ar", "rtl"],
+  ["hi", "ltr"],
+  ["es", "ltr"],
+] as const;
+
+for (const [lang, dir] of languages) {
+  for (const path of pages) {
+    const address = path === "/" ? `/${lang}` : `/${lang}${path}`;
+    test(`loads ${address} in its own language and direction`, async ({ page }) => {
+      const errors = watchErrors(page);
+      const response = await page.goto(address);
+      expect(response?.status()).toBe(path === "/no-such-page" ? 404 : 200);
+      await expect(page.locator("html")).toHaveAttribute("lang", lang);
+      await expect(page.locator("html")).toHaveAttribute("dir", dir);
+      await expect(page.locator("main h1").first()).toBeVisible();
+      await page.waitForLoadState("networkidle");
+      expect(errors.filter((text) => !/favicon|Failed to load resource/i.test(text))).toEqual([]);
+    });
+  }
+}
+
+test("the language menu leads to the same page in another language", async ({ page }) => {
+  await page.goto("/download");
+  await page.locator("header details summary").click();
+  await page.locator('header details a[hreflang="ur"]').click();
+  await expect(page).toHaveURL(/\/ur\/download$/);
+  await expect(page.locator("html")).toHaveAttribute("dir", "rtl");
+  // And back to English, at its plain address.
+  await page.locator("header details summary").click();
+  await page.locator('header details a[hreflang="en"]').click();
+  await expect(page).toHaveURL(/\/download$/);
+  await expect(page.locator("html")).toHaveAttribute("lang", "en");
+});
+
+test("an /en address sends the browser to the plain English one", async ({ page }) => {
+  await page.goto("/en/privacy");
+  await expect(page).toHaveURL(/\/privacy$/);
+  expect(new URL(page.url()).pathname).toBe("/privacy");
+});
+
 for (const width of [360, 390]) {
   for (const path of pages.slice(0, 4)) {
     test(`no horizontal scroll at ${width}px on ${path}`, async ({ page }) => {

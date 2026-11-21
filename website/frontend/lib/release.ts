@@ -1,3 +1,4 @@
+import type { Lang } from "./i18n/languages";
 /**
  * Release information from the API. Pages are rendered on the server, so this runs there:
  * the API is at INTERNAL_API_URL, else API_ORIGIN (Vercel), else the Docker default. When it can't be reached (at build time, or
@@ -54,14 +55,18 @@ export function formatBytes(bytes: number): string {
   return unit === 0 ? `${value} bytes` : `${value.toFixed(1)} ${units[unit]}`;
 }
 
-/** "2026-11-19" -> "19 November 2026" */
-export function formatDate(iso: string): string {
+/** How each language writes a date. Digits stay Western, as they are in the app. */
+const DATE_LOCALES: Record<Lang, string> = { en: "en-GB", ur: "ur-PK", ar: "ar", hi: "hi-IN", es: "es-ES" };
+
+/** "2026-11-19" -> "19 November 2026", or the same in another language */
+export function formatDate(iso: string, lang: Lang = "en"): string {
   const date = new Date(`${iso.slice(0, 10)}T00:00:00Z`);
   if (Number.isNaN(date.getTime())) return iso;
-  return new Intl.DateTimeFormat("en-GB", {
+  return new Intl.DateTimeFormat(DATE_LOCALES[lang], {
     day: "numeric",
     month: "long",
     year: "numeric",
     timeZone: "UTC",
+    numberingSystem: "latn",
   }).format(date);
 }

@@ -6,7 +6,19 @@ import { useEffect, useId, useRef, useState } from "react";
 type Item = { href: string; label: string };
 
 /** The header's links on narrow screens, behind one button. Escape or a choice closes it. */
-export function MobileMenu({ links }: { links: readonly Item[] }) {
+export function MobileMenu({
+  links,
+  download,
+  openLabel,
+  closeLabel,
+  navLabel,
+}: {
+  links: readonly Item[];
+  download: Item;
+  openLabel: string;
+  closeLabel: string;
+  navLabel: string;
+}) {
   const [open, setOpen] = useState(false);
   const panelId = useId();
   const button = useRef<HTMLButtonElement>(null);
@@ -29,7 +41,7 @@ export function MobileMenu({ links }: { links: readonly Item[] }) {
         type="button"
         aria-expanded={open}
         aria-controls={panelId}
-        aria-label={open ? "Close the menu" : "Open the menu"}
+        aria-label={open ? closeLabel : openLabel}
         onClick={() => setOpen((value) => !value)}
         className="inline-flex size-11 items-center justify-center rounded-s text-foam"
       >
@@ -39,18 +51,18 @@ export function MobileMenu({ links }: { links: readonly Item[] }) {
       </button>
       <nav
         id={panelId}
-        aria-label="Main"
+        aria-label={navLabel}
         hidden={!open}
         className="absolute inset-x-0 top-16 border-b border-bank bg-riverbed px-[max(1rem,env(safe-area-inset-left))] pb-4"
       >
         <ul className="flex flex-col">
           <li>
             <Link
-              href="/download"
+              href={download.href}
               onClick={() => setOpen(false)}
               className="flex min-h-12 items-center border-b border-bank/60 text-body font-semibold text-stream"
             >
-              Download for Windows
+              {download.label}
             </Link>
           </li>
           {links.map((link) => (

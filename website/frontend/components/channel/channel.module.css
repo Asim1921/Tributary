@@ -9,9 +9,9 @@
   top: 0;
   bottom: 0;
   /* The content column's left edge: the Container's 2rem padding, centred at 1200px. */
-  left: max(2rem, calc(50% - 600px + 2rem));
+  inset-inline-start: max(2rem, calc(50% - 600px + 2rem));
   width: 2px;
-  margin-left: -1px;
+  margin-inline-start: -1px;
   background: color-mix(in oklab, var(--current) 30%, var(--bank));
   pointer-events: none;
 }
@@ -26,7 +26,7 @@
 /* A feature's branch, from beside its heading (1rem left of the text) into the channel. */
 .branch {
   position: absolute;
-  left: -6rem;
+  inset-inline-start: -6rem;
   top: 0.8rem;
   width: 5rem;
   height: 7.5rem;
@@ -36,11 +36,11 @@
 /* The last stretch, through the download section's top padding, into the arrival. */
 .leadIn {
   position: absolute;
-  left: 0;
+  inset-inline-start: 0;
   bottom: 100%;
   height: clamp(4.5rem, 9vw, 8rem);
   width: 2px;
-  margin-left: -1px;
+  margin-inline-start: -1px;
   background: color-mix(in oklab, var(--current) 30%, var(--bank));
   pointer-events: none;
 }
@@ -65,4 +65,10 @@
     stroke-dashoffset: 0 !important;
     opacity: 1 !important;
   }
+}
+
+/* Right to left, the channel runs down the right-hand side, and each branch curves into it
+   from the other way. */
+:global([dir="rtl"]) .branch {
+  transform: scaleX(-1);
 }

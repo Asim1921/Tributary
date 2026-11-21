@@ -4,13 +4,15 @@ import { facts } from "@/lib/site";
 import { Logo } from "@/components/site/logo";
 
 import { Checksum } from "../checksum";
+import { getWords } from "@/lib/i18n/server";
 
 /**
  * The release on one card: what it is, when it was published, how big it is, and the checksum
  * to check it against. Without the API the card still names the version and file, and says
  * how to get the checksum.
  */
-export function ReleasePanel({ release }: { release: Release | null }) {
+export async function ReleasePanel({ release }: { release: Release | null }) {
+  const { lang, w } = await getWords();
   const version = release?.version ?? facts.fallbackVersion;
   const file = release?.file ?? facts.fallbackFile;
 
@@ -22,22 +24,22 @@ export function ReleasePanel({ release }: { release: Release | null }) {
           <h2 id="release-title" className="font-display text-h4 font-[660] leading-tight tracking-[-0.02em]">
             Tributary {version}
           </h2>
-          <p className="mt-0.5 text-caption text-silt">For Windows 10 and 11, 64-bit</p>
+          <p className="mt-0.5 text-caption text-silt">{w.release.forWindows}</p>
         </div>
       </div>
 
       <dl className="grid grid-cols-[minmax(5.5rem,auto)_minmax(0,1fr)] gap-x-6 gap-y-2.5 border-t border-bank px-6 py-5 text-[0.97rem]">
         {release ? (
           <>
-            <dt className="text-silt">Published</dt>
+            <dt className="text-silt">{w.panel.published}</dt>
             <dd>
-              <time dateTime={release.published}>{formatDate(release.published)}</time>
+              <time dateTime={release.published}>{formatDate(release.published, lang)}</time>
             </dd>
-            <dt className="text-silt">Size</dt>
+            <dt className="text-silt">{w.panel.size}</dt>
             <dd className="tabular">{formatBytes(release.size)}</dd>
           </>
         ) : null}
-        <dt className="text-silt">File</dt>
+        <dt className="text-silt">{w.panel.file}</dt>
         <dd className="[overflow-wrap:anywhere]">{file}</dd>
       </dl>
 
@@ -47,17 +49,14 @@ export function ReleasePanel({ release }: { release: Release | null }) {
             <Checksum value={release.sha256} />
             <p className="mt-3 text-caption text-silt">
               <a href="#check" className="text-estuary underline decoration-1 underline-offset-[0.2em] hover:text-foam">
-                How to check your download
+                {w.release.howToCheck}
               </a>
             </p>
           </>
         ) : (
           <>
-            <h3 className="font-text text-caption font-semibold tracking-normal text-foam">SHA-256 checksum</h3>
-            <p className="mt-2 text-caption text-silt">
-              The release details didn&apos;t load, so the checksum can&apos;t be shown. Reload the page in a
-              minute to see it before you run the installer.
-            </p>
+            <h3 className="font-text text-caption font-semibold tracking-normal text-foam">{w.panel.checksum}</h3>
+            <p className="mt-2 text-caption text-silt">{w.panel.noChecksum}</p>
           </>
         )}
       </div>

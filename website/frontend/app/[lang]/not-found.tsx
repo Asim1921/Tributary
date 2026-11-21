@@ -5,37 +5,40 @@ import { ButtonLink } from "@/components/ui/button";
 import { Container } from "@/components/ui/container";
 import { DownloadIcon } from "@/components/ui/icons";
 import { DryRiver } from "@/components/pages/dry-river";
+import { localPath } from "@/lib/i18n/languages";
+import { getWords } from "@/lib/i18n/server";
 
-export const metadata: Metadata = {
-  title: "Page not found",
-  robots: { index: false },
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const { w } = await getWords();
+  return { title: w.meta.notFoundTitle, robots: { index: false } };
+}
 
-const more = [
-  { href: "/changelog", label: "Changelog" },
-  { href: "/privacy", label: "Privacy" },
-];
 
-export default function NotFound() {
+export default async function NotFound() {
+  const { lang, w } = await getWords();
+  const more = [
+    { href: localPath(lang, "/changelog"), label: w.site.changelog },
+    { href: localPath(lang, "/privacy"), label: w.site.privacy },
+  ];
   return (
     <Container className="py-[clamp(3.5rem,9vw,7.5rem)]">
       <div className="grid items-center gap-x-8 gap-y-14 lg:grid-cols-12">
         <div className="lg:col-span-7">
           <h1 className="max-w-[15ch] font-display text-h1 font-[690] tracking-[-0.034em]">
-            There&apos;s no page at this address.
+            {w.notFound.title}
           </h1>
           <p className="mt-6 max-w-[46ch] text-lead text-silt">
-            The link may be out of date, or the address mistyped. Everything on this site is a click away.
+            {w.notFound.lede}
           </p>
           <div className="mt-9 flex flex-wrap items-center gap-3">
-            <ButtonLink href="/" size="lg">
-              Go to the home page
+            <ButtonLink href={localPath(lang, "/")} size="lg">
+              {w.notFound.home}
             </ButtonLink>
-            <ButtonLink href="/download" variant="secondary" size="lg" icon={<DownloadIcon className="text-[1.1em]" />}>
-              Download Tributary
+            <ButtonLink href={localPath(lang, "/download")} variant="secondary" size="lg" icon={<DownloadIcon className="text-[1.1em]" />}>
+              {w.notFound.download}
             </ButtonLink>
           </div>
-          <nav aria-label="More pages" className="mt-10">
+          <nav aria-label={w.notFound.more} className="mt-10">
             <ul className="flex flex-wrap gap-x-6 text-[0.97rem]">
               {more.map((item) => (
                 <li key={item.href}>

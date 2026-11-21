@@ -6,15 +6,16 @@ import { MechanismVisual } from "@/components/mechanism/mechanism-visual";
 import {
   NAME,
   PACE,
-  READY,
   SIZE,
-  UNDER_WAY,
   createFeed,
   initialSim,
   publish,
   reduce,
 } from "@/components/mechanism/simulation";
 import { CheckIcon } from "@/components/ui/icons";
+import { fill } from "@/lib/i18n/languages";
+import { Rich } from "@/lib/i18n/rich";
+import type { Words } from "@/lib/i18n/words";
 
 const REDUCE = "(prefers-reduced-motion: reduce)";
 
@@ -46,7 +47,7 @@ const secondary = `${button} border-bank bg-transparent text-foam enabled:hover:
  * and under it the file bar, the status and the controls, which carry everything the picture
  * shows. It plays by itself once in sight (not with reduced motion), and pauses out of sight.
  */
-export function DownloadSimulation() {
+export function DownloadSimulation({ words }: { words: Words["sim"] }) {
   const [sim, dispatch] = useReducer(reduce, undefined, initialSim);
   const [feed] = useState(() => createFeed(sim));
   const [playing, setPlaying] = useState(false);
@@ -113,34 +114,45 @@ export function DownloadSimulation() {
   const canDrop =
     sim.phase === "downloading" && sim.connections.some((c) => c.down === 0 && c.part !== null);
   const dropped = sim.dropped === null ? undefined : parts.find((p) => p.id === sim.connections[sim.dropped!]?.part);
-  const message = sim.message === READY && playing ? UNDER_WAY : sim.message;
+  const said = sim.message.kind === "ready" && playing ? { kind: "underWay" as const } : sim.message;
+  const message = fill(words.said[said.kind], { n: said.n ?? "", m: said.m ?? "" });
   const engage = () => setTouched(true);
 
   return (
     <div ref={panel} className="overflow-hidden rounded-m border border-bank bg-riverbed">
       <p className="px-4 pt-4 text-caption text-silt sm:px-6 sm:pt-6 lg:px-8 lg:pt-7">
-        <span className="font-semibold text-foam">Simulation.</span> It runs in your browser and downloads
-        nothing.
+        <Rich text={words.intro} b={(inner) => <span className="font-semibold text-foam">{inner}</span>} />
       </p>
 
-      <MechanismVisual sim={sim} feed={feed} animate={running && !reduced} still={reduced} />
+      <MechanismVisual
+        sim={sim}
+        feed={feed}
+        animate={running && !reduced}
+        still={reduced}
+        labels={{ server: words.server, computer: words.computer }}
+      />
 
       <div className="px-4 pb-4 sm:px-6 sm:pb-6 lg:px-8 lg:pb-8">
         <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
           <p className="font-semibold text-foam">{NAME}</p>
           <p className="tabular text-caption text-silt">
-            {Math.round(received).toLocaleString("en-GB")} of {SIZE.toLocaleString("en-GB")} MB, {percent}%
+            {fill(words.progress, {
+              got: Math.round(received).toLocaleString("en-GB"),
+              size: SIZE.toLocaleString("en-GB"),
+              percent,
+            })}
           </p>
         </div>
 
-        {/* What just happened, written over the part it happened to. */}
-        <div className="relative mt-2 h-6 text-caption font-semibold" aria-hidden="true">
+        {/* What just happened, written over the part it happened to. The bar runs left to
+            right in every language, as the file's bytes do. */}
+        <div dir="ltr" className="relative mt-2 h-6 text-caption font-semibold" aria-hidden="true">
           {sim.phase === "complete" && (
-            <span className="absolute left-0 inline-flex items-center gap-1.5 text-ok">
-              <CheckIcon /> Complete
+            <span className="absolute start-0 inline-flex items-center gap-1.5 text-ok">
+              <CheckIcon /> {words.complete}
             </span>
           )}
-          {sim.phase === "changed" && <span className="absolute left-0 text-fault">Changed on the server</span>}
+          {sim.phase === "changed" && <span className="absolute start-0 text-fault">{words.changed}</span>}
           {sim.phase === "downloading" && dropped && sim.dropped !== null && (
             <span
               className="absolute whitespace-nowrap text-warn"
@@ -150,14 +162,15 @@ export function DownloadSimulation() {
                   : { right: `${100 - (dropped.end / SIZE) * 100}%` }
               }
             >
-              Connection {sim.dropped + 1} reconnecting
+              {fill(words.reconnectingOne, { n: sim.dropped + 1 })}
             </span>
           )}
         </div>
 
         <div
+          dir="ltr"
           role="progressbar"
-          aria-label={`Simulated download of ${NAME}`}
+          aria-label={fill(words.label, { name: NAME })}
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={percent}
@@ -200,18 +213,18 @@ export function DownloadSimulation() {
         <ul className="mt-4 flex flex-wrap gap-x-6 gap-y-2 text-caption text-silt">
           <li className="inline-flex items-center gap-2">
             <span aria-hidden="true" className="size-3 rounded-[3px] bg-stream" />
-            Downloading its own part
+            {words.own}
           </li>
           <li className="inline-flex items-center gap-2">
             <span aria-hidden="true" className="size-3 rounded-[3px] bg-estuary" />
-            Took over from a slower connection
+            {words.tookOver}
           </li>
           <li className="inline-flex items-center gap-2">
             <span
               aria-hidden="true"
               className="size-3 rounded-[3px] bg-[repeating-linear-gradient(135deg,var(--warn)_0_2px,transparent_2px_5px)] ring-1 ring-warn"
             />
-            Reconnecting
+            {words.reconnecting}
           </li>
         </ul>
 
@@ -228,12 +241,12 @@ export function DownloadSimulation() {
             type="button"
             className={`${primary} min-w-[6.5rem]`}
             onClick={() => setPlaying((on) => !on)}
-            aria-label={playing ? "Pause the simulation" : "Play the simulation"}
+            aria-label={playing ? words.pauseLabel : words.playLabel}
           >
-            {playing ? "Pause" : "Play"}
+            {playing ? words.pause : words.play}
           </button>
           <button type="button" className={secondary} disabled={!canDrop} onClick={() => act("drop")}>
-            Drop a connection
+            {words.drop}
           </button>
           <button
             type="button"
@@ -241,7 +254,7 @@ export function DownloadSimulation() {
             disabled={sim.phase !== "downloading"}
             onClick={() => act("change")}
           >
-            Change the file on the server
+            {words.change}
           </button>
         </div>
       </div>

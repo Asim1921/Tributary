@@ -14,7 +14,7 @@ export function Steps({ steps, className = "" }: { steps: Step[]; className?: st
         return (
           <li key={step.title} className={`relative grid grid-cols-[2.75rem_minmax(0,1fr)] gap-x-5 ${last ? "" : "pb-9"}`}>
             {last ? null : (
-              <span aria-hidden="true" className="absolute bottom-0 left-[1.375rem] top-11 w-px bg-bank" />
+              <span aria-hidden="true" className="absolute bottom-0 start-[1.375rem] top-11 w-px bg-bank" />
             )}
             <span
               aria-hidden="true"

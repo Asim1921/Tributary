@@ -11,6 +11,13 @@ what most needs checking.
 |---|---|
 | The app's window, its Rust side's messages, notifications, the tray and the phone page | `ui/src/locales/{ur,ar,hi,es}.json` |
 | The browser extension | `extension/_locales/{en,ur,ar,hi,es}/messages.json` |
+| The website | `website/frontend/lib/i18n/words/{en,ur,ar,hi,es}.ts` |
+
+The website's words are typed objects, one per language, the same shape as `en.ts`, so
+`npx tsc` (or `npm run check` in `website/frontend`) fails if a language misses one. Its pages
+are at the same addresses under the language's code: `/ur/download`. English keeps the plain
+ones. In its sentences `<b>`, `<key>` and `<code>` mark bold words, keys and things to type.
+The site still describes version 0.1.0, which is what it offers for download.
 
 In `ui/src/locales`, each entry's key is the English and its value is the translation. The
 English isn't in a file of its own: it's the text in the code, found by

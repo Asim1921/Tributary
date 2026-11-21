@@ -3,6 +3,8 @@ import { Container } from "@/components/ui/container";
 import { DownloadIcon, PlayIcon } from "@/components/ui/icons";
 import { formatBytes, type Release } from "@/lib/release";
 import { facts, site } from "@/lib/site";
+import { localPath } from "@/lib/i18n/languages";
+import { getWords } from "@/lib/i18n/server";
 
 import { ConfluenceVisual } from "./confluence-visual";
 
@@ -10,13 +12,14 @@ import { ConfluenceVisual } from "./confluence-visual";
  * The first screen: what Tributary is, the two ways in, the facts a downloader checks first,
  * and the live confluence beside them. The words never depend on the picture.
  */
-export function Hero({ release }: { release: Release | null }) {
+export async function Hero({ release }: { release: Release | null }) {
+  const { lang, w } = await getWords();
   const size = release ? formatBytes(release.size) : "";
   const details = [
-    { term: "Version", detail: release?.version ?? facts.fallbackVersion },
+    { term: w.hero.version, detail: release?.version ?? facts.fallbackVersion },
     // The size comes only from the release manifest; without it, the row is left out.
-    ...(size ? [{ term: "Download size", detail: size }] : []),
-    { term: "Runs on", detail: "Windows 10 and 11, 64-bit" },
+    ...(size ? [{ term: w.hero.size, detail: size }] : []),
+    { term: w.hero.runsOn, detail: w.hero.windows },
   ];
 
   return (
@@ -27,25 +30,21 @@ export function Hero({ release }: { release: Release | null }) {
             id="hero-title"
             className="font-display text-[length:clamp(2.5rem,14.6cqi,5.06rem)] font-[690] leading-[0.98] tracking-[-0.035em] text-foam"
           >
-            <span className="block">Many streams.</span>
-            <span className="block">One file.</span>
+            <span className="block">{w.hero.line1}</span>
+            <span className="block">{w.hero.line2}</span>
           </h1>
-          <p className="mt-7 max-w-[34em] text-lead text-silt">
-            Tributary is a free download manager for Windows that splits each file across several
-            connections and picks up where it left off after a crash, a shutdown or a dropped
-            connection.
-          </p>
+          <p className="mt-7 max-w-[34em] text-lead text-silt">{w.hero.lede}</p>
           <div className="mt-10 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
             <ButtonLink href={site.downloadPath} download size="lg" icon={<DownloadIcon className="text-[1.15em]" />}>
-              Download for Windows
+              {w.site.downloadForWindows}
             </ButtonLink>
             <ButtonLink
-              href="/#footage"
+              href={localPath(lang, "/#footage")}
               variant="secondary"
               size="lg"
               icon={<PlayIcon className="text-[1.05em]" />}
             >
-              Watch the demo
+              {w.hero.demo}
             </ButtonLink>
           </div>
           <dl className="mt-12 flex flex-wrap gap-x-10 gap-y-5 border-t border-bank pt-6">
@@ -57,7 +56,7 @@ export function Hero({ release }: { release: Release | null }) {
             ))}
           </dl>
         </div>
-        <div className="mx-auto w-full max-w-[28rem] lg:col-span-6 lg:max-w-none lg:pl-[6%]">
+        <div className="mx-auto w-full max-w-[28rem] lg:col-span-6 lg:max-w-none lg:ps-[6%]">
           <ConfluenceVisual />
         </div>
       </Container>

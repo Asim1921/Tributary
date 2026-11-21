@@ -189,3 +189,34 @@
     }
   }
 }
+
+/* Languages in other scripts: the Latin fonts first, for names and numbers, then a Noto font
+   for the rest. Arabic script joins its letters, so its words keep normal spacing, and
+   Nastaliq's tall shapes need more room between lines. */
+html[lang="ur"] {
+  --font-display: var(--font-bricolage), var(--font-nastaliq), "Segoe UI", system-ui, sans-serif;
+  --font-text: var(--font-public), var(--font-nastaliq), "Segoe UI", system-ui, sans-serif;
+}
+html[lang="ar"] {
+  --font-display: var(--font-bricolage), var(--font-naskh), "Segoe UI", system-ui, sans-serif;
+  --font-text: var(--font-public), var(--font-naskh), "Segoe UI", system-ui, sans-serif;
+}
+html[lang="hi"] {
+  --font-display: var(--font-bricolage), var(--font-devanagari), "Nirmala UI", system-ui, sans-serif;
+  --font-text: var(--font-public), var(--font-devanagari), "Nirmala UI", system-ui, sans-serif;
+}
+html[dir="rtl"] * {
+  letter-spacing: normal;
+}
+html[lang="ur"] :is(h1, h2, h3, h4, p, li, dt, dd, a, button, summary, span) {
+  line-height: 1.9;
+}
+html[lang="ar"] :is(h1, h2, h3, h4) {
+  line-height: 1.45;
+}
+html[lang="hi"] :is(h1, h2) {
+  line-height: 1.35;
+}
+html[lang="ur"] :is(h1, h2) {
+  line-height: 1.55;
+}

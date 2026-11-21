@@ -36,7 +36,7 @@ export type Sim = {
   /** Simulated seconds left in the "changed" or "complete" phase. */
   wait: number;
   nextId: number;
-  message: string;
+  message: Said;
   saidAt: number;
   dropped: number | null;
   /** Counts every fresh start, so a picture of the download can tell a new run from the old. */
@@ -44,8 +44,21 @@ export type Sim = {
 };
 export type Action = { type: "tick"; dt: number } | { type: "drop" } | { type: "change" };
 
-export const READY = "Paused. The file is split into eight parts, each fetched over its own connection.";
-export const UNDER_WAY = "Downloading over eight connections, each fetching its own part of the file.";
+/** What the simulation says happened, in no language: the page puts it into words. */
+export type SaidKind =
+  | "ready"
+  | "underWay"
+  | "back"
+  | "tookOver"
+  | "complete"
+  | "changed"
+  | "dropped"
+  | "restart"
+  | "again";
+/** `n` and `m` are connection numbers, counted from 1. */
+export type Said = { kind: SaidKind; n?: number; m?: number };
+
+export const READY: Said = { kind: "ready" };
 
 export const left = (p: Part) => p.end - p.start - p.got;
 
@@ -53,7 +66,7 @@ export const left = (p: Part) => p.end - p.start - p.got;
 export const speedOf = (connection: number, time: number) =>
   SPEEDS[connection] * (0.8 + 0.4 * Math.abs(Math.sin(time * 1.3 + connection * 2.1)));
 
-export function fresh(headStart: boolean, time: number, message: string, run = 0): Sim {
+export function fresh(headStart: boolean, time: number, message: Said, run = 0): Sim {
   const each = SIZE / CONNECTIONS;
   return {
     phase: "downloading",
@@ -81,21 +94,21 @@ function tick(s: Sim, dt: number): Sim {
   if (s.phase === "changed") {
     const wait = s.wait - dt;
     if (wait > 0) return { ...s, time, wait };
-    return fresh(false, time, "Starting again from the beginning, with the new version of the file.", s.run + 1);
+    return fresh(false, time, { kind: "restart" }, s.run + 1);
   }
   if (s.phase === "complete") {
     const wait = s.wait - dt;
     if (wait > 0) return { ...s, time, wait };
-    return fresh(false, time, "Downloading it again, over eight connections.", s.run + 1);
+    return fresh(false, time, { kind: "again" }, s.run + 1);
   }
 
   const parts = s.parts.map((p) => ({ ...p }));
   const connections = s.connections.map((c) => ({ ...c }));
   let { nextId, message, saidAt, dropped } = s;
   // Events worth announcing always are; takeovers only when nothing was said for a while.
-  const say = (text: string, always: boolean) => {
+  const say = (said: Said, always: boolean) => {
     if (always || time - saidAt > 5) {
-      message = text;
+      message = said;
       saidAt = time;
     }
   };
@@ -104,7 +117,7 @@ function tick(s: Sim, dt: number): Sim {
     if (connection.down > 0) {
       connection.down = Math.max(0, connection.down - dt);
       if (connection.down === 0) {
-        say(`Connection ${i + 1} is back, and carried on from where it stopped.`, true);
+        say({ kind: "back", n: i + 1 }, true);
         if (dropped === i) dropped = null;
       }
       return;
@@ -125,7 +138,7 @@ function tick(s: Sim, dt: number): Sim {
     largest.end = middle;
     connection.part = nextId;
     nextId += 1;
-    say(`Connection ${i + 1} finished its part and took over half of what connection ${largest.owner + 1} had left.`, false);
+    say({ kind: "tookOver", n: i + 1, m: largest.owner + 1 }, false);
   });
 
   if (parts.every((p) => left(p) <= 0)) {
@@ -138,7 +151,7 @@ function tick(s: Sim, dt: number): Sim {
       wait: DONE_FOR,
       nextId,
       dropped: null,
-      message: "Download complete. Every part arrived, joined as one file.",
+      message: { kind: "complete" },
       saidAt: time,
     };
   }
@@ -156,8 +169,7 @@ export function reduce(s: Sim, action: Action): Sim {
         phase: "changed",
         wait: CHANGED_FOR,
         dropped: null,
-        message:
-          "The file changed on the server. Tributary noticed, and starts again rather than join parts of two different files.",
+        message: { kind: "changed" },
         saidAt: s.time,
       };
     case "drop": {
@@ -177,7 +189,7 @@ export function reduce(s: Sim, action: Action): Sim {
         ...s,
         connections: s.connections.map((c, i) => (i === pick ? { ...c, down: RECONNECT_AFTER } : c)),
         dropped: pick,
-        message: `Connection ${pick + 1} dropped. Tributary reconnects it, and it carries on from where it stopped.`,
+        message: { kind: "dropped", n: pick + 1 },
         saidAt: s.time,
       };
     }

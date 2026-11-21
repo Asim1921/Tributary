@@ -42,6 +42,8 @@ type Stage = "drawing" | "loading" | "live" | "fallback";
 const FADE = "transition-opacity duration-700 ease-flow";
 
 type Props = {
+  /** The two ends of the picture, in the page's language. */
+  labels: { server: string; computer: string };
   sim: Sim;
   feed: SimFeed;
   /** The simulation is playing and in sight: keep the water moving. */
@@ -55,7 +57,7 @@ type Props = {
  * each connection. Decorative: the bar, the status line and the buttons under it carry
  * everything it shows. A drawing first; the live view fades in over it.
  */
-export function MechanismVisual({ sim, feed, animate, still }: Props) {
+export function MechanismVisual({ sim, feed, animate, still, labels: words }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const [stage, setStage] = useState<Stage>("drawing");
   const [aspect, setAspect] = useState<number>(ASPECT.wide);
@@ -169,13 +171,13 @@ export function MechanismVisual({ sim, feed, animate, still }: Props) {
         className="pointer-events-none absolute -translate-y-[calc(100%+0.5rem)] whitespace-nowrap text-caption text-silt"
         style={labels.server}
       >
-        Server
+        {words.server}
       </span>
       <span
         className="pointer-events-none absolute -translate-x-full translate-y-2 whitespace-nowrap text-caption text-silt"
         style={labels.file}
       >
-        Your computer
+        {words.computer}
       </span>
     </div>
   );
